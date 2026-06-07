@@ -45,23 +45,41 @@ jobs:
           python - <<'PY'
           import json
           import os
+          import re
           import sys
+          import urllib.error
           import urllib.request
 
           token = os.environ["CLOUDFLARE_API_TOKEN"].strip()
           account_id = os.environ["CLOUDFLARE_ACCOUNT_ID"].strip()
 
-          if len(account_id) < 20 or " " in account_id:
-              print("CLOUDFLARE_ACCOUNT_ID looks invalid. It should be the long Cloudflare Account ID, not account name/email.")
+          print("Account ID length:", len(account_id))
+          print("Account ID format looks hex:", bool(re.fullmatch(r"[0-9a-fA-F]{32}", account_id)))
+          print("Token starts with Bearer prefix:", token.lower().startswith("bearer "))
+
+          if token.lower().startswith("bearer "):
+              print("CLOUDFLARE_API_TOKEN must be the raw token only. Do not include 'Bearer '.")
+              sys.exit(1)
+
+          if not re.fullmatch(r"[0-9a-fA-F]{32}", account_id):
+              print("CLOUDFLARE_ACCOUNT_ID is invalid. It should be exactly 32 hexadecimal characters from Cloudflare Account ID.")
               sys.exit(1)
 
           req = urllib.request.Request(
               f"https://api.cloudflare.com/client/v4/accounts/{account_id}",
-              headers={"Authorization": f"Bearer {token}"},
+              headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
           )
           try:
               with urllib.request.urlopen(req, timeout=20) as resp:
                   body = resp.read().decode("utf-8", "replace")
+                  status = resp.status
+          except urllib.error.HTTPError as exc:
+              body = exc.read().decode("utf-8", "replace")
+              print("Cloudflare account validation HTTP status:", exc.code)
+              print("Cloudflare response body:")
+              print(body)
+              print("Fix CLOUDFLARE_ACCOUNT_ID, or recreate CLOUDFLARE_API_TOKEN for the same Cloudflare account with Workers edit permission.")
+              sys.exit(1)
           except Exception as exc:
               print("Cloudflare account validation request failed.")
               print(str(exc))
