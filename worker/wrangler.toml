@@ -1,5 +1,5 @@
 name = "tg-signer-shadowrocket"
-main = "cloudflare-worker.js"
+main = "worker/cloudflare-worker.js"
 compatibility_date = "2025-01-01"
 
 # Non-secret Worker variables. Real secrets must be set in Cloudflare dashboard.
