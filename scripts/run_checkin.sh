@@ -13,6 +13,28 @@ require_env() {
   fi
 }
 
+normalize_target_chat() {
+  local value="$1"
+  value="$(printf '%s' "$value" | tr -d '\r\n' | xargs)"
+
+  # If user pasted a log fragment like "username: freexzteam_bot", extract the username.
+  if [[ "$value" =~ username:[[:space:]]*([A-Za-z0-9_]+) ]]; then
+    value="${BASH_REMATCH[1]}"
+  fi
+
+  # If user pasted a log fragment like "id: 8604751086", extract the id.
+  if [[ "$value" =~ ^id:[[:space:]]*(-?[0-9]+) ]]; then
+    value="${BASH_REMATCH[1]}"
+  fi
+
+  # If it is a bare Telegram username, add @ so tg-signer treats it as username, not integer.
+  if [[ "$value" =~ ^[A-Za-z][A-Za-z0-9_]{4,31}$ ]]; then
+    value="@$value"
+  fi
+
+  printf '%s' "$value"
+}
+
 require_env TG_SESSION_STRING
 
 MODE="${INPUT_MODE:-}"
@@ -51,6 +73,16 @@ case "$MODE" in
 
     [[ -n "$TARGET_CHAT" ]] || fail "Missing target chat. Set TG_TARGET_CHAT secret or workflow input target_chat."
     [[ -n "$CHECKIN_TEXT" ]] || fail "Missing checkin text. Set TG_CHECKIN_TEXT secret or workflow input checkin_text."
+
+    TARGET_CHAT="$(normalize_target_chat "$TARGET_CHAT")"
+
+    if [[ "$TARGET_CHAT" =~ ^@ ]]; then
+      echo "[INFO] Target chat format: username"
+    elif [[ "$TARGET_CHAT" =~ ^-?[0-9]+$ ]]; then
+      echo "[INFO] Target chat format: numeric id"
+    else
+      fail "Invalid target chat format. Use @username, numeric chat id, or bare username."
+    fi
 
     CMD=("${BASE_CMD[@]}" send-text)
 
