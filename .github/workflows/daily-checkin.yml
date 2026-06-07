@@ -117,7 +117,6 @@ jobs:
 
       - name: Run checkin
         id: run_checkin
-        continue-on-error: true
         env:
           TG_SESSION_STRING: ${{ secrets.TG_SESSION_STRING }}
           TG_TARGET_CHAT: ${{ secrets.TG_TARGET_CHAT }}
@@ -132,20 +131,16 @@ jobs:
           INPUT_CHECKIN_TEXT: ${{ github.event.inputs.checkin_text }}
           INPUT_TASK_NAME: ${{ github.event.inputs.task_name }}
         run: |
+          set -o pipefail
           bash scripts/run_checkin.sh 2>&1 | tee run.log
-          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
 
       - name: Notify Telegram
         if: always()
         env:
           TELEGRAM_NOTIFY_BOT_TOKEN: ${{ secrets.TELEGRAM_NOTIFY_BOT_TOKEN }}
           TELEGRAM_NOTIFY_CHAT_ID: ${{ secrets.TELEGRAM_NOTIFY_CHAT_ID }}
-          CHECKIN_STATUS: ${{ steps.run_checkin.outputs.exit_code == '0' && 'success' || 'failed' }}
+          CHECKIN_STATUS: ${{ job.status }}
           LOG_PATH: run.log
           GITHUB_RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           python scripts/notify.py
-
-      - name: Fail when checkin failed
-        if: steps.run_checkin.outputs.exit_code != '0'
-        run: exit 1
