@@ -1,0 +1,9 @@
+# 这是占位示例。
+# 第一版 workflow 默认使用 send-text 模式：每天给目标机器人发送一条签到文本。
+# 如果你的目标机器人需要点击按钮、识别图片或回答计算题，请先在 tg-signer 本地/安全环境中配置任务，
+# 再把导出的配置 base64 后写入 GitHub Secret: TG_SIGNER_IMPORT_BASE64，
+# 并设置 SIGN_MODE=task、TG_SIGNER_TASK_NAME=你的任务名。
+
+mode: send-text
+target_chat: "@example_bot"
+checkin_text: "/checkin"
