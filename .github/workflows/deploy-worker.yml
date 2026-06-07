@@ -2,11 +2,6 @@ name: Deploy Cloudflare Worker
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - "worker/**"
-      - "package.json"
-      - ".github/workflows/deploy-worker.yml"
 
 permissions:
   contents: read
@@ -19,6 +14,23 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Check required Cloudflare secrets
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "Missing GitHub Secret: CLOUDFLARE_API_TOKEN"
+            echo "Set it in: Settings -> Secrets and variables -> Actions"
+            exit 1
+          fi
+          if [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "Missing GitHub Secret: CLOUDFLARE_ACCOUNT_ID"
+            echo "Set it in: Settings -> Secrets and variables -> Actions"
+            exit 1
+          fi
+          echo "Cloudflare deployment secrets are present."
 
       - name: Deploy Worker
         uses: cloudflare/wrangler-action@v3
