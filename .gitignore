@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.env.*
+
+# Runtime files
+*.session
+*.session-journal
+.signer/
+logs/
+run.log
+
+# OS / editors
+.DS_Store
+.vscode/
+.idea/
