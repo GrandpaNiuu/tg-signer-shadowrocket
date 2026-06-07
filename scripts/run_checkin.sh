@@ -17,17 +17,20 @@ normalize_target_chat() {
   local value="$1"
   value="$(printf '%s' "$value" | tr -d '\r\n' | xargs)"
 
-  # If user pasted a log fragment like "username: freexzteam_bot", extract the username.
-  if [[ "$value" =~ username:[[:space:]]*([A-Za-z0-9_]+) ]]; then
+  # If user pasted a tg-signer login log line, prefer numeric id over username.
+  if [[ "$value" =~ id:[[:space:]]*(-?[0-9]+) ]]; then
+    value="${BASH_REMATCH[1]}"
+  elif [[ "$value" =~ username:[[:space:]]*([A-Za-z0-9_]+) ]]; then
     value="${BASH_REMATCH[1]}"
   fi
 
-  # If user pasted a log fragment like "id: 8604751086", extract the id.
-  if [[ "$value" =~ ^id:[[:space:]]*(-?[0-9]+) ]]; then
-    value="${BASH_REMATCH[1]}"
+  # Known target from user's login output. Some tg-signer versions reject
+  # @username in send-text, so force numeric chat id for this bot.
+  if [[ "$value" == "freexzteam_bot" || "$value" == "@freexzteam_bot" ]]; then
+    value="8604751086"
   fi
 
-  # If it is a bare Telegram username, add @ so tg-signer treats it as username, not integer.
+  # If it is a bare Telegram username, add @ for general username use.
   if [[ "$value" =~ ^[A-Za-z][A-Za-z0-9_]{4,31}$ ]]; then
     value="@$value"
   fi
