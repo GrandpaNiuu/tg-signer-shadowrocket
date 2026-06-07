@@ -1,0 +1,82 @@
+name: Daily Telegram Checkin
+
+on:
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "send-text or task"
+        required: false
+        default: "send-text"
+      target_chat:
+        description: "Target chat username or chat id"
+        required: false
+      checkin_text:
+        description: "Text to send when mode=send-text"
+        required: false
+      task_name:
+        description: "tg-signer task name when mode=task"
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  TZ: ${{ vars.CHECKIN_TZ || 'Asia/Shanghai' }}
+  SIGN_MODE: ${{ vars.SIGN_MODE || 'send-text' }}
+  TG_CHECKIN_TEXT: ${{ secrets.TG_CHECKIN_TEXT || '/checkin' }}
+
+jobs:
+  checkin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install tg-signer
+        run: |
+          python -m pip install --upgrade pip
+          pip install --upgrade "tg-signer[yaml]"
+
+      - name: Run checkin
+        id: run_checkin
+        continue-on-error: true
+        env:
+          TG_SESSION_STRING: ${{ secrets.TG_SESSION_STRING }}
+          TG_TARGET_CHAT: ${{ secrets.TG_TARGET_CHAT }}
+          TG_MESSAGE_THREAD_ID: ${{ secrets.TG_MESSAGE_THREAD_ID }}
+          TG_SIGNER_TASK_NAME: ${{ secrets.TG_SIGNER_TASK_NAME }}
+          TG_SIGNER_IMPORT_BASE64: ${{ secrets.TG_SIGNER_IMPORT_BASE64 }}
+          TG_ACCOUNT: ${{ secrets.TG_ACCOUNT }}
+          TG_PROXY: ${{ secrets.TG_PROXY }}
+          CHECKIN_DELETE_AFTER: ${{ secrets.CHECKIN_DELETE_AFTER }}
+          INPUT_MODE: ${{ github.event.inputs.mode }}
+          INPUT_TARGET_CHAT: ${{ github.event.inputs.target_chat }}
+          INPUT_CHECKIN_TEXT: ${{ github.event.inputs.checkin_text }}
+          INPUT_TASK_NAME: ${{ github.event.inputs.task_name }}
+        run: |
+          bash scripts/run_checkin.sh 2>&1 | tee run.log
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Notify Telegram
+        if: always()
+        env:
+          TELEGRAM_NOTIFY_BOT_TOKEN: ${{ secrets.TELEGRAM_NOTIFY_BOT_TOKEN }}
+          TELEGRAM_NOTIFY_CHAT_ID: ${{ secrets.TELEGRAM_NOTIFY_CHAT_ID }}
+          CHECKIN_STATUS: ${{ steps.run_checkin.outputs.exit_code == '0' && 'success' || 'failed' }}
+          LOG_PATH: run.log
+          GITHUB_RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python scripts/notify.py
+
+      - name: Fail when checkin failed
+        if: steps.run_checkin.outputs.exit_code != '0'
+        run: exit 1
