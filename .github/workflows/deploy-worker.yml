@@ -37,9 +37,51 @@ jobs:
           fi
           echo "Cloudflare deployment secrets are present."
 
+      - name: Validate Cloudflare account access
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+          import urllib.request
+
+          token = os.environ["CLOUDFLARE_API_TOKEN"].strip()
+          account_id = os.environ["CLOUDFLARE_ACCOUNT_ID"].strip()
+
+          if len(account_id) < 20 or " " in account_id:
+              print("CLOUDFLARE_ACCOUNT_ID looks invalid. It should be the long Cloudflare Account ID, not account name/email.")
+              sys.exit(1)
+
+          req = urllib.request.Request(
+              f"https://api.cloudflare.com/client/v4/accounts/{account_id}",
+              headers={"Authorization": f"Bearer {token}"},
+          )
+          try:
+              with urllib.request.urlopen(req, timeout=20) as resp:
+                  body = resp.read().decode("utf-8", "replace")
+          except Exception as exc:
+              print("Cloudflare account validation request failed.")
+              print(str(exc))
+              sys.exit(1)
+
+          data = json.loads(body)
+          if not data.get("success"):
+              print("Cloudflare account validation failed.")
+              print(json.dumps(data, ensure_ascii=False, indent=2))
+              print("Fix CLOUDFLARE_ACCOUNT_ID or recreate CLOUDFLARE_API_TOKEN for the same account.")
+              sys.exit(1)
+
+          result = data.get("result") or {}
+          print("Cloudflare account validation passed:", result.get("name", "<unknown account>"))
+          PY
+
       - name: Deploy Worker
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: latest
           command: deploy --config worker/wrangler.toml
