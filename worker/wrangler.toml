@@ -3,6 +3,7 @@ main = "worker/cloudflare-worker.js"
 compatibility_date = "2025-01-01"
 
 # Non-secret Worker variables. Real secrets must be set in Cloudflare dashboard.
+# Deployment trigger: 2026-06-08-01
 [vars]
 GITHUB_OWNER = "GrandpaNiuu"
 GITHUB_REPO = "tg-signer-shadowrocket"
