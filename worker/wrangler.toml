@@ -4,6 +4,7 @@ compatibility_date = "2025-01-01"
 
 # Cloudflare Cron Triggers use UTC time.
 # 16:05/16:20 UTC = 00:05/00:20 Beijing time.
+# Deployment refresh: 2026-06-09-01
 [triggers]
 crons = ["5 16 * * *", "20 16 * * *"]
 
