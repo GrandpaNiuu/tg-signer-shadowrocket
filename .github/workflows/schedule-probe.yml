@@ -1,0 +1,21 @@
+name: Schedule Probe
+
+on:
+  schedule:
+    # Temporary probe: runs every 5 minutes to verify GitHub schedule works.
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Print probe time
+        run: |
+          echo "Schedule probe triggered."
+          echo "UTC time: $(date -u '+%Y-%m-%d %H:%M:%S')"
+          echo "Beijing time: $(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S')"
