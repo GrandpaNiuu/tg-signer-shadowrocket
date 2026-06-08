@@ -4,9 +4,9 @@ compatibility_date = "2025-01-01"
 
 # Cloudflare Cron Triggers use UTC time.
 # 16:05/16:20 UTC = 00:05/00:20 Beijing time.
-# Deployment refresh: 2026-06-09-01
+# Temporary tests: 17:30/17:45 UTC = 01:30/01:45 Beijing time.
 [triggers]
-crons = ["5 16 * * *", "20 16 * * *"]
+crons = ["5 16 * * *", "20 16 * * *", "30 17 * * *", "45 17 * * *"]
 
 [vars]
 GITHUB_OWNER = "GrandpaNiuu"
