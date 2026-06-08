@@ -17,20 +17,21 @@ normalize_target_chat() {
   local value="$1"
   value="$(printf '%s' "$value" | tr -d '\r\n' | xargs)"
 
-  # If user pasted a tg-signer login log line, prefer numeric id over username.
-  if [[ "$value" =~ id:[[:space:]]*(-?[0-9]+) ]]; then
+  # If user pasted a tg-signer login log line, extract username first when present.
+  # Bot private chats work more reliably with @username than with positive numeric IDs.
+  if [[ "$value" =~ username:[[:space:]]*([A-Za-z0-9_]+) ]]; then
     value="${BASH_REMATCH[1]}"
-  elif [[ "$value" =~ username:[[:space:]]*([A-Za-z0-9_]+) ]]; then
+  elif [[ "$value" =~ id:[[:space:]]*(-?[0-9]+) ]]; then
     value="${BASH_REMATCH[1]}"
   fi
 
-  # Known target from user's login output. Some tg-signer versions reject
-  # @username in send-text, so force numeric chat id for this bot.
-  if [[ "$value" == "freexzteam_bot" || "$value" == "@freexzteam_bot" ]]; then
-    value="8604751086"
+  # Known target from user's login output.
+  # 8604751086 is the bot user ID; convert it to its username so Pyrogram can resolve the peer.
+  if [[ "$value" == "8604751086" || "$value" == "freexzteam_bot" || "$value" == "@freexzteam_bot" ]]; then
+    value="@freexzteam_bot"
   fi
 
-  # If it is a bare Telegram username, add @ for general username use.
+  # If it is a bare Telegram username, add @ so tg-signer treats it as username, not integer.
   if [[ "$value" =~ ^[A-Za-z][A-Za-z0-9_]{4,31}$ ]]; then
     value="@$value"
   fi
