@@ -2,23 +2,10 @@ name: Daily Telegram Checkin
 
 on:
   schedule:
-    # Runs daily at 00:00 Asia/Shanghai. GitHub Actions cron uses UTC.
-    - cron: "0 16 * * *"
+    # Runs daily around 00:05 Asia/Shanghai. GitHub Actions cron uses UTC.
+    # 16:05 UTC = 00:05 Beijing time.
+    - cron: "5 16 * * *"
   workflow_dispatch:
-    inputs:
-      mode:
-        description: "send-text or task"
-        required: false
-        default: "send-text"
-      target_chat:
-        description: "Target chat username or chat id"
-        required: false
-      checkin_text:
-        description: "Text to send when mode=send-text"
-        required: false
-      task_name:
-        description: "tg-signer task name when mode=task"
-        required: false
 
 permissions:
   contents: read
@@ -42,19 +29,11 @@ jobs:
           TG_SESSION_STRING: ${{ secrets.TG_SESSION_STRING }}
           TG_TARGET_CHAT: ${{ secrets.TG_TARGET_CHAT }}
           TG_CHECKIN_TEXT_SECRET: ${{ secrets.TG_CHECKIN_TEXT }}
-          INPUT_MODE: ${{ github.event.inputs.mode }}
-          INPUT_TARGET_CHAT: ${{ github.event.inputs.target_chat }}
-          INPUT_CHECKIN_TEXT: ${{ github.event.inputs.checkin_text }}
-          INPUT_TASK_NAME: ${{ github.event.inputs.task_name }}
           TG_SIGNER_TASK_NAME: ${{ secrets.TG_SIGNER_TASK_NAME }}
         run: |
           set -euo pipefail
 
-          MODE="${INPUT_MODE:-}"
-          if [ -z "$MODE" ]; then
-            MODE="${SIGN_MODE:-send-text}"
-          fi
-
+          MODE="${SIGN_MODE:-send-text}"
           echo "Mode: $MODE"
 
           if [ -z "${TG_SESSION_STRING:-}" ]; then
@@ -64,39 +43,24 @@ jobs:
           fi
 
           if [ "$MODE" = "send-text" ]; then
-            TARGET_CHAT="${INPUT_TARGET_CHAT:-}"
-            if [ -z "$TARGET_CHAT" ]; then
-              TARGET_CHAT="${TG_TARGET_CHAT:-}"
-            fi
-
-            if [ -z "$TARGET_CHAT" ]; then
-              echo "::error title=Missing target chat::Set TG_TARGET_CHAT secret or fill target_chat when running workflow manually. Example: @your_bot"
-              echo "Missing: TG_TARGET_CHAT or workflow input target_chat" >> "$GITHUB_STEP_SUMMARY"
+            if [ -z "${TG_TARGET_CHAT:-}" ]; then
+              echo "::error title=Missing target chat::Set GitHub Secret TG_TARGET_CHAT. Example: @your_bot"
+              echo "Missing: TG_TARGET_CHAT" >> "$GITHUB_STEP_SUMMARY"
               exit 1
             fi
 
-            CHECKIN_TEXT="${INPUT_CHECKIN_TEXT:-}"
-            if [ -z "$CHECKIN_TEXT" ]; then
-              CHECKIN_TEXT="${TG_CHECKIN_TEXT_SECRET:-/checkin}"
-            fi
-
-            if [ -z "$CHECKIN_TEXT" ]; then
-              echo "::error title=Missing checkin text::Set TG_CHECKIN_TEXT secret or fill checkin_text when running workflow manually."
-              echo "Missing: TG_CHECKIN_TEXT or workflow input checkin_text" >> "$GITHUB_STEP_SUMMARY"
+            if [ -z "${TG_CHECKIN_TEXT_SECRET:-}" ]; then
+              echo "::error title=Missing checkin text::Set GitHub Secret TG_CHECKIN_TEXT."
+              echo "Missing: TG_CHECKIN_TEXT" >> "$GITHUB_STEP_SUMMARY"
               exit 1
             fi
 
             echo "Telegram config check passed for send-text mode."
             echo "Target chat is configured. Checkin text is configured." >> "$GITHUB_STEP_SUMMARY"
           elif [ "$MODE" = "task" ]; then
-            TASK_NAME="${INPUT_TASK_NAME:-}"
-            if [ -z "$TASK_NAME" ]; then
-              TASK_NAME="${TG_SIGNER_TASK_NAME:-}"
-            fi
-
-            if [ -z "$TASK_NAME" ]; then
-              echo "::error title=Missing task name::Set TG_SIGNER_TASK_NAME secret or fill task_name when running workflow manually."
-              echo "Missing: TG_SIGNER_TASK_NAME or workflow input task_name" >> "$GITHUB_STEP_SUMMARY"
+            if [ -z "${TG_SIGNER_TASK_NAME:-}" ]; then
+              echo "::error title=Missing task name::Set GitHub Secret TG_SIGNER_TASK_NAME."
+              echo "Missing: TG_SIGNER_TASK_NAME" >> "$GITHUB_STEP_SUMMARY"
               exit 1
             fi
 
@@ -129,10 +93,6 @@ jobs:
           TG_ACCOUNT: ${{ secrets.TG_ACCOUNT }}
           TG_PROXY: ${{ secrets.TG_PROXY }}
           CHECKIN_DELETE_AFTER: ${{ secrets.CHECKIN_DELETE_AFTER }}
-          INPUT_MODE: ${{ github.event.inputs.mode }}
-          INPUT_TARGET_CHAT: ${{ github.event.inputs.target_chat }}
-          INPUT_CHECKIN_TEXT: ${{ github.event.inputs.checkin_text }}
-          INPUT_TASK_NAME: ${{ github.event.inputs.task_name }}
         run: |
           set -o pipefail
           bash scripts/run_checkin.sh 2>&1 | tee run.log
