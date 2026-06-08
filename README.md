@@ -55,13 +55,6 @@ Settings → Secrets and variables → Actions
 | `TG_TARGET_CHAT` | 目标签到机器人，例如 `@xxx_bot` 或 chat id |
 | `TG_CHECKIN_TEXT` | 要发送的签到文本 |
 
-当前已经跑通的配置是：
-
-```text
-TG_TARGET_CHAT = 8604751086
-TG_CHECKIN_TEXT = 📅 每日签到
-```
-
 `TG_SESSION_STRING` 不要写进仓库，不要截图发给别人。
 
 ---
