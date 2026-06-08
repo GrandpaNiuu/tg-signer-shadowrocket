@@ -1,0 +1,14 @@
+name = "tg-signer-shadowrocket"
+main = "cloudflare-worker.js"
+compatibility_date = "2025-01-01"
+
+# Cloudflare Cron Triggers use UTC time.
+# 16:05/16:20 UTC = 00:05/00:20 Beijing time.
+[triggers]
+crons = ["5 16 * * *", "20 16 * * *"]
+
+[vars]
+GITHUB_OWNER = "GrandpaNiuu"
+GITHUB_REPO = "tg-signer-shadowrocket"
+GITHUB_WORKFLOW_FILE = "daily-checkin.yml"
+GITHUB_REF = "main"
