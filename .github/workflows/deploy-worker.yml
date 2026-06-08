@@ -1,0 +1,74 @@
+name: Deploy Cloudflare Worker
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/deploy-worker.yml"
+      - "worker/**"
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check required Cloudflare secrets
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
+            echo "Missing GitHub Secret: CLOUDFLARE_API_TOKEN"
+            exit 1
+          fi
+          if [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+            echo "Missing GitHub Secret: CLOUDFLARE_ACCOUNT_ID"
+            exit 1
+          fi
+          echo "Cloudflare deployment secrets are present."
+
+      - name: Normalize Cloudflare API token
+        id: normalize_token
+        env:
+          RAW_CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          python - <<'PY'
+          import os
+          import sys
+
+          raw = os.environ.get("RAW_CLOUDFLARE_API_TOKEN", "")
+          token = raw.strip().strip('"').strip("'")
+          for prefix in [
+              "Authorization: Bearer ",
+              "authorization: bearer ",
+              "Bearer ",
+              "bearer ",
+              "CLOUDFLARE_API_TOKEN=",
+              "cloudflare_api_token=",
+          ]:
+              if token.startswith(prefix):
+                  token = token[len(prefix):].strip()
+          token = "".join(token.split())
+          if not token:
+              print("CLOUDFLARE_API_TOKEN is empty after normalization.")
+              sys.exit(1)
+          print(f"::add-mask::{token}")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+              f.write(f"token={token}\n")
+          PY
+
+      - name: Deploy Worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ steps.normalize_token.outputs.token }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: latest
+          command: deploy --config worker/wrangler.toml
