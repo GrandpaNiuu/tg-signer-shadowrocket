@@ -5,9 +5,11 @@
 当前只保留一种稳定方案：
 
 ```text
-GitHub Actions 每天北京时间 00:00 自动发送签到文本
+GitHub Actions 每天北京时间 00:05 自动发送签到文本
 ```
+
 不再依赖 Cloudflare Worker 触发。
+
 ---
 
 ## 当前流程
@@ -21,10 +23,10 @@ GitHub Actions 每天北京时间 00:00 自动发送签到文本
 
 ## 定时时间
 
-GitHub Actions 使用 UTC 时间，所以北京时间 00:00 对应：
+GitHub Actions 使用 UTC 时间，所以北京时间 00:05 对应：
 
 ```yaml
-- cron: "0 16 * * *"
+- cron: "5 16 * * *"
 ```
 
 文件位置：
@@ -33,7 +35,7 @@ GitHub Actions 使用 UTC 时间，所以北京时间 00:00 对应：
 .github/workflows/daily-checkin.yml
 ```
 
-GitHub 定时任务可能会有几分钟延迟，这是平台调度正常现象。
+GitHub 定时任务可能会有几分钟延迟，这是平台调度正常现象。为了避开整点高峰，当前设置为 00:05。
 
 ---
 
@@ -57,7 +59,7 @@ Settings → Secrets and variables → Actions
 
 ---
 
-## 手动运行
+## 手动测试
 
 进入：
 
@@ -65,9 +67,7 @@ Settings → Secrets and variables → Actions
 Actions → Daily Telegram Checkin → Run workflow
 ```
 
-手动运行时，所有输入框都留空，直接点运行。
-
-不要手动填机器人 ID、签到文本或 task name；workflow 会自动读取 Secrets。
+手动测试时，不需要填写任何输入框，直接运行。
 
 ---
 
