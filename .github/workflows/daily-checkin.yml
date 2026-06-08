@@ -2,7 +2,8 @@ name: Daily Telegram Checkin
 
 on:
   schedule:
-    - cron: "0 0 * * *"
+    # Runs daily at 00:00 Asia/Shanghai. GitHub Actions cron uses UTC.
+    - cron: "0 16 * * *"
   workflow_dispatch:
     inputs:
       mode:
