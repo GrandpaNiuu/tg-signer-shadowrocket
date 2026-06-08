@@ -1,4 +1,4 @@
-# tg-signer-shadowrocket
+# tg-signer
 
 这是一个精简后的 Telegram 自动签到仓库。
 
@@ -7,9 +7,7 @@
 ```text
 GitHub Actions 每天北京时间 00:00 自动发送签到文本
 ```
-
-不再依赖 Shadowrocket 模块，也不再依赖 Cloudflare Worker 触发。
-
+不再依赖 Cloudflare Worker 触发。
 ---
 
 ## 当前流程
