@@ -5,8 +5,8 @@
 当前稳定方案：
 
 ```text
-Cloudflare Cron 每天北京时间 00:05 触发一次签到
-Cloudflare Cron 每天北京时间 00:20 再触发一次备用签到
+Cloudflare Cron 每天北京时间 00:00 触发一次签到
+Cloudflare Cron 每天北京时间 00:10 再触发一次备用签到
 ```
 
 Cloudflare Worker 到点后会调用 GitHub API，触发 `Daily Telegram Checkin` 工作流。GitHub Actions 只负责执行签到，不再依赖 GitHub 自带 schedule。
@@ -15,7 +15,7 @@ Cloudflare Worker 到点后会调用 GitHub API，触发 `Daily Telegram Checkin
 
 ## 当前流程
 
-1. Cloudflare Cron 按北京时间 00:05 / 00:20 触发 Worker。
+1. Cloudflare Cron 按北京时间 00:00 / 00:10 触发 Worker。
 2. Worker 调用 GitHub API，触发 `Daily Telegram Checkin`。
 3. workflow 读取仓库 Secrets。
 4. 使用 `tg-signer` 登录你的 Telegram 用户号。
@@ -25,10 +25,10 @@ Cloudflare Worker 到点后会调用 GitHub API，触发 `Daily Telegram Checkin
 
 ## 定时时间
 
-Cloudflare Cron 使用 UTC 时间，所以北京时间 00:05 和 00:20 对应：
+Cloudflare Cron 使用 UTC 时间，所以北京时间 00:00 和 00:10 对应：
 
 ```toml
-crons = ["5 16 * * *", "20 16 * * *"]
+crons = ["0 16 * * *", "10 16 * * *"]
 ```
 
 文件位置：
