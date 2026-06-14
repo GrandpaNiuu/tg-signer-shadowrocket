@@ -3,9 +3,9 @@ main = "cloudflare-worker.js"
 compatibility_date = "2025-01-01"
 
 # Cloudflare Cron Triggers use UTC time.
-# 15:59 UTC = 23:59 Beijing time.
+# 16:00 UTC = 00:00 Beijing time.
 [triggers]
-crons = ["59 15 * * *"]
+crons = ["0 16 * * *"]
 
 [vars]
 GITHUB_OWNER = "GrandpaNiuu"
