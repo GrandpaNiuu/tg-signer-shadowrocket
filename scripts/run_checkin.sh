@@ -53,6 +53,7 @@ fi
 
 BASE_CMD=(tg-signer --session-string "$TG_SESSION_STRING" "${ACCOUNT_ARGS[@]}")
 
+echo "[INFO] account label: ${CHECKIN_ACCOUNT_LABEL:-default}"
 echo "[INFO] tg-signer mode: $MODE"
 echo "[INFO] timezone: ${TZ:-system-default}"
 

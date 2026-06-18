@@ -20,7 +20,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Check Telegram configuration
+      - name: Check primary Telegram configuration
         env:
           TG_SESSION_STRING: ${{ secrets.TG_SESSION_STRING }}
           TG_TARGET_CHAT: ${{ secrets.TG_TARGET_CHAT }}
@@ -51,8 +51,8 @@ jobs:
               exit 1
             fi
 
-            echo "Telegram config check passed for send-text mode."
-            echo "Target chat is configured. Checkin text is configured." >> "$GITHUB_STEP_SUMMARY"
+            echo "Primary Telegram config check passed for send-text mode."
+            echo "Primary account: target chat is configured. Checkin text is configured." >> "$GITHUB_STEP_SUMMARY"
           elif [ "$MODE" = "task" ]; then
             if [ -z "${TG_SIGNER_TASK_NAME:-}" ]; then
               echo "::error title=Missing task name::Set GitHub Secret TG_SIGNER_TASK_NAME."
@@ -60,7 +60,53 @@ jobs:
               exit 1
             fi
 
-            echo "Telegram config check passed for task mode."
+            echo "Primary Telegram config check passed for task mode."
+          else
+            echo "::error title=Unsupported mode::Allowed values are send-text or task."
+            exit 1
+          fi
+
+      - name: Check optional second Telegram configuration
+        env:
+          TG_SESSION_STRING_2: ${{ secrets.TG_SESSION_STRING_2 }}
+          TG_TARGET_CHAT_2: ${{ secrets.TG_TARGET_CHAT_2 || secrets.TG_TARGET_CHAT }}
+          TG_CHECKIN_TEXT_2: ${{ secrets.TG_CHECKIN_TEXT_2 || secrets.TG_CHECKIN_TEXT }}
+          TG_SIGNER_TASK_NAME_2: ${{ secrets.TG_SIGNER_TASK_NAME_2 || secrets.TG_SIGNER_TASK_NAME }}
+        run: |
+          set -euo pipefail
+
+          MODE="${SIGN_MODE:-send-text}"
+          echo "Mode: $MODE"
+
+          if [ -z "${TG_SESSION_STRING_2:-}" ]; then
+            echo "Second Telegram account is not configured; skipping."
+            echo "Second account: not configured, skipped." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if [ "$MODE" = "send-text" ]; then
+            if [ -z "${TG_TARGET_CHAT_2:-}" ]; then
+              echo "::error title=Missing second target chat::Set TG_TARGET_CHAT_2, or keep TG_TARGET_CHAT configured as a shared fallback."
+              echo "Missing: TG_TARGET_CHAT_2 or TG_TARGET_CHAT" >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+
+            if [ -z "${TG_CHECKIN_TEXT_2:-}" ]; then
+              echo "::error title=Missing second checkin text::Set TG_CHECKIN_TEXT_2, or keep TG_CHECKIN_TEXT configured as a shared fallback."
+              echo "Missing: TG_CHECKIN_TEXT_2 or TG_CHECKIN_TEXT" >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+
+            echo "Second Telegram config check passed for send-text mode."
+            echo "Second account: target chat is configured. Checkin text is configured." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$MODE" = "task" ]; then
+            if [ -z "${TG_SIGNER_TASK_NAME_2:-}" ]; then
+              echo "::error title=Missing second task name::Set TG_SIGNER_TASK_NAME_2, or keep TG_SIGNER_TASK_NAME configured as a shared fallback."
+              echo "Missing: TG_SIGNER_TASK_NAME_2 or TG_SIGNER_TASK_NAME" >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+
+            echo "Second Telegram config check passed for task mode."
           else
             echo "::error title=Unsupported mode::Allowed values are send-text or task."
             exit 1
@@ -78,7 +124,7 @@ jobs:
           python -m pip install --upgrade "tg-signer[yaml] @ git+https://github.com/amchii/tg-signer.git"
           tg-signer version
 
-      - name: Run checkin
+      - name: Run primary checkin
         id: run_checkin
         env:
           TG_SESSION_STRING: ${{ secrets.TG_SESSION_STRING }}
@@ -89,9 +135,33 @@ jobs:
           TG_ACCOUNT: ${{ secrets.TG_ACCOUNT }}
           TG_PROXY: ${{ secrets.TG_PROXY }}
           CHECKIN_DELETE_AFTER: ${{ secrets.CHECKIN_DELETE_AFTER }}
+          CHECKIN_ACCOUNT_LABEL: primary
         run: |
           set -o pipefail
           bash scripts/run_checkin.sh 2>&1 | tee run.log
+
+      - name: Run optional second checkin
+        id: run_second_checkin
+        env:
+          TG_SESSION_STRING: ${{ secrets.TG_SESSION_STRING_2 }}
+          TG_TARGET_CHAT: ${{ secrets.TG_TARGET_CHAT_2 || secrets.TG_TARGET_CHAT }}
+          TG_CHECKIN_TEXT: ${{ secrets.TG_CHECKIN_TEXT_2 || secrets.TG_CHECKIN_TEXT || '/checkin' }}
+          TG_MESSAGE_THREAD_ID: ${{ secrets.TG_MESSAGE_THREAD_ID_2 || secrets.TG_MESSAGE_THREAD_ID }}
+          TG_SIGNER_TASK_NAME: ${{ secrets.TG_SIGNER_TASK_NAME_2 || secrets.TG_SIGNER_TASK_NAME }}
+          TG_SIGNER_IMPORT_BASE64: ${{ secrets.TG_SIGNER_IMPORT_BASE64_2 || secrets.TG_SIGNER_IMPORT_BASE64 }}
+          TG_ACCOUNT: ${{ secrets.TG_ACCOUNT_2 }}
+          TG_PROXY: ${{ secrets.TG_PROXY_2 || secrets.TG_PROXY }}
+          CHECKIN_DELETE_AFTER: ${{ secrets.CHECKIN_DELETE_AFTER_2 || secrets.CHECKIN_DELETE_AFTER }}
+          CHECKIN_ACCOUNT_LABEL: secondary
+        run: |
+          set -o pipefail
+
+          if [ -z "${TG_SESSION_STRING:-}" ]; then
+            echo "[INFO] Second Telegram account is not configured; skipping." | tee -a run.log
+            exit 0
+          fi
+
+          bash scripts/run_checkin.sh 2>&1 | tee -a run.log
 
       - name: Notify Telegram
         if: always()

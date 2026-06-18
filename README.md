@@ -65,6 +65,38 @@ Settings → Secrets and variables → Actions
 
 ---
 
+## 可选第二账号
+
+如果要让另一个 Telegram 用户号也自动签到，额外添加：
+
+| Secret | 用途 |
+|---|---|
+| `TG_SESSION_STRING_2` | 第二个 Telegram 用户号 session string |
+
+默认情况下，第二个账号会复用第一个账号的 `TG_TARGET_CHAT` 和 `TG_CHECKIN_TEXT`。
+
+如果第二个账号要发给不同机器人、群组或使用不同签到文本，可以继续添加：
+
+| Secret | 用途 |
+|---|---|
+| `TG_TARGET_CHAT_2` | 第二个账号的目标签到机器人或 chat id |
+| `TG_CHECKIN_TEXT_2` | 第二个账号的签到文本 |
+
+高级配置也支持第二账号专用后缀：
+
+```text
+TG_MESSAGE_THREAD_ID_2
+TG_SIGNER_TASK_NAME_2
+TG_SIGNER_IMPORT_BASE64_2
+TG_ACCOUNT_2
+TG_PROXY_2
+CHECKIN_DELETE_AFTER_2
+```
+
+没有配置 `TG_SESSION_STRING_2` 时，第二账号步骤会自动跳过，不影响第一个账号签到。
+
+---
+
 ## 必须配置的 Cloudflare Worker 密钥
 
 Worker 里需要有：
