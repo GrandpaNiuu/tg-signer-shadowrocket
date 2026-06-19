@@ -106,7 +106,7 @@ Worker 里需要有：
 | `GITHUB_TOKEN` | 让 Worker 触发 GitHub Actions |
 | `TRIGGER_KEY` | 手动访问 `/run` 时使用 |
 | `GITHUB_OWNER` | 仓库所有者，当前是 `GrandpaNiuu` |
-| `GITHUB_REPO` | 仓库名，当前是 `tg-signer-shadowrocket` |
+| `GITHUB_REPO` | 仓库名，当前是 `Telegramautomaticcheck-in` |
 | `GITHUB_WORKFLOW_FILE` | 当前是 `daily-checkin.yml` |
 | `GITHUB_REF` | 当前是 `main` |
 
