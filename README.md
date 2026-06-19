@@ -6,29 +6,42 @@
 
 ```text
 Cloudflare Cron 每天北京时间 00:00 触发一次签到
-Cloudflare Cron 每天北京时间 00:10 再触发一次备用签到
 ```
 
-Cloudflare Worker 到点后会调用 GitHub API，触发 `Daily Telegram Checkin` 工作流。GitHub Actions 只负责执行签到，不再依赖 GitHub 自带 schedule。
+Cloudflare Worker 到点后会调用 GitHub API，触发 `Daily Telegram Checkin` 工作流。
+
+简单理解：
+
+```text
+每天 00:00 → Cloudflare 叫醒 GitHub Actions → GitHub Actions 给机器人发签到消息
+```
+
+如果配置了第二个账号，两个账号会在同一次工作流里依次签到。
 
 ---
 
 ## 当前流程
 
-1. Cloudflare Cron 按北京时间 00:00 / 00:10 触发 Worker。
+1. Cloudflare Cron 每天北京时间 00:00 触发 Worker。
 2. Worker 调用 GitHub API，触发 `Daily Telegram Checkin`。
 3. workflow 读取仓库 Secrets。
-4. 使用 `tg-signer` 登录你的 Telegram 用户号。
-5. 向目标机器人发送固定签到文本。
+4. 使用 `tg-signer` 登录第一个 Telegram 用户号并发送签到文本。
+5. 如果配置了 `TG_SESSION_STRING_2`，再登录第二个 Telegram 用户号并发送同样的签到文本。
 
 ---
 
 ## 定时时间
 
-Cloudflare Cron 使用 UTC 时间，所以北京时间 00:00 和 00:10 对应：
+Cloudflare Cron 使用 UTC 时间。北京时间比 UTC 快 8 小时，所以：
+
+```text
+北京时间 00:00 = UTC 16:00
+```
+
+仓库里实际配置的是：
 
 ```toml
-crons = ["0 16 * * *", "10 16 * * *"]
+crons = ["0 16 * * *"]
 ```
 
 文件位置：
