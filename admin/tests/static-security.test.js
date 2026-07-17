@@ -52,3 +52,34 @@ test("transient Telegram login errors keep polling the current account", async (
   assert.match(loginFlow, /Runner 会自动重试，无需重新添加账号/);
   assert.match(loginFlow, /shouldPoll = true/);
 });
+
+test("the administrator shell is gated by GitHub login before data loads", async () => {
+  const [html, app, api] = await Promise.all([
+    readFile(new URL("../index.html", import.meta.url), "utf8"),
+    readFile(new URL("../src/app.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/api.js", import.meta.url), "utf8"),
+  ]);
+  assert.match(html, /id="auth-gate"[^>]*hidden/);
+  assert.match(html, /href="\/api\/auth\/github\/start"/);
+  assert.match(html, /id="app"[^>]*hidden/);
+  assert.match(html, /id="logout-button"/);
+  assert.doesNotMatch(html, /Cloudflare Access/);
+  assert.match(api, /baseUrl: "\/api\/auth"/);
+  assert.match(api, /request\("\/session"\)/);
+  assert.match(api, /request\("\/logout", \{ method: "POST"/);
+  assert.match(app, /async function bootstrap\(\)/);
+  assert.match(app, /if \(await loadIdentity\(\)\)/);
+  assert.doesNotMatch(app, /loadIdentity\(\);\s*refreshRoute\(\);/);
+});
+
+test("logout redirects only after the server revokes the session", async () => {
+  const app = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
+  const start = app.indexOf('document.querySelector("#logout-button")');
+  const end = app.indexOf('document.addEventListener("keydown"', start);
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+  const logout = app.slice(start, end);
+  assert.match(logout, /await api\.logout\(\);\s*location\.replace\("\/"\);/);
+  assert.match(logout, /catch \(error\)/);
+  assert.match(logout, /event\.currentTarget\.disabled = false/);
+});

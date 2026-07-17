@@ -107,3 +107,20 @@ test("loads every cursor page for accounts, tasks, and runs", async () => {
   assert.deepEqual(await client.accounts(), [{ id: "row-1" }, { id: "row-2" }]);
   assert.deepEqual(requested, ["/api/v1/accounts", "/api/v1/accounts?cursor=next-1"]);
 });
+
+test("identity and logout use the same-origin GitHub auth endpoints", async () => {
+  const requests = [];
+  const client = new ApiClient({ fetchImpl: async (url, options) => {
+    requests.push({ url, method: options.method, credentials: options.credentials, requestedWith: options.headers["x-requested-with"] });
+    return Response.json({ data: url.endsWith("/session")
+      ? { authenticated: true, provider: "github", login: "GrandpaNiuu" }
+      : null });
+  }});
+
+  assert.equal((await client.identity()).login, "GrandpaNiuu");
+  await client.logout();
+  assert.deepEqual(requests, [
+    { url: "/api/auth/session", method: "GET", credentials: "same-origin", requestedWith: "tg-checkin-admin" },
+    { url: "/api/auth/logout", method: "POST", credentials: "same-origin", requestedWith: "tg-checkin-admin" },
+  ]);
+});

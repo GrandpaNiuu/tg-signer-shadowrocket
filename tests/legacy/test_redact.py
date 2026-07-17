@@ -47,6 +47,14 @@ class RedactionTests(unittest.TestCase):
         self.assertNotIn(secret, result)
         self.assertTrue(result.endswith("end"))
 
+    def test_redacts_github_oauth_client_secret_from_environment(self) -> None:
+        secret = "github-oauth-client-secret-value"
+        with mock.patch.dict(os.environ, {"GITHUB_OAUTH_CLIENT_SECRET": secret}, clear=False):
+            redacted = redact_text("oauth failure: " + secret)
+
+        self.assertNotIn(secret, redacted)
+        self.assertIn("[REDACTED]", redacted)
+
     def test_redacts_unlabelled_high_entropy_session_shape(self) -> None:
         possible_session = "AbCdEf0123_-" * 12
         self.assertNotIn(possible_session, redact_text("raw=" + possible_session))

@@ -144,8 +144,13 @@ export class ApiClient {
   }
 
   identity() {
-    const identityClient = new ApiClient({ baseUrl: "/api", fetchImpl: this.fetchImpl, timeoutMs: this.timeoutMs });
-    return identityClient.request("/identity");
+    const identityClient = new ApiClient({ baseUrl: "/api/auth", fetchImpl: this.fetchImpl, timeoutMs: this.timeoutMs });
+    return identityClient.request("/session");
+  }
+
+  logout() {
+    const identityClient = new ApiClient({ baseUrl: "/api/auth", fetchImpl: this.fetchImpl, timeoutMs: this.timeoutMs });
+    return identityClient.request("/logout", { method: "POST" });
   }
 }
 

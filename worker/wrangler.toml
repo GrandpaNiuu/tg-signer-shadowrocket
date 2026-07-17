@@ -10,7 +10,7 @@ crons = ["* * * * *"]
 [[d1_databases]]
 binding = "DB"
 database_name = "telegram-checkin"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "d4554956-d80f-486b-a7c3-6dec3ea62094"
 migrations_dir = "migrations"
 
 [vars]
@@ -22,6 +22,8 @@ TASK_RUNNER_WORKFLOW_FILE = "task-runner.yml"
 LOGIN_WORKFLOW_FILE = "telegram-login.yml"
 MIGRATION_WORKFLOW_FILE = "migrate-legacy.yml"
 LEGACY_CRON = "0 16 * * *"
-RUNNER_OIDC_AUDIENCE = "https://REPLACE_WITH_WORKER_HOST/api/runner"
-ACCESS_TEAM_DOMAIN = "REPLACE_WITH_ACCESS_TEAM.cloudflareaccess.com"
-ACCESS_AUD = "REPLACE_WITH_ACCESS_APPLICATION_AUD"
+RUNNER_OIDC_AUDIENCE = "https://tg-signer-shadowrocket.q3j1h8.workers.dev/api/runner"
+ADMIN_ORIGIN = "https://grandpaniu.ccwu.cc"
+ADMIN_GITHUB_LOGIN = "GrandpaNiuu"
+ADMIN_GITHUB_USER_ID = "225517310"
+ADMIN_SESSION_TTL_SECONDS = "604800"

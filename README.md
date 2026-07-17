@@ -7,7 +7,7 @@
 ## 运行架构
 
 ```text
-Cloudflare Pages（单管理员后台，Cloudflare Access）
+Cloudflare Pages（单管理员后台，GitHub OAuth）
         │ 同源 Pages Function / Service Binding
         ▼
 Cloudflare Worker（API、调度、加密、GitHub OIDC 校验）
@@ -70,7 +70,7 @@ D1 的 `scheduler_mode` 初始值为 `legacy`。只有完成迁移并在后台�
 - Session 不出现在命令行参数；敏感临时目录权限为 `0700`、文件为 `0600`，退出清理。
 - Timeout 或发送结果无法确认时记录为 `ambiguous`，不会盲目重试造成重复签到。
 - Retry 只用于明确未执行的失败（例如 Telegram FloodWait）；连接中断保持不确定状态。
-- Pages 与 Worker 管理接口由 Cloudflare Access 限制到唯一管理员。
+- Pages 与 Worker 管理接口使用 GitHub OAuth + S256 PKCE；登录名和不可变 GitHub user id 双重限制到唯一管理员，随机会话只以 SHA-256 摘要保存到 D1。
 
 ## 首次部署
 
@@ -79,22 +79,25 @@ D1 的 `scheduler_mode` 初始值为 `legacy`。只有完成迁移并在后台�
 1. 在 Cloudflare 创建 D1 数据库 `telegram-checkin`，记录 database id。
 2. 在 Cloudflare Pages 先创建 **Direct Upload** 项目 `telegram-checkin-admin` 并做一次初始上传。不要同时启用 Git integration。
 3. 给 Pages 项目绑定自定义域名 **`grandpaniu.ccwu.cc`**；内置 `pages.dev` 地址只作为 Cloudflare 的技术入口，应用会以 308 跳转到该自定义域名。
-4. 为 `grandpaniu.ccwu.cc` 创建 Cloudflare Access Self-hosted Application；Allow policy 只包含唯一管理员邮箱，同时保护项目的 `pages.dev` 主机名，并记录 Access team domain 与 Application AUD。
+4. 在 GitHub 创建一个 OAuth App，无需 Cloudflare Zero Trust 或账单授权：
+   - Homepage URL：`https://grandpaniu.ccwu.cc`
+   - Authorization callback URL：`https://grandpaniu.ccwu.cc/api/auth/github/callback`
+   - 记录 Client ID，并生成 Client Secret；两者只写入 Worker Secret。
 5. 在 `worker/wrangler.toml` 填写：
    - D1 database id；
    - `RUNNER_OIDC_AUDIENCE`：生产 Worker URL 加 `/api/runner`；
-   - `ACCESS_TEAM_DOMAIN`；
-   - 上一步得到的 `ACCESS_AUD`。
+   - `ADMIN_ORIGIN=https://grandpaniu.ccwu.cc`；
+   - 唯一管理员的 `ADMIN_GITHUB_LOGIN` 与不可变 `ADMIN_GITHUB_USER_ID`。
 6. 配置 Worker Secrets：
    - 保留原 `GITHUB_TOKEN`、`TRIGGER_KEY`；
    - 新增 `SECRET_ROOT_KEY`（恰好 32 个随机字节的 Base64）；
-   - `ADMIN_EMAIL`（唯一管理员邮箱，可作为加固条件）。
+   - 新增 `GITHUB_OAUTH_CLIENT_ID` 与 `GITHUB_OAUTH_CLIENT_SECRET`。
 7. 在 GitHub Repository Secrets 保留 `CLOUDFLARE_API_TOKEN` 与 `CLOUDFLARE_ACCOUNT_ID`。Token 至少需要目标账号的 Workers Scripts Edit、D1 Edit 与 Cloudflare Pages Edit。Worker 使用的 `GITHUB_TOKEN` 需对本仓库有 Actions: write 权限。
 8. 在 GitHub Repository Variables 配置：
    - `WORKER_URL`；
    - `WORKER_OIDC_AUDIENCE`（必须与 Worker 的 `RUNNER_OIDC_AUDIENCE` 完全一致）。
 9. 运行 `Deploy Cloudflare Worker`；workflow 会先应用远程 D1 migration，再部署 Worker。
-10. 运行 `Deploy Cloudflare Pages Admin`；`CONTROL_PLANE` Service Binding 指向 `tg-signer-shadowrocket`，生产环境保持 `REQUIRE_ACCESS_HEADER=true` 和 `CANONICAL_HOST=grandpaniu.ccwu.cc`。
+10. 运行 `Deploy Cloudflare Pages Admin`；`CONTROL_PLANE` Service Binding 指向 `tg-signer-shadowrocket`，生产环境保持 `CANONICAL_HOST=grandpaniu.ccwu.cc`。不创建 Cloudflare Access Application。
 
 本仓库沿用原 Worker 名称，通常可以直接保留已有 Worker Secrets。若确实是全新 Cloudflare 账号，先完成一次 Worker 部署以创建服务，再设置 Worker Secrets，并重新部署/验证；不要把真实 Secret 写入 TOML 或仓库。
 
@@ -154,4 +157,4 @@ CI 会在 `Quality Checks` workflow 中执行同一组测试。
 - 主/第二账号、Thread、Delete After、代理、tg-signer Base64 导入、目标格式归一化和特定 Bot peer workaround 保留。
 - 原通知仍是 best-effort：通知失败不改变签到结果，但日志会先脱敏。
 
-日常配置请只使用后台。基础设施 Secret、D1 id、Access audience 等部署级值不属于日常账号/任务配置，也不会暴露在网页中。
+日常配置请只使用后台。基础设施 Secret、D1 id、GitHub OAuth 凭据等部署级值不属于日常账号/任务配置，也不会暴露在网页中。

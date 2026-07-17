@@ -11,10 +11,6 @@ function json(data, status = 200) {
   });
 }
 
-function accessEmail(request) {
-  return request.headers.get("cf-access-authenticated-user-email") || "";
-}
-
 function isSameOriginWrite(request) {
   if (SAFE_METHODS.has(request.method)) return true;
 
@@ -24,10 +20,11 @@ function isSameOriginWrite(request) {
   return origin === expected && requestedWith === "tg-checkin-admin";
 }
 
-function proxiedRequest(request, adminEmail) {
+function proxiedRequest(request) {
   const headers = new Headers(request.headers);
   headers.delete("x-admin-email");
-  if (adminEmail) headers.set("x-admin-email", adminEmail);
+  headers.delete("cf-access-authenticated-user-email");
+  headers.delete("cf-access-jwt-assertion");
   headers.set("x-forwarded-by", "telegram-checkin-pages");
 
   return new Request(request.url, {
@@ -40,18 +37,6 @@ function proxiedRequest(request, adminEmail) {
 
 export async function onRequest(context) {
   const { request, env } = context;
-  const url = new URL(request.url);
-
-  if (url.pathname === "/api/identity") {
-    const email = accessEmail(request);
-    return json({
-      data: {
-        authenticated: Boolean(email),
-        email: email || null,
-        provider: "cloudflare_access",
-      },
-    });
-  }
 
   if (!isSameOriginWrite(request)) {
     return json({
@@ -71,18 +56,8 @@ export async function onRequest(context) {
     }, 503);
   }
 
-  const email = accessEmail(request);
-  if (env.REQUIRE_ACCESS_HEADER === "true" && !email) {
-    return json({
-      error: {
-        code: "ACCESS_REQUIRED",
-        message: "请先通过 Cloudflare Access 登录。",
-      },
-    }, 401);
-  }
-
   try {
-    const response = await env.CONTROL_PLANE.fetch(proxiedRequest(request, email));
+    const response = await env.CONTROL_PLANE.fetch(proxiedRequest(request));
     const headers = new Headers(response.headers);
     headers.set("cache-control", "no-store");
     headers.set("x-content-type-options", "nosniff");
@@ -101,4 +76,4 @@ export async function onRequest(context) {
   }
 }
 
-export const __test = { accessEmail, isSameOriginWrite, proxiedRequest };
+export const __test = { isSameOriginWrite, proxiedRequest };

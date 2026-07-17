@@ -6,7 +6,15 @@ module Worker with no third-party runtime dependencies.
 
 ## Routes
 
-Cloudflare Access protects all administrator routes:
+An opaque D1-backed GitHub administrator session protects all administrator
+routes. Public authentication routes are:
+
+- `GET /api/auth/github/start`
+- `GET /api/auth/github/callback`
+- `GET /api/auth/session`
+- `POST /api/auth/logout`
+
+Authenticated routes are:
 
 - `GET /api/v1/dashboard`
 - `GET|POST /api/v1/accounts`, `GET|PATCH|DELETE /api/v1/accounts/:id`
@@ -50,23 +58,26 @@ the key is not placed in URLs.
 
 ## Configuration
 
-Create the D1 database and the Direct Upload Pages project first, protect its
-domain with Cloudflare Access, then replace only the deployment placeholders in
-`wrangler.toml`. The Worker deployment workflow applies all pending D1
-migrations remotely before it deploys the Worker. Do not commit secrets.
+Create the D1 database, Direct Upload Pages project, and one GitHub OAuth App.
+The OAuth App callback is
+`https://grandpaniu.ccwu.cc/api/auth/github/callback`. Cloudflare Access and its
+billing activation are not used. The Worker deployment workflow applies all
+pending D1 migrations remotely before it deploys the Worker. Do not commit
+secrets.
 
 Worker secrets:
 
 - `GITHUB_TOKEN` and `TRIGGER_KEY` (legacy compatibility)
 - `SECRET_ROOT_KEY`: base64 for exactly 32 random bytes
 - optional `SECRET_ROOT_KEY_V1`, `SECRET_ROOT_KEY_V2`, ... during key rotation
-- `ADMIN_EMAIL` to restrict Access to the personal administrator
+- `GITHUB_OAUTH_CLIENT_ID` and `GITHUB_OAUTH_CLIENT_SECRET`
 
 Variables:
 
 - GitHub owner, repository, branch, and three workflow filenames
 - `RUNNER_OIDC_AUDIENCE`
-- `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD`
+- `ADMIN_ORIGIN`, `ADMIN_GITHUB_LOGIN`, and immutable `ADMIN_GITHUB_USER_ID`
+- optional `ADMIN_SESSION_TTL_SECONDS` (5 minutes to 30 days; default 7 days)
 - optional explicit `RUNNER_WORKFLOW_REF`, `LOGIN_WORKFLOW_REF`, and
   `MIGRATION_WORKFLOW_REF`
 
@@ -82,6 +93,11 @@ successful dry-run and legacy import; switching it back is the rollback.
 
 - API hash, session, proxy credentials, verification code, 2FA password, and
   notification credentials are AES-256-GCM ciphertext at rest.
+- GitHub OAuth states are short-lived, one-time values whose SHA-256 hashes are
+  stored in D1; authorization codes are bound with S256 PKCE. Administrator
+  session tokens are random 256-bit values; D1 stores
+  only their hashes, and logout revokes the matching row immediately.
+- Both the configured GitHub login and immutable numeric user id must match.
 - Each ciphertext uses a random 96-bit nonce and AAD bound to purpose, owner,
   and key version.
 - Code and 2FA secrets have the login flow's short expiry and can only be

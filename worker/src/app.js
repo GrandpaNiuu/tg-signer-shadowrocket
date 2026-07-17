@@ -1,5 +1,6 @@
 import { handleAdminApi } from "./admin-api.js";
-import { verifyAdminRequest, verifyRunnerRequest } from "./auth.js";
+import { createAdminAuth } from "./admin-auth.js";
+import { verifyRunnerRequest } from "./auth.js";
 import { cronMatches } from "./cron.js";
 import { dispatchWorkflow } from "./github.js";
 import { errorResponse, json } from "./http.js";
@@ -19,7 +20,8 @@ export function createWorker(dependencies = {}) {
     if (!env.DB) throw new Error("D1 binding DB is missing.");
     return createD1Repository(env.DB);
   });
-  const verifyAdmin = dependencies.verifyAdmin || ((request, env) => verifyAdminRequest(request, env, { fetch: fetchImpl }));
+  const adminAuth = dependencies.adminAuth || createAdminAuth({ fetch: fetchImpl, now });
+  const verifyAdmin = dependencies.verifyAdmin || ((request, env, repository) => adminAuth.verify(request, env, repository));
   const verifyRunner = dependencies.verifyRunner || ((request, env) => verifyRunnerRequest(request, env, { fetch: fetchImpl }));
 
   return {
@@ -30,9 +32,13 @@ export function createWorker(dependencies = {}) {
         if (url.pathname === "/health" && request.method === "GET") {
           return json({ ok: true, worker: "tg-signer-shadowrocket" });
         }
-        if (url.pathname.startsWith("/api/v1/")) {
-          await verifyAdmin(request, env);
+        if (url.pathname.startsWith("/api/auth/")) {
           const repository = repositoryFactory(env);
+          return await adminAuth.handle(request, env, repository);
+        }
+        if (url.pathname.startsWith("/api/v1/")) {
+          const repository = repositoryFactory(env);
+          await verifyAdmin(request, env, repository);
           return await handleAdminApi(request, env, repository, { uuid, now, fetch: fetchImpl });
         }
         if (url.pathname.startsWith("/api/runner/")) {

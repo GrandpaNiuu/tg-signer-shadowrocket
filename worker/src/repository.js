@@ -183,6 +183,50 @@ export class D1Repository {
     this.db = db;
   }
 
+  async createAdminOAuthState(state) {
+    await this.db.batch([
+      this.db.prepare("DELETE FROM admin_oauth_states WHERE consumed_at IS NOT NULL OR expires_at <= ?")
+        .bind(state.created_at),
+      this.db.prepare(`INSERT INTO admin_oauth_states
+        (state_hash, code_verifier, return_to, expires_at, created_at) VALUES (?, ?, ?, ?, ?)`)
+        .bind(state.state_hash, state.code_verifier, state.return_to, state.expires_at, state.created_at),
+    ]);
+  }
+
+  async consumeAdminOAuthState(stateHash, timestamp) {
+    return this.db.prepare(`UPDATE admin_oauth_states SET consumed_at = ?
+      WHERE state_hash = ? AND consumed_at IS NULL AND expires_at > ?
+      RETURNING return_to, code_verifier`).bind(timestamp, stateHash, timestamp).first();
+  }
+
+  async createAdminSession(session) {
+    await this.db.batch([
+      this.db.prepare("DELETE FROM admin_sessions WHERE revoked_at IS NOT NULL OR expires_at <= ?")
+        .bind(session.created_at),
+      this.db.prepare(`INSERT INTO admin_sessions
+        (token_hash, github_user_id, github_login, github_name, created_at, expires_at)
+        VALUES (?, ?, ?, ?, ?, ?)`).bind(
+        session.token_hash,
+        session.github_user_id,
+        session.github_login,
+        session.github_name,
+        session.created_at,
+        session.expires_at,
+      ),
+    ]);
+  }
+
+  async getAdminSession(tokenHash, timestamp) {
+    return this.db.prepare(`SELECT github_user_id, github_login, github_name, created_at, expires_at
+      FROM admin_sessions WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?`)
+      .bind(tokenHash, timestamp).first();
+  }
+
+  async revokeAdminSession(tokenHash, timestamp) {
+    await this.db.prepare(`UPDATE admin_sessions SET revoked_at = ?
+      WHERE token_hash = ? AND revoked_at IS NULL`).bind(timestamp, tokenHash).run();
+  }
+
   async listAccounts({ limit, offset }) {
     const result = await this.db.prepare(`SELECT id, name, phone_masked, status, enabled, last_error,
       last_connected_at, created_at, updated_at FROM accounts ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`)

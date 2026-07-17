@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { verifyAdminRequest, verifyRunnerRequest } from "../src/auth.js";
+import { verifyRunnerRequest } from "../src/auth.js";
 
 function encode(value) {
   return Buffer.from(typeof value === "string" ? value : JSON.stringify(value)).toString("base64url");
@@ -76,20 +76,5 @@ test("runner OIDC rejects a token from another repository", async () => {
       TASK_RUNNER_WORKFLOW_FILE: "task-runner.yml",
     }, { fetch, cache: new Map() }),
     (error) => error.status === 401 && error.code === "invalid_runner_identity",
-  );
-});
-
-test("admin identity header is accepted only with explicit local-development opt-in", async () => {
-  const request = new Request("http://localhost/api/v1/dashboard", {
-    headers: { "cf-access-authenticated-user-email": "admin@example.com" },
-  });
-  assert.deepEqual(await verifyAdminRequest(request, {
-    ACCESS_ALLOW_HEADER: "true",
-    ADMIN_EMAIL: "admin@example.com",
-  }), { email: "admin@example.com", source: "trusted_header" });
-
-  await assert.rejects(
-    verifyAdminRequest(request, { ADMIN_EMAIL: "admin@example.com" }),
-    (error) => error.status === 401,
   );
 });

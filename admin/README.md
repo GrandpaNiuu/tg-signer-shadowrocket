@@ -2,7 +2,7 @@
 
 个人使用的 Cloudflare Pages 管理后台。它是一个无构建依赖的 HTML/CSS/ES modules 单页应用，通过 Pages Function 的 `CONTROL_PLANE` Service Binding 同源访问 Worker。
 
-这里没有注册、支付、多租户或团队功能。管理员登录由 Cloudflare Access 负责。
+这里没有注册、支付、多租户或团队功能。管理员通过 GitHub OAuth 登录，Worker 只接受配置中的唯一 GitHub 登录名和不可变 user id。
 
 ## 页面
 
@@ -21,7 +21,7 @@
 npm test --prefix admin
 ```
 
-纯静态页面可以用任意静态服务器预览，但在没有 Pages Function、Service Binding 和 Cloudflare Access 时，API 会显示未连接。
+纯静态页面可以用任意静态服务器预览，但在没有 Pages Function、Service Binding 和有效 GitHub 管理会话时，只会显示登录入口或服务未连接。
 
 ## Cloudflare Pages 部署
 
@@ -32,11 +32,11 @@ npm test --prefix admin
 - Production branch：`main`
 - 上传目录：`admin/`
 - Service Binding：变量名 `CONTROL_PLANE`，服务 `tg-signer-shadowrocket`
-- 环境变量：生产环境设置 `REQUIRE_ACCESS_HEADER=true`、`CANONICAL_HOST=grandpaniu.ccwu.cc`
+- 环境变量：生产环境设置 `CANONICAL_HOST=grandpaniu.ccwu.cc`
 
 `wrangler.toml` 已包含 Pages 输出目录和 Service Binding。部署 workflow 使用固定 Wrangler 版本执行 Direct Upload；生产绑定仍需核对目标 Worker 名称。
 
-随后在 Cloudflare Zero Trust 中为 `grandpaniu.ccwu.cc` 创建一个 Self-hosted Access Application，并把 Allow policy 限制为唯一管理员邮箱。项目的 `pages.dev` 地址也应受 Access 保护，并会由全局 Pages middleware 以 308 跳转到自定义域名。API 与页面应处于同一个 Access Application 后；不要创建自建用户名密码。
+不需要开通 Cloudflare Zero Trust，也不需要银行卡或账单授权。在 GitHub 创建一个 OAuth App，把 Homepage URL 设为 `https://grandpaniu.ccwu.cc`，Authorization callback URL 设为 `https://grandpaniu.ccwu.cc/api/auth/github/callback`。Client ID 与 Client Secret 只保存为 Worker Secrets。项目的 `pages.dev` 地址由全局 Pages middleware 以 308 跳转到自定义域名。
 
 ## 安全约束
 
@@ -44,11 +44,11 @@ npm test --prefix admin
 - 浏览器代码不使用 `localStorage`、`sessionStorage` 或 IndexedDB。
 - API 返回、页面、Pages Function 均使用 `no-store`。
 - 写请求要求同源 `Origin` 和 `X-Requested-With: tg-checkin-admin`。
-- Pages Function 会丢弃浏览器伪造的 `X-Admin-Email`，只从 Cloudflare Access 头生成审计身份。
+- Pages Function 会丢弃浏览器伪造的 Access 与管理员身份头，只转发同源 HttpOnly 会话 Cookie；Worker 独立查询 D1 验证会话。
 - CSP 禁止内联脚本、内联样式、第三方连接和 framing。
 - 页面只显示 Worker 已脱敏的日志，不提供原始秘密日志入口。
 
-`REQUIRE_ACCESS_HEADER` 只是一道 Pages 边界保护；Worker 仍必须验证 Cloudflare Access JWT，不能把 `X-Admin-Email` 当成授权依据。
+OAuth state 只能使用一次且十分钟过期；浏览器会话 Token 为随机 256 位值，D1 只保存 SHA-256 摘要，退出时立即撤销。
 
 ## API 契约
 

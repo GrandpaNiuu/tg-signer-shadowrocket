@@ -77,3 +77,34 @@ test("tg-signer secret snapshot migration backfills non-terminal runs", () => {
     FROM task_runs WHERE id = ?`).get("run-signer");
   assert.equal(snapshot.tg_signer_import_secret_id_snapshot, "secret-signer-old");
 });
+
+test("GitHub administrator auth migration preserves an existing control-plane database", () => {
+  const sqlite = new DatabaseSync(":memory:");
+  sqlite.exec(readFileSync(new URL("../migrations/0001_initial.sql", import.meta.url), "utf8"));
+  const timestamp = "2026-07-18T00:00:00.000Z";
+  sqlite.prepare(`INSERT INTO accounts
+    (id, name, phone_masked, status, enabled, created_at, updated_at)
+    VALUES (?, ?, ?, 'connected', 1, ?, ?)`).run(
+    "account-existing", "Existing account", "+86*******5678", timestamp, timestamp,
+  );
+
+  sqlite.exec(readFileSync(new URL("../migrations/0005_github_admin_auth.sql", import.meta.url), "utf8"));
+  sqlite.prepare(`INSERT INTO admin_oauth_states
+    (state_hash, return_to, expires_at, created_at) VALUES (?, ?, ?, ?)`)
+    .run("old-state-hash", "/#/dashboard", "2026-07-18T00:10:00.000Z", timestamp);
+  sqlite.prepare(`INSERT INTO admin_sessions
+    (token_hash, github_user_id, github_login, created_at, expires_at) VALUES (?, ?, ?, ?, ?)`)
+    .run("session-hash", "225517310", "GrandpaNiuu", timestamp, "2026-07-25T00:00:00.000Z");
+
+  sqlite.exec(readFileSync(new URL("../migrations/0006_admin_oauth_pkce.sql", import.meta.url), "utf8"));
+  sqlite.prepare(`INSERT INTO admin_oauth_states
+    (state_hash, code_verifier, return_to, expires_at, created_at) VALUES (?, ?, ?, ?, ?)`)
+    .run("pkce-state-hash", "a".repeat(43), "/#/dashboard", "2026-07-18T00:10:00.000Z", timestamp);
+
+  assert.equal(sqlite.prepare("SELECT name FROM accounts WHERE id = ?").get("account-existing").name, "Existing account");
+  assert.equal(sqlite.prepare("SELECT github_login FROM admin_sessions WHERE token_hash = ?").get("session-hash").github_login, "GrandpaNiuu");
+  assert.equal(sqlite.prepare("SELECT code_verifier FROM admin_oauth_states WHERE state_hash = ?")
+    .get("old-state-hash").code_verifier, null);
+  assert.equal(sqlite.prepare("SELECT code_verifier FROM admin_oauth_states WHERE state_hash = ?")
+    .get("pkce-state-hash").code_verifier, "a".repeat(43));
+});

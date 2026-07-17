@@ -26,13 +26,14 @@ test("structured redaction removes every configured secret field recursively", (
 });
 
 test("free-form logs redact assignments, bearer tokens, and proxy URL credentials", () => {
-  const source = "API_HASH=abc123 Authorization: Bearer gh-token proxy=http://user:pass@example.com:8080 code: 98231";
+  const source = "API_HASH=abc123 Authorization: Bearer gh-token proxy=http://user:pass@example.com:8080 code: 98231 client_secret=oauth-value";
   const result = sanitizeLogText(source);
 
   assert.equal(result.includes("abc123"), false);
   assert.equal(result.includes("gh-token"), false);
   assert.equal(result.includes(":pass@"), false);
   assert.equal(result.includes("98231"), false);
+  assert.equal(result.includes("oauth-value"), false);
   assert.match(result, /\[REDACTED\]/);
 });
 

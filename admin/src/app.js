@@ -29,6 +29,9 @@ const modalRoot = document.querySelector("#modal-root");
 const drawerRoot = document.querySelector("#drawer-root");
 const toastRegion = document.querySelector("#toast-region");
 const apiStatus = document.querySelector("#api-status");
+const appShell = document.querySelector("#app");
+const authGate = document.querySelector("#auth-gate");
+const authMessage = document.querySelector("#auth-message");
 
 const routeMeta = {
   dashboard: ["概览", "今天的自动签到运行情况"],
@@ -87,6 +90,10 @@ function errorMessage(error) {
 }
 
 function showPageError(error, retryAction = "refresh") {
+  if (error instanceof ApiError && error.status === 401) {
+    showLogin("管理会话已过期，请重新登录。");
+    return;
+  }
   setApiState("error", "连接异常");
   view.innerHTML = `${pageHead(...routeMeta[store.get().route])}
     <div class="card">${emptyState("!", "暂时无法加载", errorMessage(error), `<button class="button primary" type="button" data-action="${retryAction}">重新加载</button>`)}</div>`;
@@ -142,15 +149,31 @@ function closeDrawer() {
   document.body.style.overflow = modalRoot.firstElementChild ? "hidden" : "";
 }
 
+function showLogin(message = "使用唯一管理员 GitHub 账号登录后管理签到任务。") {
+  closeModal(false);
+  closeDrawer();
+  appShell.hidden = true;
+  authGate.hidden = false;
+  authMessage.textContent = message;
+}
+
 async function loadIdentity() {
   try {
     const identity = await api.identity();
-    const email = identity?.email || "Cloudflare Access";
-    document.querySelector("#identity-name").textContent = identity?.authenticated ? "管理员" : "预览模式";
-    document.querySelector("#identity-email").textContent = email;
-    document.querySelector(".avatar").textContent = initials(email);
+    if (!identity?.authenticated) {
+      showLogin();
+      return false;
+    }
+    const login = identity.login || "GitHub";
+    document.querySelector("#identity-name").textContent = identity.name || "管理员";
+    document.querySelector("#identity-email").textContent = `@${login}`;
+    document.querySelector(".avatar").textContent = initials(login);
+    authGate.hidden = true;
+    appShell.hidden = false;
+    return true;
   } catch {
-    document.querySelector("#identity-name").textContent = "管理员";
+    showLogin("暂时无法连接管理服务，请稍后重试。");
+    return false;
   }
 }
 
@@ -282,7 +305,7 @@ function openAccountWizard(mode = "login", values = {}, errors = {}) {
   const isLogin = mode === "login";
   openModal({
     title: "新增 Telegram 账号",
-    description: "敏感信息只会发送到受 Access 保护的管理 API",
+    description: "敏感信息只会发送到已登录的管理 API",
     wide: true,
     body: `<div class="tabs" role="tablist" aria-label="添加方式"><button type="button" role="tab" data-action="account-tab" data-mode="login" class="${isLogin ? "active" : ""}" aria-selected="${isLogin}">网页登录</button><button type="button" role="tab" data-action="account-tab" data-mode="import" class="${!isLogin ? "active" : ""}" aria-selected="${!isLogin}">导入旧 Session</button></div>
       ${isLogin ? `<div class="stepper" aria-label="登录进度"><div class="step active"><b>1</b>账号资料</div><div class="step"><b>2</b>验证码</div><div class="step"><b>3</b>二步验证</div><div class="step"><b>4</b>完成</div></div>` : `<div class="notice mb-md"><span aria-hidden="true">i</span><span>适合迁移当前 GitHub Secrets 中的 Session。导入后会由短时 GitHub Runner 调用 Telegram 验证，通过前不会标记为已连接。</span></div>`}
@@ -799,7 +822,7 @@ async function renderSettings(token) {
       </div>
       <div class="settings-section"><button class="button primary" type="submit">保存设置</button></div>
     </form></section>
-    <aside class="stack"><section class="card"><div class="card-head"><h2>安全边界</h2></div><div class="card-body service-list">${serviceRow("管理员登录", "ok", "Cloudflare Access")}${serviceRow("凭据存储", "ok", "AES-256-GCM")}${serviceRow("Runner 鉴权", "ok", "GitHub OIDC")}</div></section><div class="notice warning"><span aria-hidden="true">!</span><span><strong>切换调度模式</strong><br>只有 legacy 或 d1 会运行，避免同一任务重复签到。</span></div></aside></div>`;
+    <aside class="stack"><section class="card"><div class="card-head"><h2>安全边界</h2></div><div class="card-body service-list">${serviceRow("管理员登录", "ok", "GitHub OAuth")}${serviceRow("凭据存储", "ok", "AES-256-GCM")}${serviceRow("Runner 鉴权", "ok", "GitHub OIDC")}</div></section><div class="notice warning"><span aria-hidden="true">!</span><span><strong>切换调度模式</strong><br>只有 legacy 或 d1 会运行，避免同一任务重复签到。</span></div></aside></div>`;
 }
 
 function readSettingsForm(form) {
@@ -1069,12 +1092,23 @@ window.addEventListener("hashchange", () => {
   closeModal();
   closeDrawer();
   document.body.classList.remove("nav-open");
-  refreshRoute();
+  if (!appShell.hidden) refreshRoute();
 });
 
 document.querySelector("#menu-toggle").addEventListener("click", (event) => {
   const open = document.body.classList.toggle("nav-open");
   event.currentTarget.setAttribute("aria-expanded", String(open));
+});
+
+document.querySelector("#logout-button").addEventListener("click", async (event) => {
+  event.currentTarget.disabled = true;
+  try {
+    await api.logout();
+    location.replace("/");
+  } catch (error) {
+    event.currentTarget.disabled = false;
+    toast("退出失败", errorMessage(error), "error");
+  }
 });
 
 document.addEventListener("keydown", (event) => {
@@ -1084,6 +1118,11 @@ document.addEventListener("keydown", (event) => {
   else document.body.classList.remove("nav-open");
 });
 
-if (!location.hash) location.replace("#/dashboard");
-loadIdentity();
-refreshRoute();
+async function bootstrap() {
+  if (await loadIdentity()) {
+    if (!location.hash) location.replace("#/dashboard");
+    await refreshRoute();
+  }
+}
+
+bootstrap();

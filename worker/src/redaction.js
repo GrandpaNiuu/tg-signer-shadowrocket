@@ -51,7 +51,7 @@ export function sanitizeLogText(value, { maxLines = 200, maxLength = 16_000 } = 
     .replace(/(authorization\s*:\s*bearer\s+)[^\s,;]+/gi, `$1${REDACTED}`)
     .replace(/\b((?:https?|socks5h?|socks4|mtproto):\/\/[^\s:/@]+:)[^\s/@]+@/gi, `$1${REDACTED}@`)
     .replace(
-      /(["']?(?:api[_-]?hash|session(?:[_-]?string)?|telegram[_-]?session|tg[_-]?signer[_-]?import|signer[_-]?import[_-]?base64|import[_-]?blob|proxy[_-]?password|two[_-]?factor[_-]?password|verification[_-]?code|phone[_-]?code|login[_-]?code|password|otp|code|token)["']?\s*[:=]\s*)["']?[^\s,;}"']+["']?/gi,
+      /(["']?(?:api[_-]?hash|session(?:[_-]?string)?|telegram[_-]?session|tg[_-]?signer[_-]?import|signer[_-]?import[_-]?base64|import[_-]?blob|proxy[_-]?password|two[_-]?factor[_-]?password|verification[_-]?code|phone[_-]?code|login[_-]?code|client[_-]?secret|password|otp|code|token)["']?\s*[:=]\s*)["']?[^\s,;}"']+["']?/gi,
       `$1${REDACTED}`,
     );
 
