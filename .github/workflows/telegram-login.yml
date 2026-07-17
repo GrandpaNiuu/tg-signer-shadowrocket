@@ -1,0 +1,68 @@
+name: Telegram Web Login Runner
+
+on:
+  workflow_dispatch:
+    inputs:
+      flow_id:
+        description: Opaque short-lived Telegram login flow id
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: telegram-login-${{ inputs.flow_id }}
+  cancel-in-progress: false
+
+jobs:
+  login:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      WORKER_URL: ${{ secrets.WORKER_URL || vars.WORKER_URL }}
+      WORKER_OIDC_AUDIENCE: ${{ secrets.WORKER_OIDC_AUDIENCE || vars.WORKER_OIDC_AUDIENCE }}
+      FLOW_ID: ${{ inputs.flow_id }}
+      RESULT_FILE: ${{ runner.temp }}/telegram-login-result.json
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: runner/requirements.txt
+
+      - name: Install pinned Telegram dependency
+        run: python -m pip install --disable-pip-version-check --requirement runner/requirements.txt
+
+      - name: Complete short-lived Telegram login
+        id: login
+        continue-on-error: true
+        run: >-
+          python -m runner.cli login
+          --flow-id "$FLOW_ID"
+          --result-file "$RESULT_FILE"
+
+      - name: Ensure failed/interrupted login is recorded
+        if: always()
+        run: >-
+          python -m runner.cli login-finalize
+          --flow-id "$FLOW_ID"
+          --result-file "$RESULT_FILE"
+
+      - name: Reflect login outcome in Actions
+        if: always()
+        run: |
+          python - "$RESULT_FILE" <<'PY'
+          import json, pathlib, sys
+          path = pathlib.Path(sys.argv[1])
+          if not path.exists() or json.loads(path.read_text())["status"] != "connected":
+              raise SystemExit("Telegram login did not complete")
+          PY

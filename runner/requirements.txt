@@ -1,0 +1,2 @@
+# Immutable audit baseline: tg-signer 0.9.0b2.
+tg-signer[yaml] @ git+https://github.com/amchii/tg-signer.git@95a98572dcef5e0b96fc17e6a2331c8f4dc9d886

@@ -5,13 +5,19 @@ __pycache__/
 venv/
 .env
 .env.*
+!.env.example
+.dev.vars
+.wrangler/
 
 # Runtime files
 *.session
 *.session-journal
+*.session_string
 .signer/
 logs/
 run.log
+.runner-result.json
+.login-result.json
 
 # OS / editors
 .DS_Store

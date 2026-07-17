@@ -1,0 +1,62 @@
+name: Unified Telegram Task Runner
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Opaque D1 task run id
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: telegram-task-${{ inputs.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      WORKER_URL: ${{ secrets.WORKER_URL || vars.WORKER_URL }}
+      WORKER_OIDC_AUDIENCE: ${{ secrets.WORKER_OIDC_AUDIENCE || vars.WORKER_OIDC_AUDIENCE }}
+      RUN_ID: ${{ inputs.run_id }}
+      RESULT_FILE: ${{ runner.temp }}/telegram-runner-result.json
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: runner/requirements.txt
+
+      - name: Install pinned Telegram dependency
+        run: python -m pip install --disable-pip-version-check --requirement runner/requirements.txt
+
+      - name: Execute claimed task
+        id: execute
+        continue-on-error: true
+        run: >-
+          python -m runner.cli run
+          --run-id "$RUN_ID"
+          --result-file "$RESULT_FILE"
+
+      - name: Ensure terminal callback
+        if: always()
+        run: >-
+          python -m runner.cli finalize
+          --run-id "$RUN_ID"
+          --result-file "$RESULT_FILE"
+
+      - name: Reflect task outcome in Actions
+        if: always()
+        run: python -m runner.cli assert-success --result-file "$RESULT_FILE"

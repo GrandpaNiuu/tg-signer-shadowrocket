@@ -3,6 +3,8 @@ name: Deploy Cloudflare Worker
 on:
   workflow_dispatch:
   push:
+    branches:
+      - "main"
     paths:
       - ".github/workflows/deploy-worker.yml"
       - "worker/**"
@@ -10,14 +12,39 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: deploy-telegram-checkin-worker
+  cancel-in-progress: false
+
 jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22"
+      - run: python -m unittest discover -s tests/legacy -p 'test_*.py' -v
+      - run: bash tests/legacy/test_run_checkin.sh
+      - run: python -m unittest discover -s runner/tests -p 'test_*.py' -v
+      - run: npm test --prefix worker
+
   deploy:
+    needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - name: Check required Cloudflare secrets
         env:
@@ -65,10 +92,18 @@ jobs:
               f.write(f"token={token}\n")
           PY
 
-      - name: Deploy Worker
-        uses: cloudflare/wrangler-action@v3
+      - name: Apply D1 migrations
+        uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3.15.0
         with:
           apiToken: ${{ steps.normalize_token.outputs.token }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          wranglerVersion: latest
+          wranglerVersion: "4.94.0"
+          command: d1 migrations apply DB --remote --config worker/wrangler.toml
+
+      - name: Deploy Worker
+        uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3.15.0
+        with:
+          apiToken: ${{ steps.normalize_token.outputs.token }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: "4.94.0"
           command: deploy --config worker/wrangler.toml

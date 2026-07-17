@@ -1,0 +1,13 @@
+name = "telegram-checkin-admin"
+pages_build_output_dir = "."
+compatibility_date = "2026-07-01"
+
+[vars]
+REQUIRE_ACCESS_HEADER = "true"
+CANONICAL_HOST = "grandpaniu.ccwu.cc"
+
+# Pages Functions uses this binding to call the Worker without exposing a
+# second public API origin. Keep the binding name in sync with functions/api.
+[[services]]
+binding = "CONTROL_PLANE"
+service = "tg-signer-shadowrocket"

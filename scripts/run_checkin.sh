@@ -1,5 +1,16 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+umask 077
+
+SECRET_TMP_DIR=""
+
+cleanup() {
+  if [[ -n "$SECRET_TMP_DIR" && -d "$SECRET_TMP_DIR" ]]; then
+    rm -rf -- "$SECRET_TMP_DIR"
+  fi
+}
+
+trap cleanup EXIT
 
 fail() {
   echo "[ERROR] $*" >&2
@@ -51,21 +62,14 @@ if [[ -n "${TG_ACCOUNT:-}" ]]; then
   ACCOUNT_ARGS+=(--account "$TG_ACCOUNT")
 fi
 
-BASE_CMD=(tg-signer --session-string "$TG_SESSION_STRING" "${ACCOUNT_ARGS[@]}")
+BASE_CMD=(tg-signer "${ACCOUNT_ARGS[@]}")
 
 echo "[INFO] account label: ${CHECKIN_ACCOUNT_LABEL:-default}"
 echo "[INFO] tg-signer mode: $MODE"
 echo "[INFO] timezone: ${TZ:-system-default}"
 
-if [[ -n "${TG_SIGNER_IMPORT_BASE64:-}" ]]; then
-  echo "[INFO] Importing tg-signer config from TG_SIGNER_IMPORT_BASE64"
-  mkdir -p .signer
-  printf '%s' "$TG_SIGNER_IMPORT_BASE64" | base64 -d > /tmp/tg-signer-import.json
-  "${BASE_CMD[@]}" import < /tmp/tg-signer-import.json
-fi
-
 case "$MODE" in
-  send-text)
+  send-text|send_text)
     TARGET_CHAT="${INPUT_TARGET_CHAT:-}"
     if [[ -z "$TARGET_CHAT" ]]; then
       TARGET_CHAT="${TG_TARGET_CHAT:-}"
@@ -109,19 +113,30 @@ case "$MODE" in
     "${CMD[@]}"
     ;;
 
-  task)
+  task|tg_signer)
     TASK_NAME="${INPUT_TASK_NAME:-}"
     if [[ -z "$TASK_NAME" ]]; then
       TASK_NAME="${TG_SIGNER_TASK_NAME:-}"
     fi
     [[ -n "$TASK_NAME" ]] || fail "Missing task name. Set TG_SIGNER_TASK_NAME secret or workflow input task_name."
 
+    if [[ -n "${TG_SIGNER_IMPORT_BASE64:-}" ]]; then
+      echo "[INFO] Importing tg-signer config for task: $TASK_NAME"
+      mkdir -p .signer
+      SECRET_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/tg-signer.XXXXXX")"
+      chmod 700 "$SECRET_TMP_DIR"
+      IMPORT_FILE="$SECRET_TMP_DIR/import.json"
+      printf '%s' "$TG_SIGNER_IMPORT_BASE64" | base64 --decode > "$IMPORT_FILE"
+      chmod 600 "$IMPORT_FILE"
+      "${BASE_CMD[@]}" import "$TASK_NAME" < "$IMPORT_FILE"
+    fi
+
     echo "[INFO] Running tg-signer task once: $TASK_NAME"
     "${BASE_CMD[@]}" run-once "$TASK_NAME"
     ;;
 
   *)
-    fail "Unsupported mode: $MODE. Allowed values: send-text, task"
+    fail "Unsupported mode: $MODE. Allowed values: send-text/send_text, task/tg_signer"
     ;;
 esac
 

@@ -1,0 +1,87 @@
+name: Deploy Cloudflare Pages Admin
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "main"
+    paths:
+      - ".github/workflows/deploy-admin.yml"
+      - "admin/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-telegram-checkin-admin
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22"
+      - run: npm test --prefix admin
+
+  deploy:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Validate Cloudflare deployment credentials
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]] || { echo "Missing CLOUDFLARE_API_TOKEN"; exit 1; }
+          [[ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]] || { echo "Missing CLOUDFLARE_ACCOUNT_ID"; exit 1; }
+
+      - name: Normalize Cloudflare API token
+        id: normalize_token
+        env:
+          RAW_CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          python - <<'PY'
+          import os
+          import sys
+
+          raw = os.environ.get("RAW_CLOUDFLARE_API_TOKEN", "")
+          token = raw.strip().strip('"').strip("'")
+          for prefix in (
+              "Authorization: Bearer ",
+              "authorization: bearer ",
+              "Bearer ",
+              "bearer ",
+              "CLOUDFLARE_API_TOKEN=",
+              "cloudflare_api_token=",
+          ):
+              if token.startswith(prefix):
+                  token = token[len(prefix):].strip()
+          token = "".join(token.split())
+          if not token:
+              print("CLOUDFLARE_API_TOKEN is empty after normalization.")
+              sys.exit(1)
+          print(f"::add-mask::{token}")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"token={token}\n")
+          PY
+
+      - name: Deploy Pages project
+        uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3.15.0
+        with:
+          apiToken: ${{ steps.normalize_token.outputs.token }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: "4.94.0"
+          workingDirectory: admin
+          command: pages deploy . --project-name=telegram-checkin-admin --branch=main

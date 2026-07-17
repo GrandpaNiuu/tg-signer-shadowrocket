@@ -2,13 +2,26 @@ name = "tg-signer-shadowrocket"
 main = "cloudflare-worker.js"
 compatibility_date = "2025-01-01"
 
-# Cloudflare Cron Triggers use UTC time.
-# 16:00 UTC = 00:00 Beijing time.
+# The scheduler ticks every minute. LEGACY_CRON gates the old daily workflow
+# while scheduler_mode remains "legacy", so the existing behavior is preserved.
 [triggers]
-crons = ["0 16 * * *"]
+crons = ["* * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "telegram-checkin"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+migrations_dir = "migrations"
 
 [vars]
 GITHUB_OWNER = "GrandpaNiuu"
 GITHUB_REPO = "Telegramautomaticcheck-in"
 GITHUB_WORKFLOW_FILE = "daily-checkin.yml"
 GITHUB_REF = "main"
+TASK_RUNNER_WORKFLOW_FILE = "task-runner.yml"
+LOGIN_WORKFLOW_FILE = "telegram-login.yml"
+MIGRATION_WORKFLOW_FILE = "migrate-legacy.yml"
+LEGACY_CRON = "0 16 * * *"
+RUNNER_OIDC_AUDIENCE = "https://REPLACE_WITH_WORKER_HOST/api/runner"
+ACCESS_TEAM_DOMAIN = "REPLACE_WITH_ACCESS_TEAM.cloudflareaccess.com"
+ACCESS_AUD = "REPLACE_WITH_ACCESS_APPLICATION_AUD"

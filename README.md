@@ -1,168 +1,157 @@
-# tg-signer
+# Telegram Automatic Check-in
 
-这是一个精简后的 Telegram 自动签到仓库。
+个人使用的 Telegram 自动签到管理平台。它是在原仓库上做的增量升级：保留 Cloudflare Worker/Cron、GitHub Actions、`tg-signer`、`send-text`、Session、代理、通知和旧 Secrets，同时把日常账号、机器人、命令、Cron 与日志管理收敛到网页后台。
 
-当前稳定方案：
+这不是商业 SaaS。仓库不包含注册、支付、套餐、多租户、团队、任务市场、商业后台、VPS 常驻服务、Docker、Redis、Celery 或 Kubernetes。
 
-```text
-Cloudflare Cron 每天北京时间 00:00 触发一次签到
-```
-
-Cloudflare Worker 到点后会调用 GitHub API，触发 `Daily Telegram Checkin` 工作流。
-
-简单理解：
+## 运行架构
 
 ```text
-每天 00:00 → Cloudflare 叫醒 GitHub Actions → GitHub Actions 给机器人发签到消息
+Cloudflare Pages（单管理员后台，Cloudflare Access）
+        │ 同源 Pages Function / Service Binding
+        ▼
+Cloudflare Worker（API、调度、加密、GitHub OIDC 校验）
+        │
+        ├── Cloudflare D1（账号、任务、运行、脱敏日志）
+        │
+        └── workflow_dispatch（只传不敏感的 run_id / flow_id）
+                ▼
+          GitHub Actions
+                ▼
+          统一 Python Runner
+                ▼
+       send_text / tg_signer / Telegram 登录
+                │
+                └── 结果经 Worker 回写 D1
 ```
 
-如果配置了第二个账号，两个账号会在同一次工作流里依次签到。
-
----
-
-## 当前流程
-
-1. Cloudflare Cron 每天北京时间 00:00 触发 Worker。
-2. Worker 调用 GitHub API，触发 `Daily Telegram Checkin`。
-3. workflow 读取仓库 Secrets。
-4. 使用 `tg-signer` 登录第一个 Telegram 用户号并发送签到文本。
-5. 如果配置了 `TG_SESSION_STRING_2`，再登录第二个 Telegram 用户号并发送同样的签到文本。
-
----
-
-## 定时时间
-
-Cloudflare Cron 使用 UTC 时间。北京时间比 UTC 快 8 小时，所以：
+旧链路继续可用：
 
 ```text
-北京时间 00:00 = UTC 16:00
+Cloudflare Cron → 原 /run → daily-checkin.yml → run_checkin.sh → Telegram
 ```
 
-仓库里实际配置的是：
+D1 的 `scheduler_mode` 初始值为 `legacy`。只有完成迁移并在后台明确切换为 `d1` 后，动态任务调度才会接管；切回 `legacy` 即可回滚。Cron 只有在成功读取到该显式模式后才会调度；D1 暂时不可用时会失败关闭，避免旧链路与恢复后的 D1 任务重复签到，原 `/run` 仍可作为人工兼容入口。
 
-```toml
-crons = ["0 16 * * *"]
-```
+## 后台能力
 
-文件位置：
+- 概览：今日执行、成功、失败、进行中和最近脱敏日志。
+- Telegram 账号：添加、编辑、删除、启停、状态；支持导入旧 Session，并由短时 Runner 调用 `get_me` 验证后才标记 connected。
+- 网页登录：API_ID、API_HASH、手机号、验证码、可选 2FA，成功后自动导出并加密保存 Session。
+- 签到任务：账号、Skill、Bot、Command、Cron、Retry、Timeout、Thread、Delete After，全字段 CRUD、启停和手动执行。
+- Skill Registry：代码 allowlist 中的 `send_text` 与 `tg_signer`；数据库不能指定任意 Python/Shell 代码。
+- 执行记录：状态、时间、错误、耗时、重试、attempts 和脱敏日志。
+- 设置：默认时区、通知开关以及 `legacy`/`d1` 调度切换。
 
-```text
-worker/wrangler.toml
-```
+账号和任务数量没有仓库内的固定上限，实际吞吐受 Cloudflare 与 GitHub Actions 的个人账户配额限制。同一账号的任务串行执行，不同账号可以并行，避免多个 Runner 同时使用同一 Telegram Session。
 
-GitHub 工作流位置：
+## 仓库结构
 
-```text
-.github/workflows/daily-checkin.yml
-```
-
----
-
-## 必须配置的 GitHub Secrets
-
-进入：
-
-```text
-Settings → Secrets and variables → Actions
-```
-
-需要有这三个：
-
-| Secret | 用途 |
+| 目录/文件 | 用途 |
 |---|---|
-| `TG_SESSION_STRING` | Telegram 用户号 session string |
-| `TG_TARGET_CHAT` | 目标签到机器人，例如 `@xxx_bot` 或 chat id |
-| `TG_CHECKIN_TEXT` | 要发送的签到文本 |
+| `admin/` | 无构建依赖的 Cloudflare Pages 后台与同源 API 代理 |
+| `worker/` | Worker、D1 migrations、管理/Runner API、调度与安全模块 |
+| `runner/` | 统一 TaskSpec、Runner、Skill Registry、登录 Runner 与测试 |
+| `scripts/run_checkin.sh` | 保留并加固的旧签到适配器 |
+| `scripts/notify.py` | 保留的 best-effort Telegram 通知，发送前统一脱敏 |
+| `scripts/migrate_legacy.py` | GitHub Secrets → D1 的一次性无损迁移器 |
+| `.github/workflows/daily-checkin.yml` | 原签到 workflow，继续作为兼容/回滚入口 |
+| `.github/workflows/task-runner.yml` | D1 任务 Runner，只接收 `run_id` |
+| `.github/workflows/telegram-login.yml` | 短生命周期 Telegram 网页登录 Runner |
+| `.github/workflows/migrate-legacy.yml` | 旧配置 dry-run/正式导入 |
 
-`TG_SESSION_STRING` 不要写进仓库，不要截图发给别人。
+## 安全边界
 
----
+- Session、API_HASH、代理凭据、tg_signer 配置、验证码、2FA 和通知 Token 不会写入明文日志。
+- D1 敏感值使用 AES-256-GCM 应用层加密；随机 nonce，AAD 绑定 owner、purpose 与 key version。
+- `SECRET_ROOT_KEY` 只存在于 Cloudflare Worker Secret，不进入 D1、Pages、workflow input 或仓库。
+- GitHub workflow input 只含不敏感 ID；Runner 用 GitHub OIDC 短期身份领取任务和回写结果。
+- 验证码和 2FA 是短时、一次性输入；Runner 使用后清空，浏览器不使用 localStorage/sessionStorage/IndexedDB。
+- Session 不出现在命令行参数；敏感临时目录权限为 `0700`、文件为 `0600`，退出清理。
+- Timeout 或发送结果无法确认时记录为 `ambiguous`，不会盲目重试造成重复签到。
+- Retry 只用于明确未执行的失败（例如 Telegram FloodWait）；连接中断保持不确定状态。
+- Pages 与 Worker 管理接口由 Cloudflare Access 限制到唯一管理员。
 
-## 可选第二账号
+## 首次部署
 
-如果要让另一个 Telegram 用户号也自动签到，额外添加：
+首次基础设施配置仍需执行一次；完成后新增账号、任务、机器人、命令和 Cron 都在网页后台操作，不再改 Python、Shell、YAML 或 GitHub Actions。
 
-| Secret | 用途 |
-|---|---|
-| `TG_SESSION_STRING_2` | 第二个 Telegram 用户号 session string |
+1. 在 Cloudflare 创建 D1 数据库 `telegram-checkin`，记录 database id。
+2. 在 Cloudflare Pages 先创建 **Direct Upload** 项目 `telegram-checkin-admin` 并做一次初始上传。不要同时启用 Git integration。
+3. 给 Pages 项目绑定自定义域名 **`grandpaniu.ccwu.cc`**；内置 `pages.dev` 地址只作为 Cloudflare 的技术入口，应用会以 308 跳转到该自定义域名。
+4. 为 `grandpaniu.ccwu.cc` 创建 Cloudflare Access Self-hosted Application；Allow policy 只包含唯一管理员邮箱，同时保护项目的 `pages.dev` 主机名，并记录 Access team domain 与 Application AUD。
+5. 在 `worker/wrangler.toml` 填写：
+   - D1 database id；
+   - `RUNNER_OIDC_AUDIENCE`：生产 Worker URL 加 `/api/runner`；
+   - `ACCESS_TEAM_DOMAIN`；
+   - 上一步得到的 `ACCESS_AUD`。
+6. 配置 Worker Secrets：
+   - 保留原 `GITHUB_TOKEN`、`TRIGGER_KEY`；
+   - 新增 `SECRET_ROOT_KEY`（恰好 32 个随机字节的 Base64）；
+   - `ADMIN_EMAIL`（唯一管理员邮箱，可作为加固条件）。
+7. 在 GitHub Repository Secrets 保留 `CLOUDFLARE_API_TOKEN` 与 `CLOUDFLARE_ACCOUNT_ID`。Token 至少需要目标账号的 Workers Scripts Edit、D1 Edit 与 Cloudflare Pages Edit。Worker 使用的 `GITHUB_TOKEN` 需对本仓库有 Actions: write 权限。
+8. 在 GitHub Repository Variables 配置：
+   - `WORKER_URL`；
+   - `WORKER_OIDC_AUDIENCE`（必须与 Worker 的 `RUNNER_OIDC_AUDIENCE` 完全一致）。
+9. 运行 `Deploy Cloudflare Worker`；workflow 会先应用远程 D1 migration，再部署 Worker。
+10. 运行 `Deploy Cloudflare Pages Admin`；`CONTROL_PLANE` Service Binding 指向 `tg-signer-shadowrocket`，生产环境保持 `REQUIRE_ACCESS_HEADER=true` 和 `CANONICAL_HOST=grandpaniu.ccwu.cc`。
 
-默认情况下，第二个账号会复用第一个账号的 `TG_TARGET_CHAT` 和 `TG_CHECKIN_TEXT`。
+本仓库沿用原 Worker 名称，通常可以直接保留已有 Worker Secrets。若确实是全新 Cloudflare 账号，先完成一次 Worker 部署以创建服务，再设置 Worker Secrets，并重新部署/验证；不要把真实 Secret 写入 TOML 或仓库。
 
-如果第二个账号要发给不同机器人、群组或使用不同签到文本，可以继续添加：
+具体 Worker 与 Pages 配置说明见 `worker/README.md` 和 `admin/README.md`。
 
-| Secret | 用途 |
-|---|---|
-| `TG_TARGET_CHAT_2` | 第二个账号的目标签到机器人或 chat id |
-| `TG_CHECKIN_TEXT_2` | 第二个账号的签到文本 |
+## 旧配置无损迁移
 
-高级配置也支持第二账号专用后缀：
+不要提前删除或改写旧 Secrets。
 
-```text
-TG_MESSAGE_THREAD_ID_2
-TG_SIGNER_TASK_NAME_2
-TG_SIGNER_IMPORT_BASE64_2
-TG_ACCOUNT_2
-TG_PROXY_2
-CHECKIN_DELETE_AFTER_2
-```
+1. 在 `main` 分支手动运行 `Migrate Legacy Telegram Configuration`，保持 `apply=false`。
+   - dry-run 只发送“哪些旧配置存在”的布尔信息，不传 Session、代理或 Token。
+2. 确认计划中的账号/任务数量后，再运行一次并设置 `apply=true`。
+   - workflow 读取现有 GitHub Secrets，通过 OIDC 直接发送到 Worker；Worker 加密后幂等写入 D1。
+   - 主账号映射为 `legacy-primary`，第二账号映射为 `legacy-secondary`；原 `_2` 回退规则会被物化。
+3. 在后台核对账号、任务、时区，并逐个手动执行。
+4. 确认日志和通知正常后，把 `scheduler_mode` 从 `legacy` 改为 `d1`。
+5. 至少保留旧 Secrets 和 `daily-checkin.yml` 一个观察周期；需要回滚时把模式切回 `legacy`。
 
-没有配置 `TG_SESSION_STRING_2` 时，第二账号步骤会自动跳过，不影响第一个账号签到。
+迁移不会要求旧账号重新登录，也不会注销现有 Telegram Session。
 
----
+## 网页 Telegram 登录
 
-## 必须配置的 Cloudflare Worker 密钥
-
-Worker 里需要有：
-
-| Secret / Variable | 用途 |
-|---|---|
-| `GITHUB_TOKEN` | 让 Worker 触发 GitHub Actions |
-| `TRIGGER_KEY` | 手动访问 `/run` 时使用 |
-| `GITHUB_OWNER` | 仓库所有者，当前是 `GrandpaNiuu` |
-| `GITHUB_REPO` | 仓库名，当前是 `Telegramautomaticcheck-in` |
-| `GITHUB_WORKFLOW_FILE` | 当前是 `daily-checkin.yml` |
-| `GITHUB_REF` | 当前是 `main` |
-
----
-
-## 手动测试
-
-进入：
-
-```text
-Actions → Daily Telegram Checkin → Run workflow
-```
-
-手动测试时，不需要填写任何输入框，直接运行。
-
----
-
-## 保留文件说明
-
-| 文件 | 作用 |
-|---|---|
-| `worker/cloudflare-worker.js` | Cloudflare Worker 触发器 |
-| `worker/wrangler.toml` | Cloudflare Cron 定时配置 |
-| `.github/workflows/deploy-worker.yml` | 部署 Worker |
-| `.github/workflows/daily-checkin.yml` | 执行签到 |
-| `scripts/run_checkin.sh` | 签到逻辑 |
-| `scripts/notify.py` | 可选 Telegram 通知逻辑 |
-| `.gitignore` | 防止 session、日志、环境文件被提交 |
-| `.env.example` | Secrets 示例 |
-
----
-
-## 安全注意
-
-不要公开以下内容：
+后台新增账号时：
 
 ```text
-TG_SESSION_STRING
-Telegram 验证码
-Telegram 二步验证密码
-.session 文件
-GitHub token
-Cloudflare token
+API_ID + API_HASH + 手机号
+  → GitHub 登录 Runner 发送验证码
+  → 后台输入验证码（无效可重试，未收到可重新发送）
+  → 如需要，再输入 2FA 密码
+  → Runner 调用 get_me 验证账号
+  → Runner 导出 Session
+  → Worker AES-GCM 加密入 D1
+  → 账号状态变为 connected
 ```
 
-如果 `TG_SESSION_STRING` 泄露，应该重新生成并更新 GitHub Secret。
+Cloudflare Worker 无法保持 Telegram 长连接，因此登录由一个最长 20 分钟的短生命周期 GitHub Actions job 承担。验证码和 2FA 不进入 workflow inputs 或 Actions 日志。导入已有 Session 时复用同一短时 workflow，只执行 Session + `get_me` 验证；验证通过前账号保持 disconnected/login_pending。
+
+## 本地测试
+
+不需要安装前端或 Worker npm 依赖：
+
+```bash
+python -m unittest discover -s tests/legacy -p 'test_*.py' -v
+bash tests/legacy/test_run_checkin.sh
+python -m unittest discover -s runner/tests -p 'test_*.py' -v
+npm test --prefix worker
+npm test --prefix admin
+```
+
+CI 会在 `Quality Checks` workflow 中执行同一组测试。
+
+## 旧行为兼容
+
+- Worker 名 `tg-signer-shadowrocket`、`/run`、`x-trigger-key`、原 Cron 语义和 `daily-checkin.yml` 保留。
+- 旧查询参数 `?key=` 仅为兼容保留；新调用必须使用 header，避免密钥进入 URL 日志。
+- `send-text`、`task` 旧模式继续接受，并映射到 `send_text`、`tg_signer`。
+- 主/第二账号、Thread、Delete After、代理、tg-signer Base64 导入、目标格式归一化和特定 Bot peer workaround 保留。
+- 原通知仍是 best-effort：通知失败不改变签到结果，但日志会先脱敏。
+
+日常配置请只使用后台。基础设施 Secret、D1 id、Access audience 等部署级值不属于日常账号/任务配置，也不会暴露在网页中。

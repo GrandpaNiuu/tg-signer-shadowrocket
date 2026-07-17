@@ -1,0 +1,3 @@
+# Let Pages Functions handle /api before the SPA fallback.
+/api/* /api/:splat 200
+/* /index.html 200

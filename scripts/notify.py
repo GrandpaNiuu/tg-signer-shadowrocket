@@ -3,6 +3,11 @@ import sys
 import urllib.parse
 import urllib.request
 
+try:
+    from .redact import redact_text
+except ImportError:  # Direct execution: python scripts/notify.py
+    from redact import redact_text
+
 TOKEN = os.getenv("TELEGRAM_NOTIFY_BOT_TOKEN", "").strip()
 CHAT_ID = os.getenv("TELEGRAM_NOTIFY_CHAT_ID", "").strip()
 STATUS = os.getenv("CHECKIN_STATUS", "unknown").strip()
@@ -17,10 +22,19 @@ def read_log(path: str) -> str:
     except FileNotFoundError:
         return "No log file found."
 
-    text = text.strip()
+    text = redact_text(text).strip()
     if not text:
         return "Log file is empty."
     return text[-3200:]
+
+
+def build_message(status: str, log: str, run_url: str = "") -> str:
+    icon = "✅" if status == "success" else "❌"
+    message = f"{icon} TG task: {status}\n"
+    if run_url:
+        message += f"GitHub Actions: {run_url}\n"
+    message += "\nLog tail:\n" + log
+    return redact_text(message)
 
 
 def send_message(text: str) -> None:
@@ -44,19 +58,18 @@ def main() -> int:
         print("[INFO] Telegram notification skipped: TELEGRAM_NOTIFY_BOT_TOKEN or TELEGRAM_NOTIFY_CHAT_ID is not set.")
         return 0
 
-    icon = "✅" if STATUS == "success" else "❌"
     log = read_log(LOG_PATH)
-    message = f"{icon} TG task: {STATUS}\n"
-    if RUN_URL:
-        message += f"GitHub Actions: {RUN_URL}\n"
-    message += "\nLog tail:\n" + log
+    message = build_message(STATUS, log, RUN_URL)
 
     try:
         send_message(message)
         print("[INFO] Telegram notification sent.")
         return 0
     except Exception as exc:
-        print(f"[WARN] Failed to send Telegram notification: {exc}", file=sys.stderr)
+        print(
+            f"[WARN] Failed to send Telegram notification: {redact_text(str(exc))}",
+            file=sys.stderr,
+        )
         return 0
 
 

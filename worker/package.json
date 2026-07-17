@@ -1,0 +1,11 @@
+{
+  "name": "telegram-automatic-check-in-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
