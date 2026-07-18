@@ -34,7 +34,10 @@ class WorkflowSafetyTests(unittest.TestCase):
         self.assertNotIn("wranglerVersion: latest", workflow)
         migration = "d1 migrations apply DB --remote --config worker/wrangler.toml"
         self.assertIn(migration, workflow)
-        self.assertLess(workflow.index(migration), workflow.index("command: deploy --config worker/wrangler.toml"))
+        self.assertIn("workingDirectory: worker", workflow)
+        self.assertIn("command: deploy --config wrangler.toml", workflow)
+        self.assertLess(workflow.index(migration), workflow.index("command: deploy --config wrangler.toml"))
+        self.assertIn("secrets: |\n            PASSWORD_PEPPER", workflow)
         self.assertIn("needs: verify", workflow)
         self.assertIn("npm test --prefix worker", workflow)
 

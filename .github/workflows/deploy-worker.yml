@@ -110,9 +110,10 @@ jobs:
         with:
           apiToken: ${{ steps.normalize_token.outputs.token }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: worker
           wranglerVersion: "4.94.0"
           secrets: |
             PASSWORD_PEPPER
-          command: deploy --config worker/wrangler.toml
+          command: deploy --config wrangler.toml
         env:
           PASSWORD_PEPPER: ${{ secrets.PASSWORD_PEPPER }}
