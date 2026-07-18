@@ -515,11 +515,54 @@ function sessionImportGuide() {
         <ul class="session-guide-list">
           <li><strong>已有 Kurigram / Pyrogram Session：</strong>直接复制完整字符串，粘贴到下方输入框。</li>
           <li><strong>Session 原来保存在 GitHub Secrets：</strong>GitHub 不允许再次查看 Secret 原文；请从你自己的备份导入，或者在本机重新生成。</li>
-          <li><strong>新账号且没有 Session：</strong>导入功能不能只凭手机号生成 Session。请等待平台手机号授权启用，或使用你自己的有效 API_ID 和 API_HASH 在本机生成。</li>
+          <li><strong>新账号且没有 Session：</strong>Windows 上首选使用仓库原有的 <code>tg-signer login</code> 本地登录；你只需输入手机号、验证码和二步验证密码，无需手动填写 API_ID。</li>
         </ul>
       </section>
       <section>
-        <h3>在自己的电脑本地生成（高级）</h3>
+        <h3>首选：使用仓库原有 tg-signer 本地获取</h3>
+        <p>仓库固定使用 <code>tg-signer 0.9.0b2</code>。它带有自带的客户端配置，因此运行登录命令时无需手动填写 API_ID 或 API_HASH；这不是绕过 Telegram 协议，而是由该客户端代为提供应用凭据。</p>
+        <p>此方式用于个人本地生成和兼容旧仓库，依赖第三方 <code>tg-signer</code> 的内置应用凭据，将来可能受 Telegram 限制；公开运营平台仍应配置自己申请的 API_ID/API_HASH。</p>
+        <p>首次使用时在 Windows PowerShell 安装一次；已经安装 <code>0.9.0b2</code> 可以跳过。下面固定到仓库正在使用的提交，避免安装未经核对的新版本：</p>
+        <pre><code>py -m pip install --user --upgrade &quot;tg-signer[yaml] @ git+https://github.com/amchii/tg-signer.git@95a98572dcef5e0b96fc17e6a2331c8f4dc9d886&quot;</code></pre>
+        <pre><code>$sessionRoot = Join-Path $env:TEMP (&quot;tg-signer-login-&quot; + [guid]::NewGuid().ToString(&quot;N&quot;))
+$sessionDir = Join-Path $sessionRoot &quot;sessions&quot;
+$workDir = Join-Path $sessionRoot &quot;work&quot;
+New-Item -ItemType Directory -Path $sessionRoot | Out-Null
+$identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+$aclGrant = $identity + &quot;:(OI)(CI)F&quot;
+&amp; icacls.exe $sessionRoot /inheritance:r /grant:r $aclGrant | Out-Null
+if ($LASTEXITCODE -ne 0) {
+  Remove-Item -LiteralPath $sessionRoot -Recurse -Force
+  throw &quot;无法限制临时目录权限，已停止生成 Session。&quot;
+}
+New-Item -ItemType Directory -Path $sessionDir,$workDir | Out-Null
+$scriptDir = py -c &quot;import sysconfig; print(sysconfig.get_path('scripts', scheme='nt_user'))&quot;
+$tgSigner = Join-Path $scriptDir &quot;tg-signer.exe&quot;
+Remove-Item Env:TG_API_ID,Env:TG_API_HASH -ErrorAction SilentlyContinue
+try {
+  &amp; $tgSigner --log-file (Join-Path $sessionRoot &quot;tg-signer.log&quot;) --proxy &quot;socks5://127.0.0.1:10808&quot; --session_dir $sessionDir --workdir $workDir --account &quot;new-account&quot; login
+  if ($LASTEXITCODE -ne 0) { throw &quot;tg-signer 登录失败。&quot; }
+  $sessionFile = Join-Path $sessionDir &quot;new-account.session_string&quot;
+  if (-not (Test-Path -LiteralPath $sessionFile)) { throw &quot;没有生成 Session 文件。&quot; }
+  $sessionValue = Get-Content -LiteralPath $sessionFile -Raw
+  Set-Clipboard -Value $sessionValue
+  Write-Host &quot;Session 已复制到剪贴板，本地临时文件正在清理。&quot;
+} finally {
+  Remove-Variable sessionValue -ErrorAction SilentlyContinue
+  if (Test-Path -LiteralPath $sessionRoot) {
+    Remove-Item -LiteralPath $sessionRoot -Recurse -Force
+  }
+}</code></pre>
+        <p>按提示输入手机号、Telegram 验证码以及二步验证密码。成功后 Session 会进入剪贴板，磁盘临时文件立即删除。</p>
+        <ol class="session-guide-steps">
+          <li>回到本页面，把剪贴板内容粘贴到下方 Session 输入框，然后点击“加密导入”。</li>
+          <li>提交后立即执行 <code>Set-Clipboard -Value &quot;&quot;</code> 清空剪贴板；无需等待验证完成。</li>
+          <li><code>TgCrypto is missing</code> 只是性能提醒，不影响登录和生成 Session。</li>
+        </ol>
+        <div class="notice warning"><span aria-hidden="true">!</span><span><strong>代理说明</strong><br>上面的地址适合当前电脑的 v2rayN：<code>127.0.0.1:10808</code>。如果你的代理端口不同，请按客户端显示的 SOCKS5 端口修改；无需代理时可删除整个 <code>--proxy</code> 参数。</span></div>
+      </section>
+      <section>
+        <h3>备选：使用你自己的 API_ID/API_HASH 本地生成</h3>
         <p>下面的方法只会在你的电脑上运行，但仍然需要 Telegram 提供的有效 API_ID 和 API_HASH。生成的是本平台 Runner 可用的 Kurigram / Pyrogram Session。</p>
         <p><strong>注意：</strong>API_ID 是 Telegram 应用提供的数字编号，不是手机号；手机号会在脚本连接成功后另行询问。</p>
         <div class="session-guide-actions"><a class="button primary small" href="/assets/make_session.py" download="make_session.py">下载安全生成脚本</a><span>脚本公开可查看；生成时只与 Telegram 通信，不写入本地 Session 文件。只有你明确点击“加密导入”后，Session 才会发送到本平台并加密保存。</span></div>

@@ -104,6 +104,26 @@ test("Session import teaches new users the compatible and safe local workflow", 
   assert.match(wizard, /sessionImportGuide\(\)/);
 });
 
+test("the Session guide restores the pinned legacy tg-signer login path as the easiest option", async () => {
+  const { guide } = await readSessionGuide();
+  assert.match(guide, /首选.*tg-signer/s);
+  assert.match(guide, /无需手动填写 API_ID/);
+  assert.match(guide, /tg-signer 0\.9\.0b2/);
+  assert.match(guide, /95a98572dcef5e0b96fc17e6a2331c8f4dc9d886/);
+  assert.match(guide, /--proxy &quot;socks5:\/\/127\.0\.0\.1:10808&quot;/);
+  assert.match(guide, /--session_dir/);
+  assert.match(guide, /new-account\.session_string/);
+  assert.match(guide, /Set-Clipboard/);
+  assert.match(guide, /NewGuid\(\)/);
+  assert.match(guide, /icacls\.exe.*\/inheritance:r.*\/grant:r/s);
+  assert.match(guide, /try \{.*finally \{/s);
+  assert.match(guide, /finally \{.*Remove-Item -LiteralPath \$sessionRoot/s);
+  assert.match(guide, /Set-Clipboard -Value &quot;&quot;/);
+  assert.match(guide, /自带的客户端配置/);
+  assert.match(guide, /不是绕过 Telegram 协议/);
+  assert.match(guide, /第三方.*将来可能受 Telegram 限制/s);
+});
+
 test("the downloadable Session helper handles blocked Telegram networks without hiding credential mistakes", async () => {
   const [{ guide }, helper] = await Promise.all([readSessionGuide(), readSessionHelper()]);
   assert.match(helper, /API_ID（不是手机号/);
