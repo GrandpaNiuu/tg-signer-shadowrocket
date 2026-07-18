@@ -359,6 +359,25 @@ details > .form-grid { margin-top: 14px; }
 .notice.warning { border-color: #edd9b8; background: var(--amber-soft); color: #7f511d; }
 .notice.danger { border-color: #ebcaca; background: var(--red-soft); color: #8b3434; }
 
+.session-guide { border: 1px solid var(--line); border-radius: 11px; background: #fbfcfb; overflow: hidden; }
+.session-guide > summary { display: flex; align-items: center; gap: 10px; padding: 13px 14px; list-style: none; color: #33463a; }
+.session-guide > summary::-webkit-details-marker { display: none; }
+.session-guide > summary::after { content: "+"; margin-left: auto; color: var(--green); font-size: 18px; font-weight: 700; }
+.session-guide[open] > summary { border-bottom: 1px solid var(--line); background: #f5f9f6; }
+.session-guide[open] > summary::after { content: "−"; }
+.session-guide > summary span:not(.session-guide-icon) { display: grid; gap: 2px; }
+.session-guide > summary strong { font-size: 12px; }
+.session-guide > summary small { color: var(--muted); font-size: 10px; font-weight: 450; }
+.session-guide-icon { display: grid; place-items: center; flex: 0 0 auto; width: 26px; height: 26px; border-radius: 50%; background: var(--green-soft); color: var(--green); font-weight: 800; }
+.session-guide-body { display: grid; gap: 16px; padding: 15px; color: #526057; font-size: 11px; line-height: 1.65; }
+.session-guide-body section { display: grid; gap: 7px; }
+.session-guide-body h3, .session-guide-body p { margin: 0; }
+.session-guide-body h3 { color: var(--ink); font-size: 12px; }
+.session-guide-list, .session-guide-steps { margin: 0; padding-left: 20px; }
+.session-guide-list li + li { margin-top: 5px; }
+.session-guide-body pre { max-width: 100%; margin: 0; padding: 11px 12px; overflow-x: auto; border: 1px solid #dce6de; border-radius: 8px; background: #17251c; color: #e8f3eb; font-size: 10px; line-height: 1.55; tab-size: 2; }
+.session-guide-body code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+
 .modal-backdrop, .drawer-backdrop { position: fixed; inset: 0; z-index: 80; background: rgba(12,25,17,.5); backdrop-filter: blur(2px); animation: fade-in .14s ease-out; }
 .modal-backdrop { display: grid; place-items: center; padding: 20px; }
 .modal { width: min(610px, 100%); max-height: calc(100vh - 40px); display: flex; flex-direction: column; overflow: hidden; border-radius: 16px; background: #fff; box-shadow: 0 24px 70px rgba(0,0,0,.22); animation: rise-in .18s ease-out; }

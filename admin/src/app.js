@@ -506,6 +506,49 @@ async function submitTelegramApplicationSetup(form) {
   }
 }
 
+function sessionImportGuide() {
+  return `<details class="session-guide mb-md">
+    <summary><span class="session-guide-icon" aria-hidden="true">?</span><span><strong>第一次使用 Session？查看获取与导入方法</strong><small>先判断你是否已经有兼容的 Session，再选择下一步</small></span></summary>
+    <div class="session-guide-body">
+      <section>
+        <h3>先确认你属于哪种情况</h3>
+        <ul class="session-guide-list">
+          <li><strong>已有 Kurigram / Pyrogram Session：</strong>直接复制完整字符串，粘贴到下方输入框。</li>
+          <li><strong>Session 原来保存在 GitHub Secrets：</strong>GitHub 不允许再次查看 Secret 原文；请从你自己的备份导入，或者在本机重新生成。</li>
+          <li><strong>新账号且没有 Session：</strong>导入功能不能只凭手机号生成 Session。请等待平台手机号授权启用，或使用你自己的有效 API_ID 和 API_HASH 在本机生成。</li>
+        </ul>
+      </section>
+      <section>
+        <h3>在自己的电脑本地生成（高级）</h3>
+        <p>下面的方法只会在你的电脑上运行，但仍然需要 Telegram 提供的有效 API_ID 和 API_HASH。生成的是本平台 Runner 可用的 Kurigram / Pyrogram Session。</p>
+        <ol class="session-guide-steps">
+          <li>安装 Python 3，然后在终端运行：</li>
+        </ol>
+        <pre><code>python -m pip install --upgrade kurigram tgcrypto</code></pre>
+        <ol class="session-guide-steps" start="2">
+          <li>把下面内容保存为 <code>make_session.py</code>，只在自己的电脑运行：</li>
+        </ol>
+        <pre><code>from getpass import getpass
+from pyrogram import Client
+
+api_id = int(input("API_ID: "))
+api_hash = getpass("API_HASH: ")
+
+with Client("session-export", api_id=api_id, api_hash=api_hash, in_memory=True) as app:
+    print(app.export_session_string())</code></pre>
+        <ol class="session-guide-steps" start="3">
+          <li>按提示完成验证码和二步验证；复制最后输出的一整段 Session，立即粘贴到下方并点击“加密导入”。</li>
+        </ol>
+      </section>
+      <div class="notice danger"><span aria-hidden="true">!</span><span><strong>Session 等同于账号钥匙</strong><br>不要使用在线 Session 生成网站或机器人，不要上传 Telegram Desktop 的 tdata，也不要把 Session 或截图发给任何人。若怀疑泄露，请立即前往 Telegram 设置 → 设备，终止对应会话。</span></div>
+      <section>
+        <h3>导入后会发生什么</h3>
+        <p>平台会先加密保存，再交给短时 GitHub Runner 验证。验证通过后账号才会显示“已连接”；验证码、二步验证密码和 Session 都不会写入浏览器存储或日志。</p>
+      </section>
+    </div>
+  </details>`;
+}
+
 function openAccountWizard(mode = "login", values = {}, errors = {}) {
   const credentialsMissing = needsTelegramApplicationSetup(store.get().settings);
   if (mode === "login" && credentialsMissing) mode = "import";
@@ -518,7 +561,7 @@ function openAccountWizard(mode = "login", values = {}, errors = {}) {
     description: isLogin ? "像 Telegram App 一样，用手机号、验证码和二步验证完成连接" : "高级方式：导入已有 Telegram Session",
     wide: true,
     body: `<div class="tabs" role="tablist" aria-label="添加方式"><button type="button" role="tab" data-action="account-tab" data-mode="login" ${credentialsMissing ? "disabled aria-disabled=\"true\" title=\"平台凭据配置后自动启用\"" : ""} class="${isLogin ? "active" : ""}" aria-selected="${isLogin}">手机号登录${credentialsMissing ? "（待启用）" : ""}</button><button type="button" role="tab" data-action="account-tab" data-mode="import" class="${!isLogin ? "active" : ""}" aria-selected="${!isLogin}">导入已有 Session</button></div>
-      ${isLogin ? `<div class="stepper" aria-label="登录进度"><div class="step active"><b>1</b>输入手机号</div><div class="step"><b>2</b>验证码</div><div class="step"><b>3</b>二步验证</div><div class="step"><b>4</b>完成</div></div><div class="notice mb-md"><span aria-hidden="true">i</span><span>Telegram 应用凭据由后台统一管理，无需为每个账号重复填写。</span></div>` : importNotice}
+      ${isLogin ? `<div class="stepper" aria-label="登录进度"><div class="step active"><b>1</b>输入手机号</div><div class="step"><b>2</b>验证码</div><div class="step"><b>3</b>二步验证</div><div class="step"><b>4</b>完成</div></div><div class="notice mb-md"><span aria-hidden="true">i</span><span>Telegram 应用凭据由后台统一管理，无需为每个账号重复填写。</span></div>` : `${importNotice}${sessionImportGuide()}`}
       <form id="account-form" data-mode="${mode}" novalidate>${accountFields(mode, values, errors)}</form>`,
     footer: `<span class="field-help">不会保存到浏览器存储</span><div><button class="button" type="button" data-action="close-modal">取消</button><button class="button primary" type="submit" form="account-form">${isLogin ? "发送验证码" : "加密导入"}</button></div>`,
   });

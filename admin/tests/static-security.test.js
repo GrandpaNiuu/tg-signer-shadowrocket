@@ -64,6 +64,28 @@ test("missing platform credentials fall back to Session import instead of blocki
   assert.match(app, /openAccountWizard\("import"\)/);
 });
 
+test("Session import teaches new users the compatible and safe local workflow", async () => {
+  const app = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
+  const start = app.indexOf("function sessionImportGuide");
+  const end = app.indexOf("function openAccountWizard", start);
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+  const guide = app.slice(start, end);
+
+  assert.match(guide, /第一次使用 Session/);
+  assert.match(guide, /Kurigram \/ Pyrogram/);
+  assert.match(guide, /python -m pip install --upgrade kurigram tgcrypto/);
+  assert.match(guide, /export_session_string/);
+  assert.match(guide, /在线 Session 生成网站或机器人/);
+  assert.match(guide, /Telegram 设置.*设备/);
+  assert.match(guide, /API_ID.*API_HASH/s);
+  assert.doesNotMatch(guide, /name="api_(?:id|hash)"/);
+  assert.doesNotMatch(guide, /localStorage|sessionStorage|indexedDB/);
+
+  const wizard = app.slice(end, app.indexOf("function accountPayload", end));
+  assert.match(wizard, /sessionImportGuide\(\)/);
+});
+
 test("notification settings render only blank sensitive inputs with explicit clear controls", async () => {
   const app = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
   for (const name of ["notification_bot_token", "notification_chat_id"]) {
