@@ -61,7 +61,7 @@ export class ApiClient {
     const controller = signal ? null : new AbortController();
     const timeout = controller ? setTimeout(() => controller.abort(), this.timeoutMs) : null;
     try {
-      const response = await this.fetchImpl(`${this.baseUrl}${path}${encodeQuery(query)}`, {
+      const response = await this.fetchImpl.call(globalThis, `${this.baseUrl}${path}${encodeQuery(query)}`, {
         method,
         credentials: "same-origin",
         cache: "no-store",
@@ -76,11 +76,6 @@ export class ApiClient {
       if (error?.name === "AbortError") {
         throw new ApiError("请求超时，请检查服务状态后重试。", { code: "REQUEST_TIMEOUT" });
       }
-      console.error(JSON.stringify({
-        event: "admin_api_network_error",
-        name: String(error?.name || "Error").slice(0, 80),
-        message: String(error?.message || "Network request failed").slice(0, 200),
-      }));
       throw new ApiError("无法连接管理服务。", { code: "NETWORK_ERROR" });
     } finally {
       if (timeout) clearTimeout(timeout);

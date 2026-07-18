@@ -124,3 +124,16 @@ test("identity and logout use the same-origin GitHub auth endpoints", async () =
     { url: "/api/auth/logout", method: "POST", credentials: "same-origin", requestedWith: "tg-checkin-admin" },
   ]);
 });
+
+test("calls receiver-sensitive browser fetch implementations with the global receiver", async () => {
+  let receiver;
+  function receiverSensitiveFetch() {
+    receiver = this;
+    if (this !== globalThis) throw new TypeError("Illegal invocation");
+    return Promise.resolve(Response.json({ data: { authenticated: false, provider: "github" } }));
+  }
+
+  const client = new ApiClient({ fetchImpl: receiverSensitiveFetch });
+  assert.deepEqual(await client.identity(), { authenticated: false, provider: "github" });
+  assert.equal(receiver, globalThis);
+});
