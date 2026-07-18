@@ -296,6 +296,44 @@ export class D1Repository {
     return { user: await this.getUserByEmail(user.email_normalized), verification_required: true };
   }
 
+  async createOrActivateLocalEmailUser(user, password) {
+    const existing = await this.getUserByEmail(user.email_normalized);
+    if (existing?.status === "active" || existing?.status === "disabled") {
+      return { user: existing, created: false };
+    }
+    if (existing) {
+      await this.db.prepare(`UPDATE users SET status = 'active', display_name = ?, email = ?,
+        email_verified_at = NULL, password_algorithm = ?, password_hash = ?, password_salt = ?,
+        password_iterations = ?, updated_at = ? WHERE id = ? AND status = 'pending'`).bind(
+        user.display_name,
+        user.email,
+        password.password_algorithm,
+        password.password_hash,
+        password.password_salt,
+        password.password_iterations,
+        user.updated_at,
+        existing.id,
+      ).run();
+      return { user: await this.getUserByEmail(user.email_normalized), created: true };
+    }
+    await this.db.prepare(`INSERT INTO users
+      (id, role, status, display_name, email, email_normalized, email_verified_at,
+       password_algorithm, password_hash, password_salt, password_iterations, created_at, updated_at)
+      VALUES (?, 'user', 'active', ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)`).bind(
+      user.id,
+      user.display_name,
+      user.email,
+      user.email_normalized,
+      password.password_algorithm,
+      password.password_hash,
+      password.password_salt,
+      password.password_iterations,
+      user.created_at,
+      user.updated_at,
+    ).run();
+    return { user: await this.getUserByEmail(user.email_normalized), created: true };
+  }
+
   async createAuthToken(token) {
     await this.db.batch([
       this.db.prepare(`DELETE FROM auth_tokens

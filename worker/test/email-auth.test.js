@@ -275,10 +275,65 @@ test("public auth configuration exposes provider availability but never secrets"
     github_enabled: true,
     email_enabled: true,
     registration_enabled: true,
+    email_verification_required: true,
+    password_reset_enabled: true,
     turnstile_site_key: "turnstile-site-key",
   });
   const serialized = JSON.stringify(payload);
   for (const secret of ["turnstile-secret", "resend-key", "test-only-password-pepper", "client-secret"]) {
     assert.equal(serialized.includes(secret), false);
   }
+});
+
+test("local password mode enables immediate public registration without mail delivery", async () => {
+  const context = harness();
+  context.env.PUBLIC_PASSWORD_AUTH_MODE = "local";
+  delete context.env.TURNSTILE_SECRET_KEY;
+  delete context.env.TURNSTILE_SITE_KEY;
+  delete context.env.RESEND_API_KEY;
+  delete context.env.AUTH_EMAIL_FROM;
+
+  const configResponse = await context.worker.fetch(request("/api/auth/config"), context.env);
+  assert.equal(configResponse.status, 200);
+  assert.deepEqual((await configResponse.json()).data, {
+    github_enabled: true,
+    email_enabled: true,
+    registration_enabled: true,
+    email_verification_required: false,
+    password_reset_enabled: false,
+    turnstile_site_key: null,
+  });
+
+  const registration = await context.worker.fetch(request("/api/auth/email/register", {
+    method: "POST",
+    body: {
+      email: "Public@Example.com",
+      display_name: "Public User",
+      password: PASSWORD,
+      turnstile_token: "",
+    },
+  }), context.env);
+  assert.equal(registration.status, 201, JSON.stringify(await registration.clone().json()));
+  assert.equal(context.emails.length, 0);
+  assert.equal(context.turnstile.length, 0);
+
+  const user = context.sqlite.prepare(`SELECT status, email_verified_at, password_hash
+    FROM users WHERE email_normalized = 'public@example.com'`).get();
+  assert.equal(user.status, "active");
+  assert.equal(user.email_verified_at, null);
+  assert.notEqual(user.password_hash, PASSWORD);
+
+  const sessionCookie = (registration.headers.getSetCookie?.() || [registration.headers.get("set-cookie")])
+    .find((cookie) => cookie.startsWith("tg_session="))?.split(";", 1)[0];
+  assert.ok(sessionCookie);
+  const identity = await context.worker.fetch(request("/api/auth/me", { cookie: sessionCookie }), context.env)
+    .then((response) => response.json());
+  assert.equal(identity.data.authenticated, true);
+  assert.equal(identity.data.email, "Public@Example.com");
+
+  const signedIn = await context.worker.fetch(request("/api/auth/email/login", {
+    method: "POST",
+    body: { email: "public@example.com", password: PASSWORD, turnstile_token: "" },
+  }), context.env);
+  assert.equal(signedIn.status, 200, JSON.stringify(await signedIn.clone().json()));
 });

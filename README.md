@@ -94,8 +94,9 @@ D1 的 `scheduler_mode` 初始值为 `legacy`。只有完成迁移并在后台�
    - 保留原 `GITHUB_TOKEN`、`TRIGGER_KEY`；
    - 新增 `SECRET_ROOT_KEY`（恰好 32 个随机字节的 Base64）；
    - 新增 `GITHUB_OAUTH_CLIENT_ID` 与 `GITHUB_OAUTH_CLIENT_SECRET`。
-   - 若启用邮箱注册，新增 `PASSWORD_PEPPER`、`TURNSTILE_SECRET_KEY` 与 `RESEND_API_KEY`。
-7. 若启用邮箱注册，在 Worker Variables 配置 Turnstile 的 `TURNSTILE_SITE_KEY` 和已经过发件域名验证的 `AUTH_EMAIL_FROM`；`PASSWORD_HASH_ITERATIONS` 默认 600000。未完整配置时邮箱入口会安全地隐藏，GitHub 登录仍可用。
+   - 免费即时注册模式只需新增 `PASSWORD_PEPPER`；部署 workflow 会从同名 GitHub Secret 自动同步到 Worker。
+   - 需要邮箱验证和找回密码时，再新增 `TURNSTILE_SECRET_KEY` 与 `RESEND_API_KEY`。
+7. 免费即时注册模式在 Worker Variables 设置 `PUBLIC_PASSWORD_AUTH_MODE=local`，邮箱仅作为登录名，不发送邮件，也不提供自助找回密码。完整邮箱模式则移除该变量，并配置 Turnstile 的 `TURNSTILE_SITE_KEY`、已经过发件域名验证的 `AUTH_EMAIL_FROM` 以及上述邮件 Secrets；`PASSWORD_HASH_ITERATIONS` 默认 600000。未完整配置时邮箱入口会安全地隐藏，GitHub 登录仍可用。
 8. 在 GitHub Repository Secrets 保留 `CLOUDFLARE_API_TOKEN` 与 `CLOUDFLARE_ACCOUNT_ID`。Token 至少需要目标账号的 Workers Scripts Edit、D1 Edit 与 Cloudflare Pages Edit。Worker 使用的 `GITHUB_TOKEN` 需对本仓库有 Actions: write 权限。
 9. 在 GitHub Repository Variables 配置：
    - `WORKER_URL`；

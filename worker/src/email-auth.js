@@ -1,5 +1,6 @@
 import { HttpError, json, readJson } from "./http.js";
 import { hashPassword, verifyPassword } from "./password.js";
+import { publicPasswordAuthConfiguration } from "./public-auth-configuration.js";
 
 const encoder = new TextEncoder();
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -41,40 +42,31 @@ function passwordInput(value) {
   return password;
 }
 
-function turnstileInput(value) {
+function turnstileInput(value, { required = true } = {}) {
   const token = String(value || "").trim();
-  if (!token || token.length > 2048) {
+  if ((required && !token) || token.length > 2048) {
     throw new HttpError(422, "validation_failed", "请完成人机验证。", { fields: ["turnstile_token"] });
   }
   return token;
 }
 
 function authConfiguration(env, { emailDelivery = false } = {}) {
-  const turnstileSecret = String(env.TURNSTILE_SECRET_KEY || "").trim();
-  const pepper = String(env.PASSWORD_PEPPER || "");
-  if (!turnstileSecret || pepper.length < 16) {
+  const passwordAuth = publicPasswordAuthConfiguration(env);
+  if (!passwordAuth.enabled || (emailDelivery && !passwordAuth.passwordResetEnabled)) {
     throw new HttpError(503, "email_auth_not_configured", "邮箱登录服务尚未完成配置。");
   }
-  const config = { turnstileSecret };
-  if (emailDelivery) {
-    const apiKey = String(env.RESEND_API_KEY || "").trim();
-    const from = String(env.AUTH_EMAIL_FROM || "").trim();
-    let origin;
-    try {
-      origin = new URL(String(env.ADMIN_ORIGIN || ""));
-      if (origin.protocol !== "https:") throw new Error();
-    } catch {
-      throw new HttpError(503, "email_auth_not_configured", "邮箱登录服务尚未完成配置。");
-    }
-    if (!apiKey || !from) {
-      throw new HttpError(503, "email_auth_not_configured", "邮箱登录服务尚未完成配置。");
-    }
-    Object.assign(config, { apiKey, from, origin: origin.origin });
-  }
-  return config;
+  return {
+    localMode: passwordAuth.localMode,
+    emailVerificationRequired: passwordAuth.emailVerificationRequired,
+    turnstileSecret: passwordAuth.turnstileSecretKey,
+    apiKey: passwordAuth.resendApiKey,
+    from: passwordAuth.emailFrom,
+    origin: passwordAuth.origin,
+  };
 }
 
 async function verifyTurnstile(request, responseToken, config, fetchImpl) {
+  if (!config.turnstileSecret) return;
   const body = new URLSearchParams({
     secret: config.turnstileSecret,
     response: responseToken,
@@ -144,7 +136,7 @@ export function createEmailAuth(dependencies = {}) {
   const randomToken = dependencies.randomToken;
   if (typeof randomToken !== "function") throw new Error("randomToken dependency is required");
 
-  async function createSession(request, env, repository, user) {
+  async function createSession(request, env, repository, user, status = 200) {
     const timestamp = new Date(now()).toISOString();
     const ttl = sessionTtlSeconds(env);
     const token = randomToken();
@@ -157,7 +149,7 @@ export function createEmailAuth(dependencies = {}) {
       created_at: timestamp,
       expires_at: new Date(Date.parse(timestamp) + ttl * 1000).toISOString(),
     });
-    return json({ data: sessionIdentity(user) }, 200, {
+    return json({ data: sessionIdentity(user) }, status, {
       "set-cookie": `tg_session=${token}; Max-Age=${ttl}; Path=/; HttpOnly; Secure; SameSite=Lax`,
     });
   }
@@ -170,7 +162,8 @@ export function createEmailAuth(dependencies = {}) {
       const timestamp = new Date(now());
 
       if (path === "/api/auth/email/register") {
-        const config = authConfiguration(env, { emailDelivery: true });
+        const publicConfig = publicPasswordAuthConfiguration(env);
+        const config = authConfiguration(env, { emailDelivery: publicConfig.emailVerificationRequired });
         const body = await readJson(request, 8_192);
         exactInput(body, ["email", "display_name", "password", "turnstile_token"]);
         const email = emailInput(body.email);
@@ -179,10 +172,29 @@ export function createEmailAuth(dependencies = {}) {
           throw new HttpError(422, "validation_failed", "请输入显示名称。", { fields: ["display_name"] });
         }
         const password = passwordInput(body.password);
-        await verifyTurnstile(request, turnstileInput(body.turnstile_token), config, fetchImpl);
+        await verifyTurnstile(request, turnstileInput(body.turnstile_token, {
+          required: Boolean(config.turnstileSecret),
+        }), config, fetchImpl);
+        if (config.localMode) {
+          await enforceRateLimit(repository, request, "register_ip", "*", timestamp, 5, 3600);
+        }
         await enforceRateLimit(repository, request, "register", email.normalized, timestamp, 5, 3600);
         const passwordRecord = await hashPassword(password, env);
         const createdAt = timestamp.toISOString();
+        if (config.localMode) {
+          const result = await repository.createOrActivateLocalEmailUser({
+            id: `user-${randomToken(18)}`,
+            display_name: displayName,
+            email: email.original,
+            email_normalized: email.normalized,
+            created_at: createdAt,
+            updated_at: createdAt,
+          }, passwordRecord);
+          if (!result.created) {
+            throw new HttpError(409, "account_exists", "该邮箱已注册，请直接登录。");
+          }
+          return createSession(request, env, repository, result.user, 201);
+        }
         const result = await repository.createOrUpdatePendingEmailUser({
           id: `user-${randomToken(18)}`,
           display_name: displayName,
@@ -227,7 +239,12 @@ export function createEmailAuth(dependencies = {}) {
         exactInput(body, ["email", "password", "turnstile_token"]);
         const email = emailInput(body.email);
         const password = passwordInput(body.password);
-        await verifyTurnstile(request, turnstileInput(body.turnstile_token), config, fetchImpl);
+        await verifyTurnstile(request, turnstileInput(body.turnstile_token, {
+          required: Boolean(config.turnstileSecret),
+        }), config, fetchImpl);
+        if (config.localMode) {
+          await enforceRateLimit(repository, request, "login_ip", "*", timestamp, 30, 900);
+        }
         await enforceRateLimit(repository, request, "login", email.normalized, timestamp, 10, 900);
         const user = await repository.getUserByEmail(email.normalized);
         const valid = user
@@ -236,7 +253,7 @@ export function createEmailAuth(dependencies = {}) {
         if (!valid || user.status === "disabled") {
           throw new HttpError(401, "invalid_credentials", "邮箱或密码不正确。");
         }
-        if (user.status !== "active" || !user.email_verified_at) {
+        if (user.status !== "active" || (config.emailVerificationRequired && !user.email_verified_at)) {
           throw new HttpError(403, "email_verification_required", "请先完成邮箱验证。");
         }
         return createSession(request, env, repository, user);
@@ -272,7 +289,7 @@ export function createEmailAuth(dependencies = {}) {
       }
 
       if (path === "/api/auth/email/reset-password") {
-        const config = authConfiguration(env);
+        const config = authConfiguration(env, { emailDelivery: true });
         const body = await readJson(request, 8_192);
         exactInput(body, ["token", "password", "turnstile_token"]);
         const token = String(body.token || "").trim();

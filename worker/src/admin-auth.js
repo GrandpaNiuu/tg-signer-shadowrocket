@@ -1,5 +1,6 @@
 import { HttpError, json } from "./http.js";
 import { createEmailAuth } from "./email-auth.js";
+import { publicPasswordAuthConfiguration } from "./public-auth-configuration.js";
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 const TOKEN_PATTERN_FOR_SESSION = /^[A-Za-z0-9_-]{32,128}$/;
@@ -111,20 +112,14 @@ function sessionTtlSeconds(env) {
 function publicAuthConfiguration(env) {
   const githubEnabled = Boolean(String(env.GITHUB_OAUTH_CLIENT_ID || "").trim()
     && String(env.GITHUB_OAUTH_CLIENT_SECRET || "").trim());
-  const turnstileSiteKey = String(env.TURNSTILE_SITE_KEY || "").trim();
-  const emailEnabled = Boolean(
-    turnstileSiteKey
-    && String(env.TURNSTILE_SECRET_KEY || "").trim()
-    && String(env.RESEND_API_KEY || "").trim()
-    && String(env.AUTH_EMAIL_FROM || "").trim()
-    && String(env.PASSWORD_PEPPER || "").length >= 16
-    && String(env.ADMIN_ORIGIN || "").trim(),
-  );
+  const passwordAuth = publicPasswordAuthConfiguration(env);
   return {
     github_enabled: githubEnabled,
-    email_enabled: emailEnabled,
+    email_enabled: passwordAuth.enabled,
     registration_enabled: true,
-    turnstile_site_key: emailEnabled ? turnstileSiteKey : null,
+    email_verification_required: passwordAuth.emailVerificationRequired,
+    password_reset_enabled: passwordAuth.passwordResetEnabled,
+    turnstile_site_key: passwordAuth.turnstileSiteKey,
   };
 }
 

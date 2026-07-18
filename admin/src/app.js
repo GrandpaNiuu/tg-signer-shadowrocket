@@ -207,7 +207,8 @@ function authTabs(mode) {
   </div>`;
 }
 
-function turnstileField() {
+function turnstileField(config) {
+  if (!config?.turnstile_site_key) return "";
   return `<div class="turnstile-slot" data-turnstile aria-label="人机验证"></div><input type="hidden" name="turnstile_token" data-sensitive value="">`;
 }
 
@@ -228,30 +229,30 @@ function renderAuthGate(mode = "login", message = "") {
     content = `${authTabs(mode)}${github}${config.email_enabled ? `<form id="email-login-form" class="auth-form" novalidate>
       <div class="field"><label class="required" for="auth-login-email">邮箱</label><input id="auth-login-email" name="email" type="email" maxlength="254" autocomplete="email" required></div>
       <div class="field"><label class="required" for="auth-login-password">密码</label><input id="auth-login-password" name="password" type="password" maxlength="1024" autocomplete="current-password" data-sensitive required></div>
-      ${turnstileField()}<button class="button primary auth-button" type="submit">邮箱登录</button>
-      <button class="auth-link" type="button" data-auth-mode="forgot-password">忘记密码？</button>
+      ${turnstileField(config)}<button class="button primary auth-button" type="submit">邮箱登录</button>
+      ${config.password_reset_enabled ? `<button class="auth-link" type="button" data-auth-mode="forgot-password">忘记密码？</button>` : ""}
     </form>` : emailUnavailable()}`;
   } else if (mode === "register") {
     content = `${authTabs(mode)}${github}${config.email_enabled ? `<form id="email-register-form" class="auth-form" novalidate>
       <div class="field"><label class="required" for="auth-register-name">显示名称</label><input id="auth-register-name" name="display_name" maxlength="80" autocomplete="name" required></div>
-      <div class="field"><label class="required" for="auth-register-email">邮箱</label><input id="auth-register-email" name="email" type="email" maxlength="254" autocomplete="email" required></div>
+      <div class="field"><label class="required" for="auth-register-email">邮箱</label><input id="auth-register-email" name="email" type="email" maxlength="254" autocomplete="email" required>${config.email_verification_required ? "" : `<p class="field-help">当前邮箱仅作为登录名，不发送验证邮件；请妥善保管密码。</p>`}</div>
       <div class="field"><label class="required" for="auth-register-password">密码</label><input id="auth-register-password" name="password" type="password" minlength="12" maxlength="1024" autocomplete="new-password" data-sensitive required><p class="field-help">至少 12 个字符。</p></div>
-      ${turnstileField()}<button class="button primary auth-button" type="submit">创建账号</button>
+      ${turnstileField(config)}<button class="button primary auth-button" type="submit">创建账号</button>
     </form>` : emailUnavailable()}`;
   } else if (mode === "forgot-password") {
-    content = `${config.email_enabled ? `<form id="forgot-password-form" class="auth-form" novalidate>
+    content = `${config.email_enabled && config.password_reset_enabled ? `<form id="forgot-password-form" class="auth-form" novalidate>
       <div class="auth-section-head"><h2>找回密码</h2><p>输入注册邮箱；无论账号是否存在，响应都相同。</p></div>
       <div class="field"><label class="required" for="auth-forgot-email">邮箱</label><input id="auth-forgot-email" name="email" type="email" maxlength="254" autocomplete="email" required></div>
-      ${turnstileField()}<button class="button primary auth-button" type="submit">发送重置邮件</button>
+      ${turnstileField(config)}<button class="button primary auth-button" type="submit">发送重置邮件</button>
       <button class="auth-link" type="button" data-auth-mode="login">返回登录</button>
-    </form>` : emailUnavailable()}`;
+    </form>` : `<div class="notice warning"><span aria-hidden="true">!</span><span>当前暂未接入邮件找回服务，请联系管理员处理密码重置。</span></div><button class="auth-link" type="button" data-auth-mode="login">返回登录</button>`}`;
   } else if (mode === "reset-password") {
-    content = `${config.email_enabled ? `<form id="reset-password-form" class="auth-form" novalidate>
+    content = `${config.email_enabled && config.password_reset_enabled ? `<form id="reset-password-form" class="auth-form" novalidate>
       <div class="auth-section-head"><h2>设置新密码</h2><p>提交后，其他已登录会话会全部退出。</p></div>
       <div class="field"><label class="required" for="auth-reset-password">新密码</label><input id="auth-reset-password" name="password" type="password" minlength="12" maxlength="1024" autocomplete="new-password" data-sensitive required></div>
       <div class="field"><label class="required" for="auth-reset-confirm">确认新密码</label><input id="auth-reset-confirm" name="password_confirm" type="password" minlength="12" maxlength="1024" autocomplete="new-password" data-sensitive required></div>
-      ${turnstileField()}<button class="button primary auth-button" type="submit">重置密码</button>
-    </form>` : emailUnavailable()}`;
+      ${turnstileField(config)}<button class="button primary auth-button" type="submit">重置密码</button>
+    </form>` : `<div class="notice warning"><span aria-hidden="true">!</span><span>当前重置链接不可用，请返回登录。</span></div><button class="auth-link" type="button" data-auth-mode="login">返回登录</button>`}`;
   } else {
     content = `<div class="auth-progress" aria-busy="true">正在验证邮箱…</div>`;
   }
@@ -506,26 +507,18 @@ async function submitTelegramApplicationSetup(form) {
 }
 
 function openAccountWizard(mode = "login", values = {}, errors = {}) {
-  if (mode === "login" && needsTelegramApplicationSetup(store.get().settings)) {
-    if (store.get().identity?.role === "admin") {
-      openTelegramApplicationSetup();
-    } else {
-      openModal({
-        title: "暂时无法添加 Telegram 账号",
-        description: "平台初始化尚未完成",
-        body: `<div class="notice warning"><span aria-hidden="true">!</span><span>平台管理员需要先配置一次 Telegram 应用凭据。完成后，你只需输入手机号即可登录。</span></div>`,
-        footer: `<span></span><button class="button" type="button" data-action="close-modal">关闭</button>`,
-      });
-    }
-    return;
-  }
+  const credentialsMissing = needsTelegramApplicationSetup(store.get().settings);
+  if (mode === "login" && credentialsMissing) mode = "import";
   const isLogin = mode === "login";
+  const importNotice = credentialsMissing
+    ? `<div class="notice warning mb-md"><span aria-hidden="true">!</span><span>平台手机号授权暂时不可用，但不会阻止添加账号。你可以直接导入已有 Session；平台凭据配置成功后，手机号登录会自动启用。</span></div>`
+    : `<div class="notice mb-md"><span aria-hidden="true">i</span><span>适合迁移当前 GitHub Secrets 中的 Session。导入后会由短时 GitHub Runner 调用 Telegram 验证，通过前不会标记为已连接。</span></div>`;
   openModal({
     title: "新增 Telegram 账号",
     description: isLogin ? "像 Telegram App 一样，用手机号、验证码和二步验证完成连接" : "高级方式：导入已有 Telegram Session",
     wide: true,
-    body: `<div class="tabs" role="tablist" aria-label="添加方式"><button type="button" role="tab" data-action="account-tab" data-mode="login" class="${isLogin ? "active" : ""}" aria-selected="${isLogin}">手机号登录</button><button type="button" role="tab" data-action="account-tab" data-mode="import" class="${!isLogin ? "active" : ""}" aria-selected="${!isLogin}">高级：导入旧 Session</button></div>
-      ${isLogin ? `<div class="stepper" aria-label="登录进度"><div class="step active"><b>1</b>输入手机号</div><div class="step"><b>2</b>验证码</div><div class="step"><b>3</b>二步验证</div><div class="step"><b>4</b>完成</div></div><div class="notice mb-md"><span aria-hidden="true">i</span><span>Telegram 应用凭据由后台统一管理，无需为每个账号重复填写。</span></div>` : `<div class="notice mb-md"><span aria-hidden="true">i</span><span>适合迁移当前 GitHub Secrets 中的 Session。导入后会由短时 GitHub Runner 调用 Telegram 验证，通过前不会标记为已连接。</span></div>`}
+    body: `<div class="tabs" role="tablist" aria-label="添加方式"><button type="button" role="tab" data-action="account-tab" data-mode="login" ${credentialsMissing ? "disabled aria-disabled=\"true\" title=\"平台凭据配置后自动启用\"" : ""} class="${isLogin ? "active" : ""}" aria-selected="${isLogin}">手机号登录${credentialsMissing ? "（待启用）" : ""}</button><button type="button" role="tab" data-action="account-tab" data-mode="import" class="${!isLogin ? "active" : ""}" aria-selected="${!isLogin}">导入已有 Session</button></div>
+      ${isLogin ? `<div class="stepper" aria-label="登录进度"><div class="step active"><b>1</b>输入手机号</div><div class="step"><b>2</b>验证码</div><div class="step"><b>3</b>二步验证</div><div class="step"><b>4</b>完成</div></div><div class="notice mb-md"><span aria-hidden="true">i</span><span>Telegram 应用凭据由后台统一管理，无需为每个账号重复填写。</span></div>` : importNotice}
       <form id="account-form" data-mode="${mode}" novalidate>${accountFields(mode, values, errors)}</form>`,
     footer: `<span class="field-help">不会保存到浏览器存储</span><div><button class="button" type="button" data-action="close-modal">取消</button><button class="button primary" type="submit" form="account-form">${isLogin ? "发送验证码" : "加密导入"}</button></div>`,
   });
@@ -601,7 +594,7 @@ async function submitAccountForm(form) {
     payload.session = "";
     if (error instanceof ApiError && error.code === "telegram_application_not_configured") {
       payload.phone = "";
-      openAccountWizard();
+      openAccountWizard("import");
       return;
     }
     toast("添加账号失败", errorMessage(error), "error");
@@ -1234,6 +1227,11 @@ async function submitAuthForm(form) {
       payload.password = "";
       payload.turnstile_token = "";
       await operation;
+      if (!store.get().authConfig?.email_verification_required) {
+        history.replaceState(null, "", "/#/dashboard");
+        if (await loadIdentity()) await refreshRoute();
+        return;
+      }
       history.replaceState(null, "", "/#/login");
       renderAuthGate("login", "验证邮件已发送，请先在邮箱中完成验证。 ");
       return;

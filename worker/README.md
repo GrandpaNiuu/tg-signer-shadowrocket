@@ -80,8 +80,9 @@ Worker secrets:
 - `SECRET_ROOT_KEY`: base64 for exactly 32 random bytes
 - optional `SECRET_ROOT_KEY_V1`, `SECRET_ROOT_KEY_V2`, ... during key rotation
 - `GITHUB_OAUTH_CLIENT_ID` and `GITHUB_OAUTH_CLIENT_SECRET`
-- for email authentication: `PASSWORD_PEPPER`, `TURNSTILE_SECRET_KEY`, and
-  `RESEND_API_KEY`
+- for free immediate password registration: `PASSWORD_PEPPER`
+- for verified email registration and password reset: `PASSWORD_PEPPER`,
+  `TURNSTILE_SECRET_KEY`, and `RESEND_API_KEY`
 
 Variables:
 
@@ -89,7 +90,9 @@ Variables:
 - `RUNNER_OIDC_AUDIENCE`
 - `ADMIN_ORIGIN`, `ADMIN_GITHUB_LOGIN`, and immutable `ADMIN_GITHUB_USER_ID`
 - optional `ADMIN_SESSION_TTL_SECONDS` (5 minutes to 30 days; default 7 days)
-- for email authentication: public `TURNSTILE_SITE_KEY`, verified sender
+- for free immediate password registration: `PUBLIC_PASSWORD_AUTH_MODE=local`;
+  email is only a login identifier and self-service password reset is disabled
+- for verified email registration: public `TURNSTILE_SITE_KEY`, verified sender
   `AUTH_EMAIL_FROM`, and optional `PASSWORD_HASH_ITERATIONS` (default 600000)
 - optional explicit `RUNNER_WORKFLOW_REF`, `LOGIN_WORKFLOW_REF`, and
   `MIGRATION_WORKFLOW_REF`

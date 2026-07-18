@@ -51,13 +51,17 @@ test("new account login asks for a phone number instead of per-account API crede
   assert.match(wizard, /输入手机号/);
 });
 
-test("missing platform credentials open a one-time setup wizard instead of a dead-end toast", async () => {
+test("missing platform credentials fall back to Session import instead of blocking account creation", async () => {
   const app = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
   assert.match(app, /function openTelegramApplicationSetup/);
   assert.match(app, /id="telegram-application-setup-form"/);
   assert.match(app, /https:\/\/my\.telegram\.org\/apps/);
   assert.match(app, /needsTelegramApplicationSetup\(store\.get\(\)\.settings\)/);
+  assert.match(app, /credentialsMissing/);
+  assert.match(app, /mode = "import"/);
+  assert.match(app, /data-mode="login"[^>]*disabled/);
   assert.match(app, /telegram_application_not_configured/);
+  assert.match(app, /openAccountWizard\("import"\)/);
 });
 
 test("notification settings render only blank sensitive inputs with explicit clear controls", async () => {
@@ -124,7 +128,7 @@ test("logout redirects only after the server revokes the session", async () => {
   assert.match(logout, /event\.currentTarget\.disabled = false/);
 });
 
-test("the public auth gate offers GitHub and verified email registration without browser persistence", async () => {
+test("the public auth gate supports immediate or verified email registration without browser persistence", async () => {
   const [html, app, headers] = await Promise.all([
     readFile(new URL("../index.html", import.meta.url), "utf8"),
     readFile(new URL("../src/app.js", import.meta.url), "utf8"),
@@ -139,6 +143,9 @@ test("the public auth gate offers GitHub and verified email registration without
   assert.match(app, /api\.loginEmail/);
   assert.match(app, /api\.verifyEmail/);
   assert.match(app, /api\.resetPassword/);
+  assert.match(app, /email_verification_required/);
+  assert.match(app, /password_reset_enabled/);
+  assert.match(app, /当前邮箱仅作为登录名/);
   assert.match(headers, /script-src[^\n]*https:\/\/challenges\.cloudflare\.com/);
   assert.match(headers, /frame-src[^\n]*https:\/\/challenges\.cloudflare\.com/);
   assert.doesNotMatch(`${html}\n${app}`, /localStorage|sessionStorage|indexedDB/);
