@@ -155,3 +155,33 @@ test("public-user migration assigns every legacy record and session to the prese
   assert.equal(sqlite.prepare("SELECT user_id FROM task_runs WHERE id = 'legacy-run'").get().user_id, "legacy-admin");
   assert.equal(sqlite.prepare("SELECT user_id FROM admin_sessions WHERE token_hash = 'legacy-session'").get().user_id, "legacy-admin");
 });
+
+test("deployment cleanup removes only synthetic users and resets temporary auth throttles", () => {
+  const sqlite = new DatabaseSync(":memory:");
+  for (const filename of [
+    "0001_initial.sql",
+    "0002_task_run_snapshots.sql",
+    "0003_login_flow_modes.sql",
+    "0004_tg_signer_secret_snapshots.sql",
+    "0005_github_admin_auth.sql",
+    "0006_admin_oauth_pkce.sql",
+    "0007_public_users.sql",
+  ]) {
+    sqlite.exec(readFileSync(new URL(`../migrations/${filename}`, import.meta.url), "utf8"));
+  }
+  const timestamp = "2026-07-18T00:00:00.000Z";
+  const insert = sqlite.prepare(`INSERT INTO users
+    (id, role, status, display_name, email, email_normalized, created_at, updated_at)
+    VALUES (?, 'user', 'active', ?, ?, ?, ?, ?)`);
+  insert.run("synthetic", "Synthetic", "codex-health-1@example.invalid", "codex-health-1@example.invalid", timestamp, timestamp);
+  insert.run("real", "Real", "person@example.com", "person@example.com", timestamp, timestamp);
+  sqlite.prepare(`INSERT INTO auth_rate_limits
+    (action, bucket_hash, window_started_at, attempt_count, expires_at)
+    VALUES ('register_ip', 'bucket', ?, 3, ?)`).run(timestamp, "2026-07-18T01:00:00.000Z");
+
+  sqlite.exec(readFileSync(new URL("../migrations/0008_remove_deployment_test_users.sql", import.meta.url), "utf8"));
+
+  assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM users WHERE id = 'synthetic'").get().count, 0);
+  assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM users WHERE id = 'real'").get().count, 1);
+  assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM auth_rate_limits").get().count, 0);
+});
