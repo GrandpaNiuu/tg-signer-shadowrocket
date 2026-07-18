@@ -129,7 +129,7 @@ export function createAdminAuth(dependencies = {}) {
   return {
     async handle(request, env, repository) {
       const url = new URL(request.url);
-      if (url.pathname === "/api/auth/session" && request.method === "GET") {
+      if (["/api/auth/me", "/api/auth/session"].includes(url.pathname) && request.method === "GET") {
         const identity = await sessionIdentity(request, env, repository, new Date(now()).toISOString());
         return json({ data: identity || { authenticated: false, provider: "github" } });
       }

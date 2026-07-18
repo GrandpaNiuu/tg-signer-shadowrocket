@@ -144,16 +144,23 @@ test("a valid GitHub session authenticates the identity and administrator interf
   const cookies = callback.headers.getSetCookie?.() || [callback.headers.get("set-cookie")];
   const sessionCookie = cookies.find((cookie) => cookie.startsWith("tg_admin_session=")).split(";", 1)[0];
 
-  const identityResponse = await worker.fetch(request("/api/auth/session", {
+  const identityResponse = await worker.fetch(request("/api/auth/me", {
     headers: { cookie: sessionCookie },
   }), env);
   assert.equal(identityResponse.status, 200);
-  assert.deepEqual((await identityResponse.json()).data, {
+  const identityPayload = await identityResponse.json();
+  assert.deepEqual(identityPayload.data, {
     authenticated: true,
     provider: "github",
     login: "GrandpaNiuu",
     name: "Grandpa Niu",
   });
+
+  const legacyIdentityResponse = await worker.fetch(request("/api/auth/session", {
+    headers: { cookie: sessionCookie },
+  }), env);
+  assert.equal(legacyIdentityResponse.status, 200);
+  assert.deepEqual(await legacyIdentityResponse.json(), identityPayload);
 
   const authorized = await worker.fetch(request("/api/v1/skills", {
     headers: { cookie: sessionCookie },
@@ -269,7 +276,7 @@ test("an expired administrator session is rejected", async () => {
   const sessionCookie = await loginSession(worker, env);
   setNow("2026-07-26T00:00:01.000Z");
 
-  const identity = await worker.fetch(request("/api/auth/session", {
+  const identity = await worker.fetch(request("/api/auth/me", {
     headers: { cookie: sessionCookie },
   }), env);
   assert.deepEqual((await identity.json()).data, { authenticated: false, provider: "github" });

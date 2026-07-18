@@ -11,7 +11,7 @@ routes. Public authentication routes are:
 
 - `GET /api/auth/github/start`
 - `GET /api/auth/github/callback`
-- `GET /api/auth/session`
+- `GET /api/auth/me` (`GET /api/auth/session` remains as a compatibility alias)
 - `POST /api/auth/logout`
 
 Authenticated routes are:
