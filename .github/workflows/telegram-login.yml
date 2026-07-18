@@ -24,7 +24,6 @@ jobs:
       WORKER_URL: ${{ secrets.WORKER_URL || vars.WORKER_URL }}
       WORKER_OIDC_AUDIENCE: ${{ secrets.WORKER_OIDC_AUDIENCE || vars.WORKER_OIDC_AUDIENCE }}
       FLOW_ID: ${{ inputs.flow_id }}
-      RESULT_FILE: ${{ runner.temp }}/telegram-login-result.json
 
     steps:
       - name: Checkout
@@ -45,6 +44,8 @@ jobs:
       - name: Complete short-lived Telegram login
         id: login
         continue-on-error: true
+        env:
+          RESULT_FILE: ${{ runner.temp }}/telegram-login-result.json
         run: >-
           python -m runner.cli login
           --flow-id "$FLOW_ID"
@@ -52,6 +53,8 @@ jobs:
 
       - name: Ensure failed/interrupted login is recorded
         if: always()
+        env:
+          RESULT_FILE: ${{ runner.temp }}/telegram-login-result.json
         run: >-
           python -m runner.cli login-finalize
           --flow-id "$FLOW_ID"
@@ -59,6 +62,8 @@ jobs:
 
       - name: Reflect login outcome in Actions
         if: always()
+        env:
+          RESULT_FILE: ${{ runner.temp }}/telegram-login-result.json
         run: |
           python - "$RESULT_FILE" <<'PY'
           import json, pathlib, sys

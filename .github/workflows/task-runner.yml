@@ -24,7 +24,6 @@ jobs:
       WORKER_URL: ${{ secrets.WORKER_URL || vars.WORKER_URL }}
       WORKER_OIDC_AUDIENCE: ${{ secrets.WORKER_OIDC_AUDIENCE || vars.WORKER_OIDC_AUDIENCE }}
       RUN_ID: ${{ inputs.run_id }}
-      RESULT_FILE: ${{ runner.temp }}/telegram-runner-result.json
 
     steps:
       - name: Checkout
@@ -45,6 +44,8 @@ jobs:
       - name: Execute claimed task
         id: execute
         continue-on-error: true
+        env:
+          RESULT_FILE: ${{ runner.temp }}/telegram-runner-result.json
         run: >-
           python -m runner.cli run
           --run-id "$RUN_ID"
@@ -52,6 +53,8 @@ jobs:
 
       - name: Ensure terminal callback
         if: always()
+        env:
+          RESULT_FILE: ${{ runner.temp }}/telegram-runner-result.json
         run: >-
           python -m runner.cli finalize
           --run-id "$RUN_ID"
@@ -59,4 +62,6 @@ jobs:
 
       - name: Reflect task outcome in Actions
         if: always()
+        env:
+          RESULT_FILE: ${{ runner.temp }}/telegram-runner-result.json
         run: python -m runner.cli assert-success --result-file "$RESULT_FILE"
