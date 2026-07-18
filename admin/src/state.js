@@ -49,6 +49,14 @@ export function needsTelegramApplicationSetup(settings = {}) {
   return settings.telegram_application_configured !== true;
 }
 
+export function identityDisplayName(identity = {}) {
+  const name = String(identity.name || "").trim();
+  if (name) return name;
+  const account = String(identity.login || identity.email || "").trim().replace(/^@/, "");
+  if (account) return account;
+  return identity.role === "admin" ? "管理员" : "用户";
+}
+
 export function filterRows(rows, { query = "", status = "", accountId = "", taskId = "" } = {}) {
   const needle = query.trim().toLocaleLowerCase("zh-CN");
   return rows.filter((row) => {

@@ -3,6 +3,7 @@ import { buildNotificationSettingsPatch, validateNotificationSettings } from "./
 import {
   createStore,
   filterRows,
+  identityDisplayName,
   listFrom,
   needsTelegramApplicationSetup,
   routeFromHash,
@@ -294,8 +295,10 @@ async function loadIdentity() {
       return false;
     }
     const login = identity.login || identity.email || identity.provider || "用户";
-    document.querySelector("#identity-name").textContent = identity.name || "用户";
-    document.querySelector("#identity-email").textContent = identity.provider === "github" ? `@${login}` : login;
+    const roleLabel = identity.role === "admin" ? "管理员" : "用户";
+    const accountLabel = identity.provider === "github" ? `@${login}` : login;
+    document.querySelector("#identity-name").textContent = identityDisplayName(identity);
+    document.querySelector("#identity-email").textContent = `${roleLabel} · ${accountLabel}`;
     document.querySelector(".avatar").textContent = initials(login);
     authGate.hidden = true;
     appShell.hidden = false;
@@ -355,7 +358,7 @@ async function renderDashboard(token) {
   const health = dashboard?.health || {};
   const identity = store.get().identity || {};
   setApiState("ok", "服务正常");
-  view.innerHTML = `${pageHead(`${identity.name || "我的"}的工作区`, `${workspace.accounts ?? 0} 个 Telegram 账号 · ${workspace.tasks ?? 0} 个任务 · ${workspace.all_runs ?? 0} 条执行记录`, `<button class="button" type="button" data-action="refresh">↻ 刷新</button>`)}
+  view.innerHTML = `${pageHead(`${identityDisplayName(identity)} 的工作区`, `${workspace.accounts ?? 0} 个 Telegram 账号 · ${workspace.tasks ?? 0} 个任务 · ${workspace.all_runs ?? 0} 条执行记录`, `<button class="button" type="button" data-action="refresh">↻ 刷新</button>`)}
     <section class="stats-grid" aria-label="今日统计">
       <article class="stat-card"><div class="stat-label">今日执行</div><div class="stat-value">${escapeHtml(today.total ?? 0)}</div><div class="stat-meta">按默认时区统计</div></article>
       <article class="stat-card success"><div class="stat-label">成功</div><div class="stat-value">${escapeHtml(today.success ?? today.succeeded ?? 0)}</div><div class="stat-meta">Telegram 返回成功</div></article>
@@ -1025,7 +1028,7 @@ async function renderSettings(token) {
     if (token !== renderToken) return;
     setApiState("ok", "服务正常");
     view.innerHTML = `${pageHead("设置", "个人账号与安全设置")}
-      <div class="settings-layout"><section class="card"><div class="settings-section"><h2>个人资料</h2><p>显示名称：${escapeHtml(identity.name || "用户")}</p><p>登录方式：${escapeHtml(identity.provider === "email" ? "邮箱" : "GitHub")}</p><p>账号：${escapeHtml(identity.email || identity.login || "—")}</p></div></section>
+      <div class="settings-layout"><section class="card"><div class="settings-section"><h2>个人资料</h2><p>显示名称：${escapeHtml(identityDisplayName(identity))}</p><p>登录方式：${escapeHtml(identity.provider === "email" ? "邮箱" : "GitHub")}</p><p>账号：${escapeHtml(identity.email || identity.login || "—")}</p></div></section>
       <aside class="stack"><section class="card"><div class="card-head"><h2>账号安全</h2></div><div class="card-body"><a class="button" href="#/sessions">管理登录会话</a></div></section></aside></div>`;
     return;
   }

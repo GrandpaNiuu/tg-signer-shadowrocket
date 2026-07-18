@@ -3,10 +3,18 @@ import assert from "node:assert/strict";
 import {
   createStore,
   filterRows,
+  identityDisplayName,
   listFrom,
   needsTelegramApplicationSetup,
   routeFromHash,
 } from "../src/state.js";
+
+test("uses the GitHub login when an account has no public profile name", () => {
+  assert.equal(identityDisplayName({ name: null, login: "GrandpaNiuu", role: "admin" }), "GrandpaNiuu");
+  assert.equal(identityDisplayName({ name: "  Grandpa Niu  ", login: "GrandpaNiuu" }), "Grandpa Niu");
+  assert.equal(identityDisplayName({ role: "admin" }), "管理员");
+  assert.equal(identityDisplayName({ role: "user" }), "用户");
+});
 
 test("normalizes unknown routes to dashboard", () => {
   assert.equal(routeFromHash("#/accounts"), "accounts");
