@@ -386,12 +386,32 @@ function localDayStart(now, timezone) {
   return new Date(Date.UTC(Number(current.year), Number(current.month) - 1, Number(current.day)) - offset).toISOString();
 }
 
-async function dashboard(request, repository, context, parts) {
+function githubRunnerHealth(env) {
+  const required = [
+    "GITHUB_OWNER",
+    "GITHUB_REPO",
+    "GITHUB_TOKEN",
+    "RUNNER_OIDC_AUDIENCE",
+    "TASK_RUNNER_WORKFLOW_FILE",
+  ];
+  return required.every((name) => String(env[name] || "").trim()) ? "ok" : "missing";
+}
+
+async function dashboard(request, env, repository, context, parts) {
   if (parts[0] !== "dashboard" || parts.length !== 1) return null;
   if (request.method !== "GET") return methodNotAllowed(["GET"]);
   const settings = await repository.getSettings();
   const start = localDayStart(context.now(), settings.default_timezone || "Asia/Shanghai");
-  return json({ data: await repository.dashboard(start) });
+  return json({
+    data: {
+      ...await repository.dashboard(start),
+      health: {
+        database: "ok",
+        github: githubRunnerHealth(env),
+        scheduler: settings.scheduler_mode || "legacy",
+      },
+    },
+  });
 }
 
 async function runs(request, repository, parts, url) {
@@ -603,7 +623,7 @@ export async function handleAdminApi(request, env, repository, context) {
   if (!url.pathname.startsWith(prefix)) return null;
   const parts = url.pathname.slice(prefix.length).split("/").filter(Boolean).map(decodeURIComponent);
   for (const handler of [
-    () => dashboard(request, repository, context, parts),
+    () => dashboard(request, env, repository, context, parts),
     () => accounts(request, env, repository, context, parts, url),
     () => tasks(request, env, repository, context, parts, url),
     () => skills(request, repository, parts),

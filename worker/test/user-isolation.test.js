@@ -48,6 +48,8 @@ function harness() {
     GITHUB_OWNER: "owner",
     GITHUB_REPO: "repo",
     GITHUB_TOKEN: "token",
+    RUNNER_OIDC_AUDIENCE: "https://worker.example/api/runner",
+    TASK_RUNNER_WORKFLOW_FILE: "task-runner.yml",
   };
   return { sqlite, worker, env };
 }
@@ -129,6 +131,11 @@ test("authenticated users can only read and mutate their own Telegram workspace"
   });
   assert.deepEqual(dashboardA.data.upcoming_tasks.map((task) => task.id), [ownTask.id]);
   assert.deepEqual(dashboardA.data.account_health.map((account) => account.id), [accountA.id]);
+  assert.deepEqual(dashboardA.data.health, {
+    database: "ok",
+    github: "ok",
+    scheduler: "legacy",
+  });
 
   const dashboardB = await worker.fetch(request("/api/v1/dashboard?date=2026-07-18", "user-b"), env)
     .then((response) => response.json());
