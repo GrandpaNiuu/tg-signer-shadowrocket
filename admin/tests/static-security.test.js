@@ -65,7 +65,7 @@ test("the administrator shell is gated by GitHub login before data loads", async
   assert.match(html, /id="logout-button"/);
   assert.doesNotMatch(html, /Cloudflare Access/);
   assert.match(api, /baseUrl: "\/api\/auth"/);
-  assert.match(api, /request\("\/session"\)/);
+  assert.match(api, /request\("\/me"\)/);
   assert.match(api, /request\("\/logout", \{ method: "POST"/);
   assert.match(app, /async function bootstrap\(\)/);
   assert.match(app, /if \(await loadIdentity\(\)\)/);

@@ -145,7 +145,7 @@ export class ApiClient {
 
   identity() {
     const identityClient = new ApiClient({ baseUrl: "/api/auth", fetchImpl: this.fetchImpl, timeoutMs: this.timeoutMs });
-    return identityClient.request("/session");
+    return identityClient.request("/me");
   }
 
   logout() {

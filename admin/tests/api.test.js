@@ -112,7 +112,7 @@ test("identity and logout use the same-origin GitHub auth endpoints", async () =
   const requests = [];
   const client = new ApiClient({ fetchImpl: async (url, options) => {
     requests.push({ url, method: options.method, credentials: options.credentials, requestedWith: options.headers["x-requested-with"] });
-    return Response.json({ data: url.endsWith("/session")
+    return Response.json({ data: url.endsWith("/me")
       ? { authenticated: true, provider: "github", login: "GrandpaNiuu" }
       : null });
   }});
@@ -120,7 +120,7 @@ test("identity and logout use the same-origin GitHub auth endpoints", async () =
   assert.equal((await client.identity()).login, "GrandpaNiuu");
   await client.logout();
   assert.deepEqual(requests, [
-    { url: "/api/auth/session", method: "GET", credentials: "same-origin", requestedWith: "tg-checkin-admin" },
+    { url: "/api/auth/me", method: "GET", credentials: "same-origin", requestedWith: "tg-checkin-admin" },
     { url: "/api/auth/logout", method: "POST", credentials: "same-origin", requestedWith: "tg-checkin-admin" },
   ]);
 });
