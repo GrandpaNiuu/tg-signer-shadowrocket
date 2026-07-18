@@ -7,25 +7,22 @@ import {
   validateAccountPatch,
   validateCron,
   validateSettings,
+  validateTelegramApplicationSettings,
   validateTask,
 } from "../src/validation.js";
 
 test("validates Telegram login inputs without reflecting secrets", () => {
   const secret = "1234567890abcdef1234567890abcdef";
-  const errors = validateAccount({ name: "", api_id: "bad", api_hash: secret.slice(0, 10), phone: "138" });
-  assert.deepEqual(Object.keys(errors).sort(), ["api_hash", "api_id", "name", "phone"]);
+  const errors = validateAccount({ phone: "138" });
+  assert.deepEqual(Object.keys(errors), ["phone"]);
   assert.equal(JSON.stringify(errors).includes(secret), false);
 
-  assert.deepEqual(validateAccount({
-    name: "主账号",
-    api_id: "12345678",
-    api_hash: secret,
-    phone: "+8613812345678",
-  }), {});
+  assert.deepEqual(validateAccount({ phone: "+8613812345678" }), {});
+  assert.deepEqual(validateAccount({ phone: "+8613812345678", api_id: "12345678", api_hash: secret }), {});
 });
 
 test("requires a session only in import mode", () => {
-  const base = { name: "旧账号", api_id: "12345678", api_hash: "a".repeat(32), phone: "+8613812345678" };
+  const base = { name: "旧账号", phone: "+8613812345678" };
   assert.equal(validateAccount(base, { requireSession: true }).session.length > 0, true);
   assert.deepEqual(validateAccount({ ...base, session: "valid-session-value-long-enough" }, { requireSession: true }), {});
 });
@@ -146,4 +143,16 @@ test("checks five-part cron and previews a daily schedule", () => {
 test("validates bounded settings", () => {
   assert.deepEqual(validateSettings({ default_timezone: "Asia/Shanghai", scheduler_mode: "legacy", notifications_enabled: true }), {});
   assert.deepEqual(Object.keys(validateSettings({ default_timezone: "", scheduler_mode: "both", notifications_enabled: false })).sort(), ["default_timezone", "scheduler_mode"]);
+});
+
+test("global Telegram application credentials are optional as a pair and never reflected", () => {
+  assert.deepEqual(validateTelegramApplicationSettings({ api_id: "", api_hash: "" }), {});
+  assert.deepEqual(validateTelegramApplicationSettings({
+    api_id: "123456",
+    api_hash: "0123456789abcdef0123456789abcdef",
+  }), {});
+  const secret = "not-a-valid-secret-value";
+  const errors = validateTelegramApplicationSettings({ api_id: "123456", api_hash: secret });
+  assert.deepEqual(Object.keys(errors), ["telegram_api_hash"]);
+  assert.equal(JSON.stringify(errors).includes(secret), false);
 });

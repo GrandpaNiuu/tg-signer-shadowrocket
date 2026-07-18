@@ -447,6 +447,47 @@ export class D1Repository {
     return this.getNotificationSecretStatus();
   }
 
+  async getTelegramApplicationSecretStatus() {
+    const result = await this.db.prepare(`SELECT purpose FROM secret_values
+      WHERE owner_type = 'setting' AND owner_id = 'telegram_application'
+      AND purpose IN ('api_id', 'api_hash')`).all();
+    const purposes = new Set(rows(result).map((row) => row.purpose));
+    return {
+      telegram_api_id_configured: purposes.has("api_id"),
+      telegram_api_hash_configured: purposes.has("api_hash"),
+      telegram_application_configured: purposes.has("api_id") && purposes.has("api_hash"),
+    };
+  }
+
+  async getLegacyTelegramApplicationSecretRefs() {
+    return this.db.prepare(`SELECT id AS account_id, api_id_secret_id, api_hash_secret_id
+      FROM accounts WHERE api_id_secret_id IS NOT NULL AND api_hash_secret_id IS NOT NULL
+      ORDER BY created_at, id LIMIT 1`).first();
+  }
+
+  async getTelegramApplicationStatus() {
+    const stored = await this.getTelegramApplicationSecretStatus();
+    if (stored.telegram_application_configured) {
+      return { ...stored, telegram_application_source: "global" };
+    }
+    const legacy = await this.getLegacyTelegramApplicationSecretRefs();
+    return {
+      ...stored,
+      telegram_application_configured: Boolean(legacy),
+      telegram_application_source: legacy ? "legacy_account" : "missing",
+    };
+  }
+
+  async updateTelegramApplicationSecrets(secrets) {
+    await this.db.batch([
+      this.db.prepare(`DELETE FROM secret_values
+        WHERE owner_type = 'setting' AND owner_id = 'telegram_application'
+        AND purpose IN ('api_id', 'api_hash')`),
+      ...secrets.map((secret) => bindSecret(this.db, secret)),
+    ]);
+    return this.getTelegramApplicationSecretStatus();
+  }
+
   async dashboard(dayStart, limit = 10) {
     const [counts, recentRuns, recentLogs] = await this.db.batch([
       this.db.prepare(`SELECT COUNT(*) AS total,
@@ -812,8 +853,8 @@ export class D1Repository {
       this.db.prepare(`INSERT INTO accounts
         (id, name, phone_masked, phone_secret_id, api_id_secret_id, api_hash_secret_id, proxy_secret_id,
          status, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'login_pending', 1, ?, ?)`)
-        .bind(account.id, account.name, account.phone_masked, byPurpose.phone, byPurpose.api_id,
-          byPurpose.api_hash, byPurpose.proxy || null, account.created_at, account.updated_at),
+        .bind(account.id, account.name, account.phone_masked, byPurpose.phone, byPurpose.api_id || null,
+          byPurpose.api_hash || null, byPurpose.proxy || null, account.created_at, account.updated_at),
       this.db.prepare(`INSERT INTO login_flows
         (id, account_id, mode, status, expires_at, created_at, updated_at)
         VALUES (?, ?, 'interactive_login', 'created', ?, ?, ?)`)

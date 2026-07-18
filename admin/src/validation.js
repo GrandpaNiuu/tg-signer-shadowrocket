@@ -1,5 +1,5 @@
 const CRON_PART = /^[\d*,/\-]+$/;
-const API_HASH = /^[a-f\d]{32}$/i;
+const API_HASH = /^[a-f\d]{32,64}$/i;
 const BOT_USERNAME = /^@[A-Za-z][A-Za-z0-9_]{3,31}$/;
 const CHAT_ID = /^-?\d+$/;
 const PROXY_HOST = /^[A-Za-z0-9._:-]+$/;
@@ -14,9 +14,15 @@ function integerInRange(value, min, max) {
 
 export function validateAccount(input, { requireSession = false } = {}) {
   const errors = {};
-  if (!required(input.name) || input.name.trim().length > 80) errors.name = "请输入 1–80 个字符的账号名称。";
-  if (!/^\d{4,12}$/.test(String(input.api_id || ""))) errors.api_id = "API_ID 应为 4–12 位数字。";
-  if (!API_HASH.test(String(input.api_hash || ""))) errors.api_hash = "API_HASH 应为 32 位十六进制字符串。";
+  if ((requireSession && !required(input.name)) || String(input.name || "").trim().length > 80) {
+    errors.name = "请输入 1–80 个字符的账号名称。";
+  }
+  const apiId = String(input.api_id || "").trim();
+  const apiHash = String(input.api_hash || "").trim();
+  if (apiId || apiHash) {
+    if (!/^\d{4,12}$/.test(apiId)) errors.api_id = "API_ID 应为 4–12 位数字。";
+    if (!/^[a-f\d]{32,64}$/i.test(apiHash)) errors.api_hash = "API_HASH 应为 32–64 位十六进制字符串。";
+  }
   if (input.phone && !/^\+[1-9]\d{6,14}$/.test(input.phone.replace(/[\s-]/g, ""))) errors.phone = "请输入带国家区号的手机号，例如 +8613812345678。";
   if (!input.phone) errors.phone = "请输入手机号。";
   if (requireSession && (!required(input.session) || input.session.length < 20 || input.session.length > 16384)) errors.session = "请输入有效的 Session。";
@@ -223,6 +229,16 @@ export function validateSettings(input) {
   const errors = {};
   if (!required(input.default_timezone) || input.default_timezone.length > 64) errors.default_timezone = "请选择默认时区。";
   if (!["legacy", "d1"].includes(input.scheduler_mode)) errors.scheduler_mode = "请选择调度模式。";
+  return errors;
+}
+
+export function validateTelegramApplicationSettings(input) {
+  const errors = {};
+  const apiId = String(input.api_id || "").trim();
+  const apiHash = String(input.api_hash || "").trim();
+  if (!apiId && !apiHash) return errors;
+  if (!/^\d{4,12}$/.test(apiId)) errors.telegram_api_id = "API_ID 应为 4–12 位数字。";
+  if (!API_HASH.test(apiHash)) errors.telegram_api_hash = "API_HASH 应为 32–64 位十六进制字符串。";
   return errors;
 }
 

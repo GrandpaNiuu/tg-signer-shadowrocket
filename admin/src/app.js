@@ -8,6 +8,7 @@ import {
   validateAccount,
   validateAccountPatch,
   validateSettings,
+  validateTelegramApplicationSettings,
   validateTask,
 } from "./validation.js";
 import {
@@ -292,9 +293,7 @@ function proxyFields(values = {}) {
 
 function accountFields(mode, values = {}, errors = {}) {
   return `<div class="form-grid">
-    <div class="field span-2"><label class="required" for="account-name">名称</label><input id="account-name" name="name" maxlength="80" autocomplete="off" value="${escapeHtml(values.name || "")}" placeholder="例如：主账号" ${invalidAttr(errors,"name")}>${fieldError(errors,"name")}</div>
-    <div class="field"><label class="required" for="api-id">API_ID</label><input id="api-id" name="api_id" inputmode="numeric" maxlength="12" autocomplete="off" data-sensitive value="" placeholder="12345678" ${invalidAttr(errors,"api_id")}><div data-error-for="api_id">${fieldError(errors,"api_id")}</div></div>
-    <div class="field"><label class="required" for="api-hash">API_HASH</label><input id="api-hash" name="api_hash" type="password" maxlength="32" autocomplete="new-password" data-sensitive value="" placeholder="32 位字符串" ${invalidAttr(errors,"api_hash")}><div data-error-for="api_hash">${fieldError(errors,"api_hash")}</div></div>
+    ${mode === "import" ? `<div class="field span-2"><label class="required" for="account-name">名称</label><input id="account-name" name="name" maxlength="80" autocomplete="off" value="${escapeHtml(values.name || "")}" placeholder="例如：旧账号" ${invalidAttr(errors,"name")}>${fieldError(errors,"name")}</div>` : ""}
     <div class="field span-2"><label class="required" for="account-phone">手机号</label><input id="account-phone" name="phone" type="tel" maxlength="20" autocomplete="tel" data-sensitive value="" placeholder="+8613812345678" ${invalidAttr(errors,"phone")}>${fieldError(errors,"phone")}<p class="field-help">包含国家/地区代码，不使用空格。后台列表只显示掩码。</p></div>
     ${mode === "import" ? `<div class="field span-2"><label class="required" for="account-session">Telegram Session</label><textarea id="account-session" name="session" maxlength="16384" autocomplete="off" data-sensitive placeholder="粘贴已有 Session；保存后立即清空" ${invalidAttr(errors,"session")}></textarea>${fieldError(errors,"session")}</div>` : ""}
     ${proxyFields(values)}
@@ -305,10 +304,10 @@ function openAccountWizard(mode = "login", values = {}, errors = {}) {
   const isLogin = mode === "login";
   openModal({
     title: "新增 Telegram 账号",
-    description: "敏感信息只会发送到已登录的管理 API",
+    description: isLogin ? "像 Telegram App 一样，用手机号、验证码和二步验证完成连接" : "高级方式：导入已有 Telegram Session",
     wide: true,
-    body: `<div class="tabs" role="tablist" aria-label="添加方式"><button type="button" role="tab" data-action="account-tab" data-mode="login" class="${isLogin ? "active" : ""}" aria-selected="${isLogin}">网页登录</button><button type="button" role="tab" data-action="account-tab" data-mode="import" class="${!isLogin ? "active" : ""}" aria-selected="${!isLogin}">导入旧 Session</button></div>
-      ${isLogin ? `<div class="stepper" aria-label="登录进度"><div class="step active"><b>1</b>账号资料</div><div class="step"><b>2</b>验证码</div><div class="step"><b>3</b>二步验证</div><div class="step"><b>4</b>完成</div></div>` : `<div class="notice mb-md"><span aria-hidden="true">i</span><span>适合迁移当前 GitHub Secrets 中的 Session。导入后会由短时 GitHub Runner 调用 Telegram 验证，通过前不会标记为已连接。</span></div>`}
+    body: `<div class="tabs" role="tablist" aria-label="添加方式"><button type="button" role="tab" data-action="account-tab" data-mode="login" class="${isLogin ? "active" : ""}" aria-selected="${isLogin}">手机号登录</button><button type="button" role="tab" data-action="account-tab" data-mode="import" class="${!isLogin ? "active" : ""}" aria-selected="${!isLogin}">高级：导入旧 Session</button></div>
+      ${isLogin ? `<div class="stepper" aria-label="登录进度"><div class="step active"><b>1</b>输入手机号</div><div class="step"><b>2</b>验证码</div><div class="step"><b>3</b>二步验证</div><div class="step"><b>4</b>完成</div></div><div class="notice mb-md"><span aria-hidden="true">i</span><span>Telegram 应用凭据由后台统一管理，无需为每个账号重复填写。</span></div>` : `<div class="notice mb-md"><span aria-hidden="true">i</span><span>适合迁移当前 GitHub Secrets 中的 Session。导入后会由短时 GitHub Runner 调用 Telegram 验证，通过前不会标记为已连接。</span></div>`}
       <form id="account-form" data-mode="${mode}" novalidate>${accountFields(mode, values, errors)}</form>`,
     footer: `<span class="field-help">不会保存到浏览器存储</span><div><button class="button" type="button" data-action="close-modal">取消</button><button class="button primary" type="submit" form="account-form">${isLogin ? "发送验证码" : "加密导入"}</button></div>`,
   });
@@ -318,12 +317,12 @@ function accountPayload(form, mode) {
   const values = new FormData(form);
   const proxyHost = String(values.get("proxy_host") || "").trim();
   const payload = {
-    name: String(values.get("name") || "").trim(),
-    api_id: String(values.get("api_id") || "").trim(),
-    api_hash: String(values.get("api_hash") || "").trim(),
     phone: String(values.get("phone") || "").replace(/[\s-]/g, ""),
   };
-  if (mode === "import") payload.session = String(values.get("session") || "").trim();
+  if (mode === "import") {
+    payload.name = String(values.get("name") || "").trim();
+    payload.session = String(values.get("session") || "").trim();
+  }
   if (proxyHost) {
     payload.proxy = {
       protocol: String(values.get("proxy_scheme") || "socks5"),
@@ -349,7 +348,6 @@ async function submitAccountForm(form) {
   if (hasErrors(errors)) {
     const safeValues = { name: payload.name };
     clearSensitive(form);
-    payload.api_hash = "";
     payload.session = "";
     if (payload.proxy) payload.proxy.password = "";
     openAccountWizard(mode, safeValues, errors);
@@ -363,7 +361,6 @@ async function submitAccountForm(form) {
     const request = mode === "login" ? api.createLoginFlow(payload) : api.createAccount({ ...payload, enabled: true });
     clearSensitive(form);
     const result = await request;
-    payload.api_hash = "";
     payload.session = "";
     payload.phone = "";
     if (payload.proxy) payload.proxy.password = "";
@@ -383,7 +380,6 @@ async function submitAccountForm(form) {
     }
   } catch (error) {
     clearSensitive(form);
-    payload.api_hash = "";
     payload.session = "";
     toast("添加账号失败", errorMessage(error), "error");
     submit.disabled = false;
@@ -400,7 +396,7 @@ function loginStep(status) {
 
 function loginStepper(status) {
   const current = loginStep(status);
-  return `<div class="stepper" aria-label="登录进度">${["账号资料","验证码","二步验证","完成"].map((label,index) => `<div class="step ${index + 1 < current ? "done" : index + 1 === current ? "active" : ""}"><b>${index + 1 < current ? "✓" : index + 1}</b>${label}</div>`).join("")}</div>`;
+  return `<div class="stepper" aria-label="登录进度">${["输入手机号","验证码","二步验证","完成"].map((label,index) => `<div class="step ${index + 1 < current ? "done" : index + 1 === current ? "active" : ""}"><b>${index + 1 < current ? "✓" : index + 1}</b>${label}</div>`).join("")}</div>`;
 }
 
 function renderLoginFlow(flow) {
@@ -423,7 +419,7 @@ function renderLoginFlow(flow) {
     body += `<div class="empty-state"><span class="skeleton w42"></span><h3>${escapeHtml(sessionValidation ? "正在检查 Session" : statusText(status))}</h3><p>${sessionValidation ? "GitHub Runner 正在向 Telegram 验证已导入的 Session。" : "GitHub Login Runner 正在处理，请保持此页面打开。"}</p></div>`;
     shouldPoll = true;
   } else if (status === "code_required") {
-    body += `${flow.last_error ? `<div class="notice warning mb-md"><span aria-hidden="true">!</span><span>${escapeHtml(flow.last_error)}</span></div>` : ""}<div class="notice mb-md"><span aria-hidden="true">i</span><span>验证码已发送。验证码只用于本次登录，提交后会从输入框清除。</span></div><form id="login-code-form" data-id="${escapeHtml(id)}"><div class="field"><label class="required" for="login-code">Telegram 验证码</label><input id="login-code" name="code" type="text" inputmode="numeric" maxlength="12" autocomplete="one-time-code" data-sensitive required placeholder="请输入验证码"></div></form>`;
+    body += `${flow.last_error ? `<div class="notice warning mb-md"><span aria-hidden="true">!</span><span>${escapeHtml(flow.last_error)}</span></div>` : ""}<div class="notice mb-md"><span aria-hidden="true">i</span><span>请先查看已登录的 Telegram 手机或桌面 App；Telegram 也可能按账号情况通过短信或电话发送。验证码只用于本次登录，提交后会立即清除。</span></div><form id="login-code-form" data-id="${escapeHtml(id)}"><div class="field"><label class="required" for="login-code">Telegram 验证码</label><input id="login-code" name="code" type="text" inputmode="numeric" maxlength="12" autocomplete="one-time-code" data-sensitive required placeholder="请输入验证码"></div></form>`;
     footer = `<span class="field-help">未收到时可请求 Telegram 重新发送</span><div><button class="button" type="button" data-action="resend-login" data-id="${escapeHtml(id)}">重新发送</button><button class="button" type="button" data-action="cancel-login" data-id="${escapeHtml(id)}">取消</button><button class="button primary" type="submit" form="login-code-form">验证</button></div>`;
   } else if (status === "password_required") {
     body += `${flow.last_error ? `<div class="notice danger mb-md"><span aria-hidden="true">!</span><span>${escapeHtml(flow.last_error)}</span></div>` : ""}<div class="notice warning mb-md"><span aria-hidden="true">!</span><span>此账号启用了 Telegram 二步验证。密码只用于本次登录，不会保存在浏览器中。</span></div><form id="login-password-form" data-id="${escapeHtml(id)}"><div class="field"><label class="required" for="login-password">二步验证密码</label><input id="login-password" name="password" type="password" maxlength="512" autocomplete="current-password" data-sensitive required></div></form>`;
@@ -479,10 +475,8 @@ function editAccountFields(account, errors = {}, options = {}) {
   return `<div class="form-grid">
     <div class="field span-2"><label class="required" for="edit-account-name">名称</label><input id="edit-account-name" name="name" maxlength="80" autocomplete="off" value="${escapeHtml(account.name)}" ${invalidAttr(errors, "name")}>${fieldError(errors, "name")}</div>
     <label class="check-row span-2"><input type="checkbox" name="enabled" ${account.enabled ? "checked" : ""}>启用此账号</label>
-    <div class="notice span-2"><span aria-hidden="true">i</span><span>下面的凭据始终为空白。只填写需要替换的项目；留空表示保留 D1 中现有的加密值。</span></div>
+    <div class="notice span-2"><span aria-hidden="true">i</span><span>下面的账号凭据始终为空白。API_ID 与 API_HASH 已改为在“设置”中统一管理。</span></div>
     <div class="field span-2"><label for="edit-account-phone">新手机号（可选）</label><input id="edit-account-phone" name="phone" type="tel" maxlength="20" autocomplete="off" data-sensitive value="" placeholder="留空保留，例如 +8613812345678" ${invalidAttr(errors, "phone")}>${fieldError(errors, "phone")}</div>
-    <div class="field"><label for="edit-api-id">新 API_ID（可选）</label><input id="edit-api-id" name="api_id" type="password" inputmode="numeric" maxlength="12" autocomplete="new-password" data-sensitive value="" placeholder="留空保留" ${invalidAttr(errors, "api_id")}>${fieldError(errors, "api_id")}</div>
-    <div class="field"><label for="edit-api-hash">新 API_HASH（可选）</label><input id="edit-api-hash" name="api_hash" type="password" maxlength="64" autocomplete="new-password" data-sensitive value="" placeholder="留空保留" ${invalidAttr(errors, "api_hash")}>${fieldError(errors, "api_hash")}</div>
     <div class="field span-2"><label for="edit-account-session">新 Telegram Session（可选）</label><textarea id="edit-account-session" name="session" maxlength="16384" autocomplete="off" data-sensitive placeholder="留空保留；提交后立即清空" ${invalidAttr(errors, "session")}></textarea>${fieldError(errors, "session")}</div>
     <label class="check-row span-2"><input type="checkbox" name="clear_session" ${options.clearSession ? "checked" : ""}>明确清除现有 Session（账号会变为未连接）</label>
     <details class="span-2" ${errors.proxy_protocol || errors.proxy_host || errors.proxy_port || errors.proxy_username || errors.proxy_password || options.clearProxy ? "open" : ""}><summary class="field-label">替换或清除代理（可选）</summary><div class="form-grid">
@@ -521,8 +515,6 @@ function editAccountDraft(form) {
       name: String(data.get("name") || "").trim(),
       enabled: data.get("enabled") === "on",
       phone: String(data.get("phone") || "").replace(/[\s-]/g, ""),
-      api_id: String(data.get("api_id") || "").trim(),
-      api_hash: String(data.get("api_hash") || "").trim(),
       session: String(data.get("session") || "").trim(),
       proxy,
     },
@@ -534,7 +526,7 @@ function editAccountDraft(form) {
 }
 
 function scrubAccountDraft(input) {
-  for (const field of ["phone", "api_id", "api_hash", "session"]) input[field] = "";
+  for (const field of ["phone", "session"]) input[field] = "";
   if (input.proxy) {
     for (const field of ["host", "port", "username", "password"]) input.proxy[field] = "";
   }
@@ -553,7 +545,7 @@ async function submitEditAccountForm(form) {
 
   const patch = buildAccountPatch(input, options);
   const shouldValidate = patch.session !== null
-    && ["session", "api_id", "api_hash", "proxy"].some((field) => Object.hasOwn(patch, field));
+    && ["session", "proxy"].some((field) => Object.hasOwn(patch, field));
   scrubAccountDraft(input);
   const button = modalRoot.querySelector("button[type=submit]");
   button.disabled = true;
@@ -561,8 +553,6 @@ async function submitEditAccountForm(form) {
   try {
     const request = api.updateAccount(form.dataset.id, patch);
     if (typeof patch.phone === "string") patch.phone = "";
-    if (typeof patch.api_id === "string") patch.api_id = "";
-    if (typeof patch.api_hash === "string") patch.api_hash = "";
     if (typeof patch.session === "string") patch.session = "";
     if (patch.proxy && typeof patch.proxy === "object") {
       for (const field of ["host", "username", "password"]) if (typeof patch.proxy[field] === "string") patch.proxy[field] = "";
@@ -804,12 +794,24 @@ async function renderSettings(token) {
   const settings = payload?.values || payload || {};
   store.set({ settings });
   setApiState("ok", "服务正常");
+  const telegramApplicationStatus = settings.telegram_application_source === "global"
+    ? '<span class="badge success">已统一配置</span>'
+    : settings.telegram_application_source === "legacy_account"
+      ? '<span class="badge success">已自动复用旧账号</span>'
+      : '<span class="badge pending">尚未配置</span>';
   view.innerHTML = `${pageHead("设置", "只管理个人实例的基础运行配置")}
     <div class="settings-layout"><section class="card"><form id="settings-form" novalidate>
       <div class="settings-section"><h2>时间与调度</h2><p>控制动态任务如何计算执行时间。</p><div class="form-grid">
         <div class="field"><label for="default-timezone">默认时区</label><select id="default-timezone" name="default_timezone">${["Asia/Shanghai","Asia/Hong_Kong","Asia/Tokyo","UTC","America/Los_Angeles"].map((zone) => `<option value="${zone}" ${(settings.default_timezone || "Asia/Shanghai") === zone ? "selected" : ""}>${zone}</option>`).join("")}</select></div>
         <div class="field"><label for="scheduler-mode">Scheduler Mode</label><select id="scheduler-mode" name="scheduler_mode"><option value="legacy" ${settings.scheduler_mode !== "d1" ? "selected" : ""}>legacy — 保留旧 Cron</option><option value="d1" ${settings.scheduler_mode === "d1" ? "selected" : ""}>d1 — 动态任务调度</option></select><p class="field-help">切换到 d1 前应完成迁移和 canary 验证。可随时切回 legacy。</p></div>
       </div></div>
+      <div class="settings-section"><h2>Telegram 应用</h2><p>所有账号共用一组 Telegram 应用凭据，不需要在新增账号时重复填写。当前：${telegramApplicationStatus}</p>
+        <div class="form-grid">
+          <div class="field"><label for="telegram-api-id">新 API_ID（可选）</label><input id="telegram-api-id" name="telegram_api_id" type="password" inputmode="numeric" maxlength="12" autocomplete="new-password" data-sensitive value="" placeholder="留空保留现有配置"></div>
+          <div class="field"><label for="telegram-api-hash">新 API_HASH（可选）</label><input id="telegram-api-hash" name="telegram_api_hash" type="password" maxlength="64" autocomplete="new-password" data-sensitive value="" placeholder="留空保留现有配置"></div>
+        </div>
+        <div class="notice mt-md"><span aria-hidden="true">i</span><span>${settings.telegram_application_source === "legacy_account" ? "当前已从一个旧账号安全复用完整凭据；无需重新配置。" : "只有同时填写两项时才会替换；凭据加密写入 D1 且永不回显。"}</span></div>
+      </div>
       <div class="settings-section"><h2>通知</h2><p>任务结束后通过 Telegram Bot 发送结果、GitHub Actions 链接和脱敏日志尾部。现有秘密永远不会回显，空白表示保留。</p>
         <label class="check-row"><input type="checkbox" name="notifications_enabled" ${settings.notifications_enabled ? "checked" : ""}>任务结束后发送通知</label>
         <div class="form-grid">
@@ -837,6 +839,10 @@ function readSettingsForm(form) {
       bot_token: String(data.get("notification_bot_token") || "").trim(),
       chat_id: String(data.get("notification_chat_id") || "").trim(),
     },
+    telegramInput: {
+      api_id: String(data.get("telegram_api_id") || "").trim(),
+      api_hash: String(data.get("telegram_api_hash") || "").trim(),
+    },
     notificationOptions: {
       clearBotToken: data.get("clear_notification_bot_token") === "on",
       clearChatId: data.get("clear_notification_chat_id") === "on",
@@ -849,9 +855,12 @@ async function submitSettings(form) {
   clearSensitive(form);
   const errors = {
     ...validateSettings(submission.values),
+    ...validateTelegramApplicationSettings(submission.telegramInput),
     ...validateNotificationSettings(submission.notificationInput, submission.notificationOptions),
   };
   if (hasErrors(errors)) {
+    submission.telegramInput.api_id = "";
+    submission.telegramInput.api_hash = "";
     submission.notificationInput.bot_token = "";
     submission.notificationInput.chat_id = "";
     toast("请检查设置", Object.values(errors)[0], "error");
@@ -864,13 +873,18 @@ async function submitSettings(form) {
   button.disabled = true;
   button.textContent = "正在保存…";
   try {
+    const telegramRequest = submission.telegramInput.api_id && submission.telegramInput.api_hash
+      ? api.updateTelegramApplicationSettings(submission.telegramInput)
+      : Promise.resolve(null);
     const notificationRequest = Object.keys(notificationPatch).length
       ? api.updateNotificationSettings(notificationPatch)
       : Promise.resolve(null);
+    submission.telegramInput.api_id = "";
+    submission.telegramInput.api_hash = "";
     for (const field of ["bot_token", "chat_id"]) {
       if (typeof notificationPatch[field] === "string") notificationPatch[field] = "";
     }
-    await Promise.all([api.updateSettings(submission.values), notificationRequest]);
+    await Promise.all([api.updateSettings(submission.values), telegramRequest, notificationRequest]);
     toast("设置已保存");
     await refreshRoute();
   } catch (error) {

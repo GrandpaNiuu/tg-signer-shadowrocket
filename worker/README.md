@@ -23,6 +23,7 @@ Authenticated routes are:
 - `GET /api/v1/skills`
 - `GET /api/v1/task-runs`, `GET /api/v1/task-runs/:id`
 - `GET|PATCH /api/v1/settings`
+- `PATCH /api/v1/settings/telegram`, `PATCH /api/v1/settings/notifications`
 - `POST /api/v1/login-flows`, `GET /api/v1/login-flows/:id`
 - `POST /api/v1/login-flows/:id/code|password|cancel`
 
@@ -105,7 +106,10 @@ successful dry-run and legacy import; switching it back is the rollback.
   matches; rejected values are deleted before replacement input is accepted.
 - Connected, failed, cancelled, and expired login flows clear both secret
   references and delete all `login_flow`-owned code/2FA ciphertext immediately;
-  account-owned API credentials and the connected Session are retained.
+  the connected Session and any legacy account-owned API credentials are retained.
+  New accounts use one encrypted setting-owned Telegram application credential
+  pair, with a deterministic complete legacy-account pair as a no-reconfiguration
+  compatibility fallback.
 - Administrator cancellation and an initial GitHub interactive-login dispatch
   failure delete the entire provisional account, flow, and owned ciphertext in
   one D1 batch, so an abandoned web-login attempt cannot leave a ghost account.

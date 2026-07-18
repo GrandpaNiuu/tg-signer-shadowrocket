@@ -22,13 +22,33 @@ test("account edit controls never render stored credentials and support explicit
   assert.notEqual(start, -1);
   assert.notEqual(end, -1);
   const fields = app.slice(start, end);
-  for (const name of ["phone", "api_id", "api_hash", "proxy_host", "proxy_port", "proxy_username", "proxy_password"]) {
+  for (const name of ["phone", "proxy_host", "proxy_port", "proxy_username", "proxy_password"]) {
     assert.match(fields, new RegExp(`name=\\"${name}\\"[^>]*data-sensitive[^>]*value=\\"\\"`));
   }
+  assert.doesNotMatch(fields, /name="api_id"|name="api_hash"/);
+  assert.match(fields, /设置/);
   assert.match(fields, /name="session"[^>]*data-sensitive/);
   assert.match(fields, /name="clear_session"/);
   assert.match(fields, /name="clear_proxy"/);
   assert.doesNotMatch(fields, /phone_masked|account\.phone|account\.api|account\.session|account\.proxy/);
+});
+
+test("new account login asks for a phone number instead of per-account API credentials", async () => {
+  const app = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
+  const start = app.indexOf("function accountFields");
+  const end = app.indexOf("function openAccountWizard", start);
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+  const fields = app.slice(start, end);
+  assert.match(fields, /name="phone"/);
+  assert.match(fields, /name="session"/);
+  assert.doesNotMatch(fields, /API_ID|API_HASH|name="api_id"|name="api_hash"/);
+
+  const wizardStart = end;
+  const wizardEnd = app.indexOf("function accountPayload", wizardStart);
+  const wizard = app.slice(wizardStart, wizardEnd);
+  assert.match(wizard, /手机号登录/);
+  assert.match(wizard, /输入手机号/);
 });
 
 test("notification settings render only blank sensitive inputs with explicit clear controls", async () => {
@@ -39,6 +59,16 @@ test("notification settings render only blank sensitive inputs with explicit cle
   assert.match(app, /name="clear_notification_bot_token"/);
   assert.match(app, /name="clear_notification_chat_id"/);
   assert.doesNotMatch(app, /value="\$\{settings\.notification_(?:bot_token|chat_id)/);
+});
+
+test("global Telegram application settings use blank secret inputs and explain legacy reuse", async () => {
+  const app = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
+  for (const name of ["telegram_api_id", "telegram_api_hash"]) {
+    assert.match(app, new RegExp(`name=\\"${name}\\"[^>]*data-sensitive[^>]*value=\\"\\"`));
+  }
+  assert.match(app, /telegram_application_source/);
+  assert.match(app, /旧账号/);
+  assert.doesNotMatch(app, /value="\$\{settings\.telegram_(?:api_id|api_hash)/);
 });
 
 test("transient Telegram login errors keep polling the current account", async () => {

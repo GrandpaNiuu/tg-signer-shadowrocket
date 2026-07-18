@@ -73,14 +73,15 @@ function proxyField(value, optional = true) {
 
 export function accountInput(body, { patch = false, sessionOptional = patch } = {}) {
   const allowed = ["name", "phone", "api_id", "api_hash", "session", "proxy", "enabled"];
-  exactObject(body, allowed, patch ? [] : ["name", "phone", "api_id", "api_hash"]);
+  exactObject(body, allowed, patch ? [] : ["name", "phone"]);
   if (patch && Object.keys(body).length === 0) fail(["body"]);
   const output = {};
   const optional = patch;
   const name = stringField(body.name, "name", { max: 80, optional });
   const phone = stringField(body.phone, "phone", { min: 8, max: 16, pattern: /^\+[1-9]\d{6,14}$/, optional });
-  const apiId = body.api_id === undefined && optional ? undefined : stringField(String(body.api_id ?? ""), "api_id", { min: 4, max: 12, pattern: /^\d+$/ });
-  const apiHash = stringField(body.api_hash, "api_hash", { min: 32, max: 64, pattern: /^[a-fA-F0-9]+$/, optional });
+  const apiId = body.api_id === undefined ? undefined : stringField(String(body.api_id), "api_id", { min: 4, max: 12, pattern: /^\d+$/ });
+  const apiHash = stringField(body.api_hash, "api_hash", { min: 32, max: 64, pattern: /^[a-fA-F0-9]+$/, optional: true });
+  if (!patch && (apiId === undefined) !== (apiHash === undefined)) fail([apiId === undefined ? "api_id" : "api_hash"]);
   const session = stringField(body.session, "session", { min: 20, max: 16_384, optional: sessionOptional, nullable: true });
   const proxy = proxyField(body.proxy, true);
   const enabled = booleanField(body.enabled, "enabled", true);
@@ -177,10 +178,32 @@ export function settingsInput(body) {
   return values;
 }
 
+export function telegramApplicationSettingsInput(body) {
+  exactObject(body, ["api_id", "api_hash"], ["api_id", "api_hash"]);
+  return {
+    api_id: stringField(String(body.api_id ?? ""), "api_id", { min: 4, max: 12, pattern: /^\d+$/ }),
+    api_hash: stringField(body.api_hash, "api_hash", { min: 32, max: 64, pattern: /^[a-fA-F0-9]+$/ }),
+  };
+}
+
 export function loginStartInput(body) {
-  const value = accountInput(body, { sessionOptional: true });
-  if (value.session !== undefined || value.enabled !== undefined) fail([value.session !== undefined ? "session" : "enabled"]);
-  return value;
+  exactObject(body, ["name", "phone", "api_id", "api_hash", "proxy"], ["phone"]);
+  const phone = stringField(body.phone, "phone", { min: 8, max: 16, pattern: /^\+[1-9]\d{6,14}$/ });
+  const name = stringField(body.name, "name", { max: 80, optional: true });
+  const apiId = body.api_id === undefined
+    ? undefined
+    : stringField(String(body.api_id), "api_id", { min: 4, max: 12, pattern: /^\d+$/ });
+  const apiHash = stringField(body.api_hash, "api_hash", {
+    min: 32, max: 64, pattern: /^[a-fA-F0-9]+$/, optional: true,
+  });
+  if ((apiId === undefined) !== (apiHash === undefined)) fail([apiId === undefined ? "api_id" : "api_hash"]);
+  const proxy = proxyField(body.proxy, true);
+  return {
+    name: name ?? `Telegram ••••${phone.slice(-4)}`,
+    phone,
+    ...(apiId === undefined ? {} : { api_id: apiId, api_hash: apiHash }),
+    ...(proxy === undefined ? {} : { proxy }),
+  };
 }
 
 export function secretInput(body, field) {

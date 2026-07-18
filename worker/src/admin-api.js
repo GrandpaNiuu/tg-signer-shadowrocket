@@ -4,6 +4,7 @@ import { dispatchWorkflow } from "./github.js";
 import { HttpError, json, methodNotAllowed, readJson } from "./http.js";
 import { ACTIVE_LOGIN_STATUSES } from "./login-states.js";
 import { enqueueAndDispatch } from "./scheduler.js";
+import { resolveTelegramApplicationCredentialRefs } from "./telegram-application.js";
 import {
   accountInput,
   exactObject,
@@ -13,6 +14,7 @@ import {
   secretInput,
   settingsInput,
   taskInput,
+  telegramApplicationSettingsInput,
   validateTaskRuntime,
 } from "./validation.js";
 
@@ -444,16 +446,30 @@ function notificationSettingsInput(body) {
 }
 
 async function settingsSnapshot(repository) {
-  const [values, notificationStatus] = await Promise.all([
+  const [values, notificationStatus, telegramApplicationStatus] = await Promise.all([
     repository.getSettings(),
     repository.getNotificationSecretStatus(),
+    repository.getTelegramApplicationStatus(),
   ]);
-  return { ...values, ...notificationStatus };
+  return { ...values, ...notificationStatus, ...telegramApplicationStatus };
 }
 
 async function settings(request, env, repository, context, parts) {
   if (parts[0] !== "settings" || parts.length > 2) return null;
   if (parts.length === 2) {
+    if (parts[1] === "telegram") {
+      if (request.method !== "PATCH") return methodNotAllowed(["PATCH"]);
+      const input = telegramApplicationSettingsInput(await readJson(request, 16_000));
+      const secrets = await Promise.all(Object.entries(input).map(([purpose, value]) => createSecretRecord({
+        env,
+        ...context,
+        ownerType: "setting",
+        ownerId: "telegram_application",
+        purpose,
+        value,
+      })));
+      return json({ data: await repository.updateTelegramApplicationSecrets(secrets) });
+    }
     if (parts[1] !== "notifications") return null;
     if (request.method !== "PATCH") return methodNotAllowed(["PATCH"]);
     const input = notificationSettingsInput(await readJson(request, 16_000));
@@ -492,6 +508,9 @@ async function loginFlows(request, env, repository, context, parts) {
     if (parts.length !== 1) return null;
     if (request.method !== "POST") return methodNotAllowed(["POST"]);
     const input = loginStartInput(await readJson(request));
+    if (!input.api_id && !await resolveTelegramApplicationCredentialRefs(repository)) {
+      throw new HttpError(409, "telegram_application_not_configured", "Telegram application credentials are not configured.");
+    }
     const accountId = context.uuid();
     const flowId = context.uuid();
     const timestamp = iso(context.now);

@@ -743,6 +743,36 @@ test("legacy migration remains usable when old Secrets do not contain API creden
   assert.equal("api_hash" in claim.account, false);
 });
 
+test("admin can import and validate an existing Session without API credentials", async () => {
+  const { worker, env } = harness();
+  const session = "manually-imported-session-that-must-stay-secret";
+  let response = await worker.fetch(request("/api/v1/accounts", {
+    method: "POST",
+    body: {
+      name: "Imported account",
+      phone: "+8613812345678",
+      session,
+      enabled: true,
+    },
+  }), env);
+  assert.equal(response.status, 201, JSON.stringify(await response.clone().json()));
+  const account = (await response.json()).data;
+
+  response = await worker.fetch(request(`/api/v1/accounts/${account.id}/validate`, {
+    method: "POST", body: {},
+  }), env);
+  assert.equal(response.status, 202);
+  const flow = (await response.json()).data;
+  response = await worker.fetch(request(`/api/runner/login-flows/${flow.id}/claim`, {
+    method: "POST", body: {},
+  }), env);
+  assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
+  const claim = await response.json();
+  assert.equal(claim.account.session_string, session);
+  assert.equal("api_id" in claim.account, false);
+  assert.equal("api_hash" in claim.account, false);
+});
+
 test("admin notification settings replace, retain, and clear encrypted secrets without echoing them", async () => {
   const { sqlite, repository, worker, env } = harness();
   const token = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd";
@@ -802,6 +832,146 @@ test("admin notification settings replace, retain, and clear encrypted secrets w
   }), env);
   assert.equal(response.status, 422);
   assert.equal(JSON.stringify(await response.json()).includes(invalidSecret), false);
+});
+
+test("admin can configure one encrypted Telegram application without exposing its credentials", async () => {
+  const { repository, worker, env } = harness();
+  const apiId = "123456";
+  const apiHash = "0123456789abcdef0123456789abcdef";
+
+  let response = await worker.fetch(request("/api/v1/settings"), env);
+  assert.equal(response.status, 200);
+  let data = (await response.json()).data;
+  assert.equal(data.telegram_application_configured, false);
+
+  response = await worker.fetch(request("/api/v1/settings/telegram", {
+    method: "PATCH",
+    body: { api_id: apiId, api_hash: apiHash },
+  }), env);
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.deepEqual(body.data, {
+    telegram_api_id_configured: true,
+    telegram_api_hash_configured: true,
+    telegram_application_configured: true,
+  });
+  assert.equal(JSON.stringify(body).includes(apiId), false);
+  assert.equal(JSON.stringify(body).includes(apiHash), false);
+
+  const storedId = await repository.getSecretByOwnerPurpose("setting", "telegram_application", "api_id");
+  const storedHash = await repository.getSecretByOwnerPurpose("setting", "telegram_application", "api_hash");
+  assert.equal(await decryptSecret(ROOT_KEY, storedId, { purpose: "api_id", ownerId: "telegram_application" }), apiId);
+  assert.equal(await decryptSecret(ROOT_KEY, storedHash, { purpose: "api_hash", ownerId: "telegram_application" }), apiHash);
+
+  response = await worker.fetch(request("/api/v1/settings"), env);
+  data = (await response.json()).data;
+  assert.equal(data.telegram_application_configured, true);
+});
+
+test("phone-only login uses the global Telegram application credentials", async () => {
+  const { sqlite, worker, env } = harness();
+  const apiId = "123456";
+  const apiHash = "0123456789abcdef0123456789abcdef";
+  let response = await worker.fetch(request("/api/v1/settings/telegram", {
+    method: "PATCH",
+    body: { api_id: apiId, api_hash: apiHash },
+  }), env);
+  assert.equal(response.status, 200);
+
+  response = await worker.fetch(request("/api/v1/login-flows", {
+    method: "POST",
+    body: { phone: "+8613812345678" },
+  }), env);
+  assert.equal(response.status, 202, JSON.stringify(await response.clone().json()));
+  const flow = (await response.json()).data;
+  const account = sqlite.prepare(`SELECT name, api_id_secret_id, api_hash_secret_id
+    FROM accounts WHERE id = ?`).get(flow.account_id);
+  assert.equal(account.name, "Telegram ••••5678");
+  assert.equal(account.api_id_secret_id, null);
+  assert.equal(account.api_hash_secret_id, null);
+
+  response = await worker.fetch(request(`/api/runner/login-flows/${flow.id}/claim`, {
+    method: "POST",
+    body: {},
+  }), env);
+  assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
+  const claim = await response.json();
+  assert.equal(claim.account.phone, "+8613812345678");
+  assert.equal(claim.account.api_id, Number(apiId));
+  assert.equal(claim.account.api_hash, apiHash);
+});
+
+test("tasks created for a phone-only account reuse the global Telegram application", async () => {
+  const { worker, env } = harness();
+  const apiId = "123456";
+  const apiHash = "0123456789abcdef0123456789abcdef";
+  let response = await worker.fetch(request("/api/v1/settings/telegram", {
+    method: "PATCH",
+    body: { api_id: apiId, api_hash: apiHash },
+  }), env);
+  assert.equal(response.status, 200);
+  response = await worker.fetch(request("/api/v1/login-flows", {
+    method: "POST",
+    body: { phone: "+8613812345678" },
+  }), env);
+  const flow = (await response.json()).data;
+  response = await worker.fetch(request(`/api/runner/login-flows/${flow.id}/claim`, { method: "POST", body: {} }), env);
+  assert.equal(response.status, 200);
+  response = await worker.fetch(request(`/api/runner/login-flows/${flow.id}/complete`, {
+    method: "POST",
+    body: { status: "connected", session_string: "phone-only-account-session-value-is-secret" },
+  }), env);
+  assert.equal(response.status, 200);
+
+  const task = await createTask(worker, env, flow.account_id);
+  response = await worker.fetch(request(`/api/v1/tasks/${task.id}/runs`, {
+    method: "POST", body: {}, headers: { "idempotency-key": "phone-only-run-0001" },
+  }), env);
+  assert.equal(response.status, 202);
+  const run = (await response.json()).data;
+  response = await worker.fetch(request(`/api/runner/runs/${run.id}/claim`, { method: "POST", body: {} }), env);
+  assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
+  const claim = await response.json();
+  assert.equal(claim.account.secrets.api_id, Number(apiId));
+  assert.equal(claim.account.secrets.api_hash, apiHash);
+});
+
+test("phone-only login automatically reuses one legacy account credential pair", async () => {
+  const { worker, env } = harness();
+  const apiId = "654321";
+  const apiHash = "fedcba9876543210fedcba9876543210";
+  let response = await worker.fetch(request("/api/v1/accounts", {
+    method: "POST",
+    body: {
+      name: "Existing account",
+      phone: "+8613900001111",
+      api_id: apiId,
+      api_hash: apiHash,
+      session: "existing-session-value-that-is-long-enough",
+    },
+  }), env);
+  assert.equal(response.status, 201);
+
+  response = await worker.fetch(request("/api/v1/login-flows", {
+    method: "POST",
+    body: { phone: "+8613812345678" },
+  }), env);
+  assert.equal(response.status, 202, JSON.stringify(await response.clone().json()));
+  const flow = (await response.json()).data;
+
+  response = await worker.fetch(request(`/api/runner/login-flows/${flow.id}/claim`, {
+    method: "POST",
+    body: {},
+  }), env);
+  assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
+  const claim = await response.json();
+  assert.equal(claim.account.api_id, Number(apiId));
+  assert.equal(claim.account.api_hash, apiHash);
+
+  response = await worker.fetch(request("/api/v1/settings"), env);
+  const settings = (await response.json()).data;
+  assert.equal(settings.telegram_application_configured, true);
+  assert.equal(settings.telegram_application_source, "legacy_account");
 });
 
 test("configured notification secrets are decrypted only to send a completed run summary", async () => {

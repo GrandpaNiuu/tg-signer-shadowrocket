@@ -142,6 +142,9 @@ export class ApiClient {
   updateNotificationSettings(patch) {
     return this.request("/settings/notifications", { method: "PATCH", body: patch });
   }
+  updateTelegramApplicationSettings(credentials) {
+    return this.request("/settings/telegram", { method: "PATCH", body: credentials });
+  }
 
   identity() {
     const identityClient = new ApiClient({ baseUrl: "/api/auth", fetchImpl: this.fetchImpl, timeoutMs: this.timeoutMs });

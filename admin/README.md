@@ -7,11 +7,11 @@
 ## 页面
 
 - 概览：今日执行、成功、失败、进行中、最近运行和脱敏日志。
-- Telegram 账号：导入旧 Session 并验证，或通过短时 GitHub Login Runner 完成手机号、可重发/重试验证码、可选 2FA 登录；支持编辑、删除、启停和随时检查连接状态。
+- Telegram 账号：默认只输入手机号，再由短时 GitHub Login Runner 完成可重发/重试验证码和可选 2FA；旧 Session 导入保留为高级方式。支持编辑、删除、启停和随时检查连接状态。
 - 签到任务：账号、Skill、Bot、Command、Cron、Retry、Timeout、Thread、Delete After 全字段 CRUD，支持手动执行和未来五次 Cron 预览。
 - Skills：只读展示 Worker 中已部署的 `send_text`、`tg_signer` allowlist Registry。网页不能上传或执行任意代码。
 - 执行记录：按任务和状态筛选，查看 attempts、结构化错误和脱敏日志。
-- 设置：默认时区、`legacy`/`d1` 调度模式、通知开关。
+- 设置：全局 Telegram API_ID/API_HASH（只配置一次或自动复用旧账号）、默认时区、`legacy`/`d1` 调度模式、通知开关。
 
 ## 本地检查
 
@@ -40,7 +40,7 @@ npm test --prefix admin
 
 ## 安全约束
 
-- API_HASH、Session、代理密码、验证码和 2FA 只存在于当前表单和当次请求；提交后立即清空。
+- API_ID、API_HASH、Session、代理密码、验证码和 2FA 只存在于当前表单和当次请求；提交后立即清空，已保存值永不回显。
 - 浏览器代码不使用 `localStorage`、`sessionStorage` 或 IndexedDB。
 - API 返回、页面、Pages Function 均使用 `no-store`。
 - 写请求要求同源 `Origin` 和 `X-Requested-With: tg-checkin-admin`。

@@ -4,6 +4,7 @@ import { nextCronDate } from "./cron.js";
 import { HttpError, json, methodNotAllowed, readJson } from "./http.js";
 import { TERMINAL_LOGIN_STATUSES } from "./login-states.js";
 import { sendRunNotification } from "./notifications.js";
+import { resolveTelegramApplicationCredentialRefs } from "./telegram-application.js";
 import { redact, sanitizeLogText } from "./redaction.js";
 import { dispatchNextForAccount } from "./scheduler.js";
 import { exactObject, maskPhone, validateTaskRuntime } from "./validation.js";
@@ -94,8 +95,9 @@ async function claimTask(runId, env, repository, context, claims) {
   if (!execution) throw new HttpError(409, "run_not_claimable", "Task run is expired, busy, or already claimed.");
   const ownerId = execution.account_id;
   const session = await plaintext(repository, env, execution.session_secret_id, "telegram_session", ownerId, { required: true });
-  const apiId = await plaintext(repository, env, execution.api_id_secret_id, "api_id", ownerId);
-  const apiHash = await plaintext(repository, env, execution.api_hash_secret_id, "api_hash", ownerId);
+  const application = await resolveTelegramApplicationCredentialRefs(repository, execution);
+  const apiId = await plaintext(repository, env, application?.apiIdSecretId, "api_id", application?.ownerId);
+  const apiHash = await plaintext(repository, env, application?.apiHashSecretId, "api_hash", application?.ownerId);
   const proxy = await plaintext(repository, env, execution.proxy_secret_id, "proxy", ownerId);
   let signerImport = null;
   if (execution.skill_key === "tg_signer" && execution.tg_signer_import_secret_id) {
@@ -266,8 +268,23 @@ async function claimLogin(flowId, env, repository, context, claims) {
   const phone = validationMode
     ? null
     : await plaintext(repository, env, execution.phone_secret_id, "phone", ownerId, { required: true });
-  const apiId = await plaintext(repository, env, execution.api_id_secret_id, "api_id", ownerId, { required: !validationMode });
-  const apiHash = await plaintext(repository, env, execution.api_hash_secret_id, "api_hash", ownerId, { required: !validationMode });
+  const application = await resolveTelegramApplicationCredentialRefs(repository, execution);
+  const apiId = await plaintext(
+    repository,
+    env,
+    application?.apiIdSecretId,
+    "api_id",
+    application?.ownerId,
+    { required: !validationMode },
+  );
+  const apiHash = await plaintext(
+    repository,
+    env,
+    application?.apiHashSecretId,
+    "api_hash",
+    application?.ownerId,
+    { required: !validationMode },
+  );
   const session = validationMode
     ? await plaintext(repository, env, execution.session_secret_id, "telegram_session", ownerId, { required: true })
     : null;

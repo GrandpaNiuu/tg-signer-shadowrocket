@@ -93,6 +93,22 @@ test("uses a dedicated endpoint for notification secret replacement and clearing
   assert.equal(result.notification_chat_id_configured, false);
 });
 
+test("uses a dedicated endpoint for global Telegram application credentials", async () => {
+  let captured;
+  const client = new ApiClient({ fetchImpl: async (url, options) => {
+    captured = { url, method: options.method, body: JSON.parse(options.body) };
+    return new Response(JSON.stringify({ data: { telegram_application_configured: true } }), { status: 200 });
+  }});
+  const credentials = { api_id: "123456", api_hash: "0123456789abcdef0123456789abcdef" };
+  const result = await client.updateTelegramApplicationSettings(credentials);
+  assert.deepEqual(captured, {
+    url: "/api/v1/settings/telegram",
+    method: "PATCH",
+    body: credentials,
+  });
+  assert.equal(result.telegram_application_configured, true);
+});
+
 test("loads every cursor page for accounts, tasks, and runs", async () => {
   const requested = [];
   const client = new ApiClient({ fetchImpl: async (url) => {

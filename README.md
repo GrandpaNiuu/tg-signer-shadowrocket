@@ -37,11 +37,11 @@ D1 的 `scheduler_mode` 初始值为 `legacy`。只有完成迁移并在后台�
 
 - 概览：今日执行、成功、失败、进行中和最近脱敏日志。
 - Telegram 账号：添加、编辑、删除、启停、状态；支持导入旧 Session，并由短时 Runner 调用 `get_me` 验证后才标记 connected。
-- 网页登录：API_ID、API_HASH、手机号、验证码、可选 2FA，成功后自动导出并加密保存 Session。
+- 网页登录：新增账号只输入手机号，再依次输入验证码和可选 2FA；API_ID/API_HASH 在设置中统一配置一次，也可自动复用完整的旧账号凭据对。成功后自动导出并加密保存 Session。
 - 签到任务：账号、Skill、Bot、Command、Cron、Retry、Timeout、Thread、Delete After，全字段 CRUD、启停和手动执行。
 - Skill Registry：代码 allowlist 中的 `send_text` 与 `tg_signer`；数据库不能指定任意 Python/Shell 代码。
 - 执行记录：状态、时间、错误、耗时、重试、attempts 和脱敏日志。
-- 设置：默认时区、通知开关以及 `legacy`/`d1` 调度切换。
+- 设置：全局 Telegram 应用凭据、默认时区、通知开关以及 `legacy`/`d1` 调度切换。
 
 账号和任务数量没有仓库内的固定上限，实际吞吐受 Cloudflare 与 GitHub Actions 的个人账户配额限制。同一账号的任务串行执行，不同账号可以并行，避免多个 Runner 同时使用同一 Telegram Session。
 
@@ -123,7 +123,7 @@ D1 的 `scheduler_mode` 初始值为 `legacy`。只有完成迁移并在后台�
 后台新增账号时：
 
 ```text
-API_ID + API_HASH + 手机号
+手机号
   → GitHub 登录 Runner 发送验证码
   → 后台输入验证码（无效可重试，未收到可重新发送）
   → 如需要，再输入 2FA 密码
@@ -132,6 +132,8 @@ API_ID + API_HASH + 手机号
   → Worker AES-GCM 加密入 D1
   → 账号状态变为 connected
 ```
+
+API_ID 与 API_HASH 不再按账号填写。它们在“设置 → Telegram 应用”中加密保存一次，所有新账号统一使用；如果旧迁移账号已有完整凭据对，后台会自动复用，因此升级后无需重新配置。旧 Session 导入保留在新增账号窗口的高级标签中。
 
 Cloudflare Worker 无法保持 Telegram 长连接，因此登录由一个最长 20 分钟的短生命周期 GitHub Actions job 承担。验证码和 2FA 不进入 workflow inputs 或 Actions 日志。导入已有 Session 时复用同一短时 workflow，只执行 Session + `get_me` 验证；验证通过前账号保持 disconnected/login_pending。
 
