@@ -60,7 +60,7 @@ the key is not placed in URLs.
 
 Create the D1 database, Direct Upload Pages project, and one GitHub OAuth App.
 The OAuth App callback is
-`https://grandpaniu.ccwu.cc/api/auth/github/callback`. Cloudflare Access and its
+`https://telegram-checkin-admin.pages.dev/api/auth/github/callback`. Cloudflare Access and its
 billing activation are not used. The Worker deployment workflow applies all
 pending D1 migrations remotely before it deploys the Worker. Do not commit
 secrets.

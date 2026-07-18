@@ -5,7 +5,7 @@ import test from "node:test";
 import { createWorker } from "../src/app.js";
 import { createTestRepository } from "./d1-helper.js";
 
-const ADMIN_ORIGIN = "https://grandpaniu.ccwu.cc";
+const ADMIN_ORIGIN = "https://telegram-checkin-admin.pages.dev";
 
 function request(path, options = {}) {
   return new Request(`${ADMIN_ORIGIN}${path}`, options);

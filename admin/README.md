@@ -25,18 +25,18 @@ npm test --prefix admin
 
 ## Cloudflare Pages 部署
 
-本项目统一使用 **Direct Upload**，不要同时启用 Pages Git integration。首次先在 Cloudflare 创建 `telegram-checkin-admin` Direct Upload 项目并上传一次，再绑定生产域名 **`grandpaniu.ccwu.cc`**；后续只由 `.github/workflows/deploy-admin.yml` 发布：
+本项目统一使用 **Direct Upload**，不要同时启用 Pages Git integration。首次先在 Cloudflare 创建 `telegram-checkin-admin` Direct Upload 项目并上传一次，生产地址使用 **`https://telegram-checkin-admin.pages.dev`**；后续只由 `.github/workflows/deploy-admin.yml` 发布：
 
 - Framework preset：None
 - Build command：留空
 - Production branch：`main`
 - 上传目录：`admin/`
 - Service Binding：变量名 `CONTROL_PLANE`，服务 `tg-signer-shadowrocket`
-- 环境变量：生产环境设置 `CANONICAL_HOST=grandpaniu.ccwu.cc`
+- 环境变量：生产环境设置 `CANONICAL_HOST=telegram-checkin-admin.pages.dev`
 
 `wrangler.toml` 已包含 Pages 输出目录和 Service Binding。部署 workflow 使用固定 Wrangler 版本执行 Direct Upload；生产绑定仍需核对目标 Worker 名称。
 
-不需要开通 Cloudflare Zero Trust，也不需要银行卡或账单授权。在 GitHub 创建一个 OAuth App，把 Homepage URL 设为 `https://grandpaniu.ccwu.cc`，Authorization callback URL 设为 `https://grandpaniu.ccwu.cc/api/auth/github/callback`。Client ID 与 Client Secret 只保存为 Worker Secrets。项目的 `pages.dev` 地址由全局 Pages middleware 以 308 跳转到自定义域名。
+不需要开通 Cloudflare Zero Trust，也不需要银行卡或账单授权。在 GitHub 创建一个 OAuth App，把 Homepage URL 设为 `https://telegram-checkin-admin.pages.dev`，Authorization callback URL 设为 `https://telegram-checkin-admin.pages.dev/api/auth/github/callback`。Client ID 与 Client Secret 只保存为 Worker Secrets。预览 `pages.dev` 主机名由全局 Pages middleware 以 308 跳转到固定的生产 `pages.dev` 地址。
 
 ## 安全约束
 

@@ -1,4 +1,4 @@
-const DEFAULT_CANONICAL_HOST = "grandpaniu.ccwu.cc";
+const DEFAULT_CANONICAL_HOST = "telegram-checkin-admin.pages.dev";
 
 function canonicalHost(env) {
   const value = String(env.CANONICAL_HOST || DEFAULT_CANONICAL_HOST).trim().toLowerCase();
@@ -7,8 +7,9 @@ function canonicalHost(env) {
 
 export async function onRequest(context) {
   const url = new URL(context.request.url);
-  if (url.hostname.endsWith(".pages.dev")) {
-    url.hostname = canonicalHost(context.env);
+  const targetHost = canonicalHost(context.env);
+  if (url.hostname.endsWith(".pages.dev") && url.hostname !== targetHost) {
+    url.hostname = targetHost;
     url.port = "";
     url.protocol = "https:";
     return Response.redirect(url.toString(), 308);
