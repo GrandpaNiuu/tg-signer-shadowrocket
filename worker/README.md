@@ -6,13 +6,21 @@ module Worker with no third-party runtime dependencies.
 
 ## Routes
 
-An opaque D1-backed GitHub administrator session protects all administrator
-routes. Public authentication routes are:
+An opaque D1-backed user session protects workspace routes. GitHub identities
+are registered on first login, while the configured immutable GitHub user id
+claims the preserved administrator. Public authentication routes are:
 
+- `GET /api/auth/config`
 - `GET /api/auth/github/start`
 - `GET /api/auth/github/callback`
+- `POST /api/auth/email/register|verify|login|forgot-password|reset-password`
 - `GET /api/auth/me` (`GET /api/auth/session` remains as a compatibility alias)
 - `POST /api/auth/logout`
+
+Authenticated session routes are:
+
+- `GET /api/auth/sessions`
+- `DELETE /api/auth/sessions/:id`
 
 Authenticated routes are:
 
@@ -22,7 +30,7 @@ Authenticated routes are:
 - `POST /api/v1/tasks/:id/runs`
 - `GET /api/v1/skills`
 - `GET /api/v1/task-runs`, `GET /api/v1/task-runs/:id`
-- `GET|PATCH /api/v1/settings`
+- `GET|PATCH /api/v1/settings` (platform writes require the administrator role)
 - `PATCH /api/v1/settings/telegram`, `PATCH /api/v1/settings/notifications`
 - `POST /api/v1/login-flows`, `GET /api/v1/login-flows/:id`
 - `POST /api/v1/login-flows/:id/code|password|cancel`
@@ -35,7 +43,7 @@ opaque run or flow id:
 - `POST /api/runner/login-flows/:id/input/claim`
 - `POST /api/runner/migrations/legacy`
 
-Successful administrator responses use `{ "data": ... }`; list responses also
+Successful API responses use `{ "data": ... }`; list responses also
 include `pagination`. Errors always use
 `{ "error": { "code": "...", "message": "...", "details": ... } }`.
 Runner claim responses intentionally follow the Runner's direct TaskSpec schema.
@@ -72,6 +80,8 @@ Worker secrets:
 - `SECRET_ROOT_KEY`: base64 for exactly 32 random bytes
 - optional `SECRET_ROOT_KEY_V1`, `SECRET_ROOT_KEY_V2`, ... during key rotation
 - `GITHUB_OAUTH_CLIENT_ID` and `GITHUB_OAUTH_CLIENT_SECRET`
+- for email authentication: `PASSWORD_PEPPER`, `TURNSTILE_SECRET_KEY`, and
+  `RESEND_API_KEY`
 
 Variables:
 
@@ -79,6 +89,8 @@ Variables:
 - `RUNNER_OIDC_AUDIENCE`
 - `ADMIN_ORIGIN`, `ADMIN_GITHUB_LOGIN`, and immutable `ADMIN_GITHUB_USER_ID`
 - optional `ADMIN_SESSION_TTL_SECONDS` (5 minutes to 30 days; default 7 days)
+- for email authentication: public `TURNSTILE_SITE_KEY`, verified sender
+  `AUTH_EMAIL_FROM`, and optional `PASSWORD_HASH_ITERATIONS` (default 600000)
 - optional explicit `RUNNER_WORKFLOW_REF`, `LOGIN_WORKFLOW_REF`, and
   `MIGRATION_WORKFLOW_REF`
 
@@ -98,7 +110,12 @@ successful dry-run and legacy import; switching it back is the rollback.
   stored in D1; authorization codes are bound with S256 PKCE. Administrator
   session tokens are random 256-bit values; D1 stores
   only their hashes, and logout revokes the matching row immediately.
-- Both the configured GitHub login and immutable numeric user id must match.
+- Every GitHub identity may create an isolated user workspace. Only the
+  configured immutable numeric GitHub user id can claim `legacy-admin`; a
+  matching mutable login name alone never grants administrator privileges.
+- Email passwords use PBKDF2-HMAC-SHA256 with a random per-user salt and a
+  deployment pepper. Turnstile is verified server-side, and verification/reset
+  tokens are one-time SHA-256 digests with bounded expiry.
 - Each ciphertext uses a random 96-bit nonce and AAD bound to purpose, owner,
   and key version.
 - Code and 2FA secrets have the login flow's short expiry and can only be

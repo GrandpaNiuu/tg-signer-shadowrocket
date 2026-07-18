@@ -38,8 +38,21 @@ export function createWorker(dependencies = {}) {
         }
         if (url.pathname.startsWith("/api/v1/")) {
           const repository = repositoryFactory(env);
-          await verifyAdmin(request, env, repository);
-          return await handleAdminApi(request, env, repository, { uuid, now, fetch: fetchImpl });
+          const verified = await verifyAdmin(request, env, repository);
+          const identity = {
+            ...verified,
+            user_id: verified?.user_id || "legacy-admin",
+            role: verified?.role || "admin",
+          };
+          const userRepository = typeof repository.forUser === "function"
+            ? repository.forUser(identity)
+            : repository;
+          return await handleAdminApi(request, env, userRepository, {
+            uuid,
+            now,
+            fetch: fetchImpl,
+            identity,
+          });
         }
         if (url.pathname.startsWith("/api/runner/")) {
           const claims = await verifyRunner(request, env);

@@ -12,7 +12,7 @@ function request(path, options = {}) {
 }
 
 function harness(fetchImpl = globalThis.fetch) {
-  const { db, repository } = createTestRepository();
+  const { sqlite, db, repository } = createTestRepository();
   let current = new Date("2026-07-18T00:00:00.000Z");
   const worker = createWorker({
     fetch: fetchImpl,
@@ -27,7 +27,7 @@ function harness(fetchImpl = globalThis.fetch) {
     GITHUB_OAUTH_CLIENT_ID: "client-id",
     GITHUB_OAUTH_CLIENT_SECRET: "client-secret",
   };
-  return { worker, env, setNow: (value) => { current = new Date(value); } };
+  return { sqlite, repository, worker, env, setNow: (value) => { current = new Date(value); } };
 }
 
 async function loginSession(worker, env) {
@@ -37,7 +37,7 @@ async function loginSession(worker, env) {
     headers: { cookie: `tg_oauth_state=${state}` },
   }), env);
   const cookies = callback.headers.getSetCookie?.() || [callback.headers.get("set-cookie")];
-  return cookies.find((cookie) => cookie.startsWith("tg_admin_session=")).split(";", 1)[0];
+  return cookies.find((cookie) => cookie.startsWith("tg_session=")).split(";", 1)[0];
 }
 
 test("GitHub login start redirects with a one-time state cookie", async () => {
@@ -87,7 +87,7 @@ test("GitHub login requires a configured immutable numeric user id", async () =>
   assert.equal((await invalid.json()).error.code, "admin_auth_not_configured");
 });
 
-test("GitHub callback creates a session only for the configured administrator", async () => {
+test("GitHub callback creates a secure user session for the configured administrator", async () => {
   const calls = [];
   const fetch = async (url, init = {}) => {
     calls.push({ url: String(url), init });
@@ -111,8 +111,8 @@ test("GitHub callback creates a session only for the configured administrator", 
   assert.equal(response.status, 302);
   assert.equal(response.headers.get("location"), `${ADMIN_ORIGIN}/#/dashboard`);
   const cookies = response.headers.getSetCookie?.() || [response.headers.get("set-cookie")];
-  assert.ok(cookies.some((cookie) => /^tg_admin_session=[A-Za-z0-9_-]{32,};/.test(cookie)));
-  assert.ok(cookies.some((cookie) => /tg_admin_session=.*HttpOnly.*Secure.*SameSite=Lax/i.test(cookie)));
+  assert.ok(cookies.some((cookie) => /^tg_session=[A-Za-z0-9_-]{32,};/.test(cookie)));
+  assert.ok(cookies.some((cookie) => /tg_session=.*HttpOnly.*Secure.*SameSite=Lax/i.test(cookie)));
   assert.ok(cookies.some((cookie) => /^tg_oauth_state=;/.test(cookie)));
   assert.equal(calls.length, 2);
   const tokenRequest = JSON.parse(calls[0].init.body);
@@ -142,7 +142,7 @@ test("a valid GitHub session authenticates the identity and administrator interf
     headers: { cookie: `tg_oauth_state=${state}` },
   }), env);
   const cookies = callback.headers.getSetCookie?.() || [callback.headers.get("set-cookie")];
-  const sessionCookie = cookies.find((cookie) => cookie.startsWith("tg_admin_session=")).split(";", 1)[0];
+  const sessionCookie = cookies.find((cookie) => cookie.startsWith("tg_session=")).split(";", 1)[0];
 
   const identityResponse = await worker.fetch(request("/api/auth/me", {
     headers: { cookie: sessionCookie },
@@ -151,9 +151,12 @@ test("a valid GitHub session authenticates the identity and administrator interf
   const identityPayload = await identityResponse.json();
   assert.deepEqual(identityPayload.data, {
     authenticated: true,
+    user_id: "legacy-admin",
+    role: "admin",
     provider: "github",
     login: "GrandpaNiuu",
     name: "Grandpa Niu",
+    email: null,
   });
 
   const legacyIdentityResponse = await worker.fetch(request("/api/auth/session", {
@@ -169,7 +172,7 @@ test("a valid GitHub session authenticates the identity and administrator interf
 
   const anonymous = await worker.fetch(request("/api/v1/skills"), env);
   assert.equal(anonymous.status, 401);
-  assert.equal((await anonymous.json()).error.code, "admin_authentication_required");
+  assert.equal((await anonymous.json()).error.code, "authentication_required");
 });
 
 test("logout revokes the D1 session and clears the browser cookie", async () => {
@@ -191,14 +194,14 @@ test("logout revokes the D1 session and clears the browser cookie", async () => 
   }), env);
 
   assert.equal(logout.status, 204);
-  assert.match(logout.headers.get("set-cookie"), /^tg_admin_session=;.*Max-Age=0/i);
+  assert.match(logout.headers.get("set-cookie"), /tg_session=;.*Max-Age=0/i);
   const afterLogout = await worker.fetch(request("/api/v1/skills", {
     headers: { cookie: sessionCookie },
   }), env);
   assert.equal(afterLogout.status, 401);
 });
 
-test("a different GitHub account cannot become the administrator", async () => {
+test("a different GitHub account is registered as a regular user", async () => {
   const fetch = async (url) => {
     if (String(url) === "https://github.com/login/oauth/access_token") {
       return Response.json({ access_token: "attacker-token" });
@@ -208,7 +211,7 @@ test("a different GitHub account cannot become the administrator", async () => {
     }
     return new Response(null, { status: 404 });
   };
-  const { worker, env } = harness(fetch);
+  const { sqlite, worker, env } = harness(fetch);
   const start = await worker.fetch(request("/api/auth/github/start"), env);
   const state = new URL(start.headers.get("location")).searchParams.get("state");
 
@@ -216,12 +219,13 @@ test("a different GitHub account cannot become the administrator", async () => {
     headers: { cookie: `tg_oauth_state=${state}` },
   }), env);
 
-  assert.equal(response.status, 403);
-  assert.equal((await response.json()).error.code, "admin_forbidden");
-  assert.doesNotMatch(response.headers.get("set-cookie") || "", /tg_admin_session=/);
+  assert.equal(response.status, 302);
+  const registered = sqlite.prepare("SELECT role, status FROM users WHERE github_user_id = '999'").get();
+  assert.deepEqual({ ...registered }, { role: "user", status: "active" });
+  assert.match(response.headers.get("set-cookie") || "", /tg_session=/);
 });
 
-test("the configured login is rejected when its immutable GitHub user id does not match", async () => {
+test("a matching login name cannot claim administrator without the immutable GitHub id", async () => {
   const fetch = async (url) => {
     if (String(url) === "https://github.com/login/oauth/access_token") {
       return Response.json({ access_token: "attacker-token" });
@@ -231,7 +235,7 @@ test("the configured login is rejected when its immutable GitHub user id does no
     }
     return new Response(null, { status: 404 });
   };
-  const { worker, env } = harness(fetch);
+  const { sqlite, worker, env } = harness(fetch);
   const start = await worker.fetch(request("/api/auth/github/start"), env);
   const state = new URL(start.headers.get("location")).searchParams.get("state");
 
@@ -239,9 +243,9 @@ test("the configured login is rejected when its immutable GitHub user id does no
     headers: { cookie: `tg_oauth_state=${state}` },
   }), env);
 
-  assert.equal(response.status, 403);
-  assert.equal((await response.json()).error.code, "admin_forbidden");
-  assert.doesNotMatch(response.headers.get("set-cookie") || "", /tg_admin_session=/);
+  assert.equal(response.status, 302);
+  assert.equal(sqlite.prepare("SELECT role FROM users WHERE github_user_id = '999'").get().role, "user");
+  assert.match(response.headers.get("set-cookie") || "", /tg_session=/);
 });
 
 test("an OAuth state cannot be replayed", async () => {
@@ -285,4 +289,100 @@ test("an expired administrator session is rejected", async () => {
     headers: { cookie: sessionCookie },
   }), env);
   assert.equal(admin.status, 401);
+  assert.equal((await admin.json()).error.code, "authentication_required");
+});
+
+test("a new GitHub identity is automatically registered into an isolated user workspace", async () => {
+  const fetch = async (url) => {
+    if (String(url) === "https://github.com/login/oauth/access_token") {
+      return Response.json({ access_token: "new-user-token", token_type: "bearer" });
+    }
+    if (String(url) === "https://api.github.com/user") {
+      return Response.json({ id: 987654, login: "PublicUser", name: "Public User" });
+    }
+    return new Response(null, { status: 404 });
+  };
+  const { sqlite, worker, env } = harness(fetch);
+  const start = await worker.fetch(request("/api/auth/github/start"), env);
+  const state = new URL(start.headers.get("location")).searchParams.get("state");
+  const callback = await worker.fetch(request(`/api/auth/github/callback?code=oauth-code&state=${state}`, {
+    headers: { cookie: `tg_oauth_state=${state}` },
+  }), env);
+
+  assert.equal(callback.status, 302);
+  const cookies = callback.headers.getSetCookie?.() || [callback.headers.get("set-cookie")];
+  const sessionCookie = cookies.find((cookie) => cookie.startsWith("tg_session="))?.split(";", 1)[0];
+  assert.ok(sessionCookie);
+  const user = sqlite.prepare("SELECT id, role, status, github_user_id, github_login FROM users WHERE github_user_id = ?")
+    .get("987654");
+  assert.equal(user.role, "user");
+  assert.equal(user.status, "active");
+  assert.equal(user.github_login, "PublicUser");
+
+  const identity = await worker.fetch(request("/api/auth/me", {
+    headers: { cookie: sessionCookie },
+  }), env).then((response) => response.json());
+  assert.deepEqual(identity.data, {
+    authenticated: true,
+    user_id: user.id,
+    role: "user",
+    provider: "github",
+    login: "PublicUser",
+    name: "Public User",
+    email: null,
+  });
+
+  const accounts = await worker.fetch(request("/api/v1/accounts", {
+    headers: { cookie: sessionCookie },
+  }), env).then((response) => response.json());
+  assert.deepEqual(accounts.data, []);
+});
+
+test("the configured GitHub id claims the preserved administrator and all legacy data", async () => {
+  const fetch = async (url) => String(url).includes("access_token")
+    ? Response.json({ access_token: "admin-token" })
+    : Response.json({ id: 123456, login: "GrandpaNiuu", name: "Grandpa Niu" });
+  const { sqlite, worker, env } = harness(fetch);
+  const timestamp = "2026-07-18T00:00:00.000Z";
+  sqlite.prepare(`INSERT INTO accounts
+    (id, name, phone_masked, status, enabled, created_at, updated_at)
+    VALUES ('legacy-visible', 'Existing account', '+86*******5678', 'connected', 1, ?, ?)`).run(timestamp, timestamp);
+
+  const start = await worker.fetch(request("/api/auth/github/start"), env);
+  const state = new URL(start.headers.get("location")).searchParams.get("state");
+  const callback = await worker.fetch(request(`/api/auth/github/callback?code=oauth-code&state=${state}`, {
+    headers: { cookie: `tg_oauth_state=${state}` },
+  }), env);
+  const cookies = callback.headers.getSetCookie?.() || [callback.headers.get("set-cookie")];
+  const sessionCookie = cookies.find((cookie) => cookie.startsWith("tg_session="))?.split(";", 1)[0];
+  assert.ok(sessionCookie);
+
+  const identity = await worker.fetch(request("/api/auth/me", { headers: { cookie: sessionCookie } }), env)
+    .then((response) => response.json());
+  assert.equal(identity.data.user_id, "legacy-admin");
+  assert.equal(identity.data.role, "admin");
+  const accounts = await worker.fetch(request("/api/v1/accounts", { headers: { cookie: sessionCookie } }), env)
+    .then((response) => response.json());
+  assert.deepEqual(accounts.data.map((account) => account.id), ["legacy-visible"]);
+});
+
+test("an existing tg_admin_session cookie remains valid during the public-user migration", async () => {
+  const { repository, worker, env } = harness();
+  const token = "legacy-session-token-that-is-long-enough-123";
+  const tokenHash = createHash("sha256").update(token).digest("base64url");
+  await repository.createAdminSession({
+    token_hash: tokenHash,
+    github_user_id: "123456",
+    github_login: "GrandpaNiuu",
+    github_name: "Grandpa Niu",
+    created_at: "2026-07-18T00:00:00.000Z",
+    expires_at: "2026-07-25T00:00:00.000Z",
+  });
+
+  const identity = await worker.fetch(request("/api/auth/me", {
+    headers: { cookie: `tg_admin_session=${token}` },
+  }), env).then((response) => response.json());
+  assert.equal(identity.data.authenticated, true);
+  assert.equal(identity.data.user_id, "legacy-admin");
+  assert.equal(identity.data.role, "admin");
 });

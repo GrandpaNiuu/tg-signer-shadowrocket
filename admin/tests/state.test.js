@@ -1,6 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createStore, filterRows, listFrom, routeFromHash } from "../src/state.js";
+import {
+  createStore,
+  filterRows,
+  listFrom,
+  needsTelegramApplicationSetup,
+  routeFromHash,
+} from "../src/state.js";
 
 test("normalizes unknown routes to dashboard", () => {
   assert.equal(routeFromHash("#/accounts"), "accounts");
@@ -19,8 +25,17 @@ test("store notifies subscribers and keeps state in memory", () => {
 });
 
 test("extracts collection envelopes and filters rows", () => {
-  const rows = [{ id: 1, name: "主账号", status: "connected" }, { id: 2, name: "备用", status: "pending" }];
+  const rows = [{ id: 1, name: "???", status: "connected" }, { id: 2, name: "??", status: "pending" }];
   assert.deepEqual(listFrom({ accounts: rows }, ["accounts"]), rows);
-  assert.deepEqual(filterRows(rows, { query: "主", status: "connected" }), [rows[0]]);
+  assert.deepEqual(filterRows(rows, { query: "?", status: "connected" }), [rows[0]]);
   assert.deepEqual(filterRows(rows, { status: "failed" }), []);
+});
+
+test("requires one-time Telegram application setup before phone login", () => {
+  assert.equal(needsTelegramApplicationSetup({}), true);
+  assert.equal(needsTelegramApplicationSetup({ telegram_application_source: "missing" }), true);
+  assert.equal(needsTelegramApplicationSetup({ telegram_application_configured: false }), true);
+  assert.equal(needsTelegramApplicationSetup({ telegram_application_configured: true }), false);
+  assert.equal(needsTelegramApplicationSetup({ telegram_application_source: "global" }), false);
+  assert.equal(needsTelegramApplicationSetup({ telegram_application_source: "legacy_account" }), false);
 });

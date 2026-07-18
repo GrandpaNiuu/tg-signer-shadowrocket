@@ -26,7 +26,7 @@ test("account edit controls never render stored credentials and support explicit
     assert.match(fields, new RegExp(`name=\\"${name}\\"[^>]*data-sensitive[^>]*value=\\"\\"`));
   }
   assert.doesNotMatch(fields, /name="api_id"|name="api_hash"/);
-  assert.match(fields, /设置/);
+  assert.match(fields, /??/);
   assert.match(fields, /name="session"[^>]*data-sensitive/);
   assert.match(fields, /name="clear_session"/);
   assert.match(fields, /name="clear_proxy"/);
@@ -36,7 +36,7 @@ test("account edit controls never render stored credentials and support explicit
 test("new account login asks for a phone number instead of per-account API credentials", async () => {
   const app = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
   const start = app.indexOf("function accountFields");
-  const end = app.indexOf("function openAccountWizard", start);
+  const end = app.indexOf("function openTelegramApplicationSetup", start);
   assert.notEqual(start, -1);
   assert.notEqual(end, -1);
   const fields = app.slice(start, end);
@@ -44,11 +44,20 @@ test("new account login asks for a phone number instead of per-account API crede
   assert.match(fields, /name="session"/);
   assert.doesNotMatch(fields, /API_ID|API_HASH|name="api_id"|name="api_hash"/);
 
-  const wizardStart = end;
+  const wizardStart = app.indexOf("function openAccountWizard", end);
   const wizardEnd = app.indexOf("function accountPayload", wizardStart);
   const wizard = app.slice(wizardStart, wizardEnd);
-  assert.match(wizard, /手机号登录/);
-  assert.match(wizard, /输入手机号/);
+  assert.match(wizard, /?????/);
+  assert.match(wizard, /?????/);
+});
+
+test("missing platform credentials open a one-time setup wizard instead of a dead-end toast", async () => {
+  const app = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
+  assert.match(app, /function openTelegramApplicationSetup/);
+  assert.match(app, /id="telegram-application-setup-form"/);
+  assert.match(app, /https:\/\/my\.telegram\.org\/apps/);
+  assert.match(app, /needsTelegramApplicationSetup\(store\.get\(\)\.settings\)/);
+  assert.match(app, /telegram_application_not_configured/);
 });
 
 test("notification settings render only blank sensitive inputs with explicit clear controls", async () => {
@@ -67,7 +76,7 @@ test("global Telegram application settings use blank secret inputs and explain l
     assert.match(app, new RegExp(`name=\\"${name}\\"[^>]*data-sensitive[^>]*value=\\"\\"`));
   }
   assert.match(app, /telegram_application_source/);
-  assert.match(app, /旧账号/);
+  assert.match(app, /???/);
   assert.doesNotMatch(app, /value="\$\{settings\.telegram_(?:api_id|api_hash)/);
 });
 
@@ -79,18 +88,19 @@ test("transient Telegram login errors keep polling the current account", async (
   assert.notEqual(end, -1);
   const loginFlow = app.slice(start, end);
   assert.match(loginFlow, /status === "starting" && flow\.last_error/);
-  assert.match(loginFlow, /Runner 会自动重试，无需重新添加账号/);
+  assert.match(loginFlow, /Runner ??????????????/);
   assert.match(loginFlow, /shouldPoll = true/);
 });
 
-test("the administrator shell is gated by GitHub login before data loads", async () => {
+test("the application shell is gated by an authenticated user before data loads", async () => {
   const [html, app, api] = await Promise.all([
     readFile(new URL("../index.html", import.meta.url), "utf8"),
     readFile(new URL("../src/app.js", import.meta.url), "utf8"),
     readFile(new URL("../src/api.js", import.meta.url), "utf8"),
   ]);
   assert.match(html, /id="auth-gate"[^>]*hidden/);
-  assert.match(html, /href="\/api\/auth\/github\/start"/);
+  assert.match(app, /href="\/api\/auth\/github\/start"/);
+  assert.match(app, /api\.authConfig\(\)/);
   assert.match(html, /id="app"[^>]*hidden/);
   assert.match(html, /id="logout-button"/);
   assert.doesNotMatch(html, /Cloudflare Access/);
@@ -112,4 +122,24 @@ test("logout redirects only after the server revokes the session", async () => {
   assert.match(logout, /await api\.logout\(\);\s*location\.replace\("\/"\);/);
   assert.match(logout, /catch \(error\)/);
   assert.match(logout, /event\.currentTarget\.disabled = false/);
+});
+
+test("the public auth gate offers GitHub and verified email registration without browser persistence", async () => {
+  const [html, app, headers] = await Promise.all([
+    readFile(new URL("../index.html", import.meta.url), "utf8"),
+    readFile(new URL("../src/app.js", import.meta.url), "utf8"),
+    readFile(new URL("../_headers", import.meta.url), "utf8"),
+  ]);
+  assert.match(html, /id="auth-content"/);
+  assert.match(app, /email-register-form/);
+  assert.match(app, /email-login-form/);
+  assert.match(app, /forgot-password-form/);
+  assert.match(app, /reset-password-form/);
+  assert.match(app, /api\.registerEmail/);
+  assert.match(app, /api\.loginEmail/);
+  assert.match(app, /api\.verifyEmail/);
+  assert.match(app, /api\.resetPassword/);
+  assert.match(headers, /script-src[^\n]*https:\/\/challenges\.cloudflare\.com/);
+  assert.match(headers, /frame-src[^\n]*https:\/\/challenges\.cloudflare\.com/);
+  assert.doesNotMatch(`${html}\n${app}`, /localStorage|sessionStorage|indexedDB/);
 });

@@ -1,6 +1,8 @@
 import { HttpError, json } from "./http.js";
+import { createEmailAuth } from "./email-auth.js";
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+const TOKEN_PATTERN_FOR_SESSION = /^[A-Za-z0-9_-]{32,128}$/;
 
 function bytesToBase64Url(bytes) {
   let binary = "";
@@ -106,18 +108,58 @@ function sessionTtlSeconds(env) {
   return Number.isInteger(configured) && configured >= 300 && configured <= 2592000 ? configured : 604800;
 }
 
+function publicAuthConfiguration(env) {
+  const githubEnabled = Boolean(String(env.GITHUB_OAUTH_CLIENT_ID || "").trim()
+    && String(env.GITHUB_OAUTH_CLIENT_SECRET || "").trim());
+  const turnstileSiteKey = String(env.TURNSTILE_SITE_KEY || "").trim();
+  const emailEnabled = Boolean(
+    turnstileSiteKey
+    && String(env.TURNSTILE_SECRET_KEY || "").trim()
+    && String(env.RESEND_API_KEY || "").trim()
+    && String(env.AUTH_EMAIL_FROM || "").trim()
+    && String(env.PASSWORD_PEPPER || "").length >= 16
+    && String(env.ADMIN_ORIGIN || "").trim(),
+  );
+  return {
+    github_enabled: githubEnabled,
+    email_enabled: emailEnabled,
+    registration_enabled: true,
+    turnstile_site_key: emailEnabled ? turnstileSiteKey : null,
+  };
+}
+
 async function sessionIdentity(request, env, repository, timestamp) {
   const policy = identityPolicy(env);
-  const token = cookieValue(request, "tg_admin_session");
-  if (!/^[A-Za-z0-9_-]{32,128}$/.test(token)) return null;
-  const session = await repository.getAdminSession(await tokenHash(token), timestamp);
-  if (!session || session.github_login.toLowerCase() !== policy.allowedLogin.toLowerCase()) return null;
-  if (session.github_user_id !== policy.allowedUserId) return null;
+  const token = cookieValue(request, "tg_session");
+  if (/^[A-Za-z0-9_-]{32,128}$/.test(token)) {
+    const session = await repository.getUserSession(await tokenHash(token), timestamp);
+    if (session) {
+      return {
+        authenticated: true,
+        user_id: session.user_id,
+        role: session.role,
+        provider: session.provider,
+        login: session.github_login || session.email || null,
+        name: session.github_name || session.display_name || null,
+        email: session.email || null,
+      };
+    }
+  }
+
+  // Existing deployments keep working until their old administrator cookie expires.
+  const legacyToken = cookieValue(request, "tg_admin_session");
+  if (!/^[A-Za-z0-9_-]{32,128}$/.test(legacyToken)) return null;
+  const legacy = await repository.getAdminSession(await tokenHash(legacyToken), timestamp);
+  if (!legacy || legacy.github_login.toLowerCase() !== policy.allowedLogin.toLowerCase()) return null;
+  if (legacy.github_user_id !== policy.allowedUserId) return null;
   return {
     authenticated: true,
+    user_id: legacy.user_id || "legacy-admin",
+    role: "admin",
     provider: "github",
-    login: session.github_login,
-    name: session.github_name || null,
+    login: legacy.github_login,
+    name: legacy.github_name || null,
+    email: null,
   };
 }
 
@@ -125,27 +167,56 @@ export function createAdminAuth(dependencies = {}) {
   const fetchImpl = dependencies.fetch || globalThis.fetch;
   const now = dependencies.now || (() => new Date());
   const randomToken = dependencies.randomToken || secureToken;
+  const emailAuth = createEmailAuth({ fetch: fetchImpl, now, randomToken });
 
   return {
     async handle(request, env, repository) {
       const url = new URL(request.url);
+      const emailResponse = await emailAuth.handle(request, env, repository);
+      if (emailResponse) return emailResponse;
+      if (url.pathname === "/api/auth/config" && request.method === "GET") {
+        return json({ data: publicAuthConfiguration(env) });
+      }
       if (["/api/auth/me", "/api/auth/session"].includes(url.pathname) && request.method === "GET") {
         const identity = await sessionIdentity(request, env, repository, new Date(now()).toISOString());
         return json({ data: identity || { authenticated: false, provider: "github" } });
       }
 
-      if (url.pathname === "/api/auth/logout" && request.method === "POST") {
-        const token = cookieValue(request, "tg_admin_session");
-        if (/^[A-Za-z0-9_-]{32,128}$/.test(token)) {
-          await repository.revokeAdminSession(await tokenHash(token), new Date(now()).toISOString());
+      if ((url.pathname === "/api/auth/sessions" || url.pathname.startsWith("/api/auth/sessions/"))) {
+        const timestamp = new Date(now()).toISOString();
+        const identity = await sessionIdentity(request, env, repository, timestamp);
+        if (!identity) throw new HttpError(401, "authentication_required", "?????");
+        if (url.pathname === "/api/auth/sessions" && request.method === "GET") {
+          const token = cookieValue(request, "tg_session");
+          const currentHash = TOKEN_PATTERN_FOR_SESSION.test(token) ? await tokenHash(token) : "";
+          return json({ data: await repository.listUserSessions(identity.user_id, currentHash, timestamp) });
         }
-        return new Response(null, {
-          status: 204,
-          headers: {
-            "cache-control": "no-store",
-            "set-cookie": "tg_admin_session=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Lax",
-          },
-        });
+        if (request.method === "DELETE") {
+          const sessionId = decodeURIComponent(url.pathname.slice("/api/auth/sessions/".length));
+          if (!/^[A-Za-z0-9_-]{8,160}$/.test(sessionId)) {
+            throw new HttpError(404, "session_not_found", "????????");
+          }
+          const revoked = await repository.revokeUserSessionById(identity.user_id, sessionId, timestamp);
+          if (!revoked) throw new HttpError(404, "session_not_found", "????????");
+          return new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
+        }
+        throw new HttpError(405, "method_not_allowed", "Method not allowed.");
+      }
+
+      if (url.pathname === "/api/auth/logout" && request.method === "POST") {
+        const timestamp = new Date(now()).toISOString();
+        const token = cookieValue(request, "tg_session");
+        if (/^[A-Za-z0-9_-]{32,128}$/.test(token)) {
+          await repository.revokeUserSession(await tokenHash(token), timestamp);
+        }
+        const legacyToken = cookieValue(request, "tg_admin_session");
+        if (/^[A-Za-z0-9_-]{32,128}$/.test(legacyToken)) {
+          await repository.revokeAdminSession(await tokenHash(legacyToken), timestamp);
+        }
+        const headers = new Headers({ "cache-control": "no-store" });
+        headers.append("set-cookie", "tg_session=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Lax");
+        headers.append("set-cookie", "tg_admin_session=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Lax");
+        return new Response(null, { status: 204, headers });
       }
 
       if (url.pathname === "/api/auth/github/start" && request.method === "GET") {
@@ -186,25 +257,31 @@ export function createAdminAuth(dependencies = {}) {
           throw new HttpError(400, "invalid_oauth_state", "GitHub login state is invalid or expired.");
         }
 
-        const user = await githubIdentity(code, savedState.code_verifier, config, fetchImpl);
-        if (user.login.toLowerCase() !== config.allowedLogin.toLowerCase()
-          || String(user.id) !== config.allowedUserId) {
-          throw new HttpError(403, "admin_forbidden", "This GitHub account is not the configured administrator.");
-        }
+        const githubUser = await githubIdentity(code, savedState.code_verifier, config, fetchImpl);
+        const isAdmin = String(githubUser.id) === config.allowedUserId;
+        const user = await repository.upsertGithubUser({
+          id: `user-${randomToken(18)}`,
+          github_user_id: String(githubUser.id),
+          github_login: githubUser.login,
+          github_name: typeof githubUser.name === "string" ? githubUser.name.slice(0, 200) : null,
+          is_admin: isAdmin,
+          timestamp,
+        });
 
         const sessionToken = randomToken();
         const ttl = sessionTtlSeconds(env);
-        await repository.createAdminSession({
+        await repository.createUserSession({
+          id: `session-${randomToken(18)}`,
           token_hash: await tokenHash(sessionToken),
-          github_user_id: String(user.id),
-          github_login: user.login,
-          github_name: typeof user.name === "string" ? user.name.slice(0, 200) : null,
+          user_id: user.id,
+          provider: "github",
+          user_agent_label: String(request.headers.get("user-agent") || "").slice(0, 160),
           created_at: timestamp,
           expires_at: new Date(new Date(timestamp).getTime() + ttl * 1000).toISOString(),
         });
 
         const headers = new Headers();
-        headers.append("set-cookie", `tg_admin_session=${sessionToken}; Max-Age=${ttl}; Path=/; HttpOnly; Secure; SameSite=Lax`);
+        headers.append("set-cookie", `tg_session=${sessionToken}; Max-Age=${ttl}; Path=/; HttpOnly; Secure; SameSite=Lax`);
         headers.append("set-cookie", "tg_oauth_state=; Max-Age=0; Path=/api/auth/github/callback; HttpOnly; Secure; SameSite=Lax");
         return redirect(`${config.origin}${savedState.return_to}`, headers);
       }
@@ -215,7 +292,7 @@ export function createAdminAuth(dependencies = {}) {
     async verify(request, env, repository) {
       const identity = await sessionIdentity(request, env, repository, new Date(now()).toISOString());
       if (!identity) {
-        throw new HttpError(401, "admin_authentication_required", "GitHub administrator login is required.");
+        throw new HttpError(401, "authentication_required", "?????");
       }
       return identity;
     },

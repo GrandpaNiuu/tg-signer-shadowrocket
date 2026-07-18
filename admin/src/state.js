@@ -1,4 +1,4 @@
-export const ROUTES = Object.freeze(["dashboard", "accounts", "tasks", "skills", "runs", "settings"]);
+export const ROUTES = Object.freeze(["dashboard", "accounts", "tasks", "skills", "runs", "sessions", "settings"]);
 
 export function routeFromHash(hash = "") {
   const route = hash.replace(/^#?\/?/, "").split(/[/?]/)[0];
@@ -41,6 +41,12 @@ export function listFrom(value, candidateKeys = []) {
     if (Array.isArray(value?.[key])) return value[key];
   }
   return [];
+}
+
+export function needsTelegramApplicationSetup(settings = {}) {
+  if (settings.telegram_application_source === "global"
+    || settings.telegram_application_source === "legacy_account") return false;
+  return settings.telegram_application_configured !== true;
 }
 
 export function filterRows(rows, { query = "", status = "", accountId = "", taskId = "" } = {}) {

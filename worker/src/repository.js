@@ -12,6 +12,7 @@ function mapAccount(row) {
   if (!row) return null;
   return {
     id: row.id,
+    user_id: row.user_id,
     name: row.name,
     phone_masked: row.phone_masked,
     status: row.status,
@@ -27,6 +28,7 @@ function mapTask(row) {
   if (!row) return null;
   return {
     id: row.id,
+    user_id: row.user_id,
     name: row.name,
     account_id: row.account_id,
     account_name: row.account_name,
@@ -58,6 +60,7 @@ function mapRun(row) {
   if (!row) return null;
   return {
     id: row.id,
+    user_id: row.user_id,
     task_id: row.historical_task_id,
     task_name: row.task_name,
     account_id: row.historical_account_id,
@@ -179,8 +182,17 @@ const RUN_SELECT = `SELECT r.*,
   LEFT JOIN skills s ON s.id = t.skill_id`;
 
 export class D1Repository {
-  constructor(db) {
+  constructor(db, scope = {}) {
     this.db = db;
+    this.userId = scope.userId || null;
+    this.userRole = scope.role || null;
+  }
+
+  forUser(identity = {}) {
+    return new D1Repository(this.db, {
+      userId: identity.user_id || "legacy-admin",
+      role: identity.role || "admin",
+    });
   }
 
   async createAdminOAuthState(state) {
@@ -217,7 +229,7 @@ export class D1Repository {
   }
 
   async getAdminSession(tokenHash, timestamp) {
-    return this.db.prepare(`SELECT github_user_id, github_login, github_name, created_at, expires_at
+    return this.db.prepare(`SELECT user_id, github_user_id, github_login, github_name, created_at, expires_at
       FROM admin_sessions WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?`)
       .bind(tokenHash, timestamp).first();
   }
@@ -227,16 +239,219 @@ export class D1Repository {
       WHERE token_hash = ? AND revoked_at IS NULL`).bind(timestamp, tokenHash).run();
   }
 
+  async getUser(id) {
+    return this.db.prepare(`SELECT id, role, status, display_name, email, email_normalized,
+      email_verified_at, github_user_id, github_login, github_name, created_at, updated_at
+      FROM users WHERE id = ?`).bind(id).first();
+  }
+
+  async getUserByGithubId(githubUserId) {
+    return this.db.prepare(`SELECT id, role, status, display_name, email, email_normalized,
+      email_verified_at, github_user_id, github_login, github_name, created_at, updated_at
+      FROM users WHERE github_user_id = ?`).bind(githubUserId).first();
+  }
+
+  async getUserByEmail(emailNormalized) {
+    return this.db.prepare(`SELECT id, role, status, display_name, email, email_normalized,
+      email_verified_at, password_algorithm, password_hash, password_salt, password_iterations,
+      github_user_id, github_login, github_name, created_at, updated_at
+      FROM users WHERE email_normalized = ?`).bind(emailNormalized).first();
+  }
+
+  async createOrUpdatePendingEmailUser(user, password) {
+    const existing = await this.getUserByEmail(user.email_normalized);
+    if (existing?.status === "active" || existing?.status === "disabled") {
+      return { user: existing, verification_required: false };
+    }
+    if (existing) {
+      await this.db.prepare(`UPDATE users SET display_name = ?, email = ?,
+        password_algorithm = ?, password_hash = ?, password_salt = ?, password_iterations = ?,
+        updated_at = ? WHERE id = ? AND status = 'pending'`).bind(
+        user.display_name,
+        user.email,
+        password.password_algorithm,
+        password.password_hash,
+        password.password_salt,
+        password.password_iterations,
+        user.updated_at,
+        existing.id,
+      ).run();
+      return { user: await this.getUserByEmail(user.email_normalized), verification_required: true };
+    }
+    await this.db.prepare(`INSERT INTO users
+      (id, role, status, display_name, email, email_normalized, password_algorithm,
+       password_hash, password_salt, password_iterations, created_at, updated_at)
+      VALUES (?, 'user', 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
+      user.id,
+      user.display_name,
+      user.email,
+      user.email_normalized,
+      password.password_algorithm,
+      password.password_hash,
+      password.password_salt,
+      password.password_iterations,
+      user.created_at,
+      user.updated_at,
+    ).run();
+    return { user: await this.getUserByEmail(user.email_normalized), verification_required: true };
+  }
+
+  async createAuthToken(token) {
+    await this.db.batch([
+      this.db.prepare(`DELETE FROM auth_tokens
+        WHERE user_id = ? AND token_type = ?`).bind(token.user_id, token.token_type),
+      this.db.prepare(`INSERT INTO auth_tokens
+        (id, token_hash, user_id, token_type, expires_at, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)`).bind(
+        token.id,
+        token.token_hash,
+        token.user_id,
+        token.token_type,
+        token.expires_at,
+        token.created_at,
+      ),
+    ]);
+  }
+
+  async consumeEmailVerification(tokenHashValue, timestamp) {
+    const token = await this.db.prepare(`SELECT id, user_id FROM auth_tokens
+      WHERE token_hash = ? AND token_type = 'verify_email' AND consumed_at IS NULL AND expires_at > ?`)
+      .bind(tokenHashValue, timestamp).first();
+    if (!token) return null;
+    const result = await this.db.batch([
+      this.db.prepare(`UPDATE auth_tokens SET consumed_at = ?
+        WHERE id = ? AND consumed_at IS NULL AND expires_at > ?`).bind(timestamp, token.id, timestamp),
+      this.db.prepare(`UPDATE users SET status = 'active', email_verified_at = ?, updated_at = ?
+        WHERE id = ? AND status = 'pending' AND EXISTS (
+          SELECT 1 FROM auth_tokens WHERE id = ? AND consumed_at = ?
+        )`).bind(timestamp, timestamp, token.user_id, token.id, timestamp),
+    ]);
+    return changes(result[0]) ? this.getUser(token.user_id) : null;
+  }
+
+  async consumePasswordReset(tokenHashValue, password, timestamp) {
+    const token = await this.db.prepare(`SELECT id, user_id FROM auth_tokens
+      WHERE token_hash = ? AND token_type = 'password_reset' AND consumed_at IS NULL AND expires_at > ?`)
+      .bind(tokenHashValue, timestamp).first();
+    if (!token) return null;
+    const result = await this.db.batch([
+      this.db.prepare(`UPDATE auth_tokens SET consumed_at = ?
+        WHERE id = ? AND consumed_at IS NULL AND expires_at > ?`).bind(timestamp, token.id, timestamp),
+      this.db.prepare(`UPDATE users SET password_algorithm = ?, password_hash = ?, password_salt = ?,
+        password_iterations = ?, updated_at = ? WHERE id = ? AND status = 'active'
+        AND EXISTS (SELECT 1 FROM auth_tokens WHERE id = ? AND consumed_at = ?)`)
+        .bind(password.password_algorithm, password.password_hash, password.password_salt,
+          password.password_iterations, timestamp, token.user_id, token.id, timestamp),
+      this.db.prepare(`UPDATE user_sessions SET revoked_at = ?
+        WHERE user_id = ? AND revoked_at IS NULL`).bind(timestamp, token.user_id),
+    ]);
+    return changes(result[0]) && changes(result[1]) ? this.getUser(token.user_id) : null;
+  }
+
+  async consumeAuthRateLimit({ action, bucket_hash, window_started_at, expires_at, limit }) {
+    await this.db.prepare("DELETE FROM auth_rate_limits WHERE expires_at <= ?")
+      .bind(window_started_at).run();
+    const row = await this.db.prepare(`INSERT INTO auth_rate_limits
+      (action, bucket_hash, window_started_at, attempt_count, expires_at)
+      VALUES (?, ?, ?, 1, ?)
+      ON CONFLICT(action, bucket_hash, window_started_at)
+      DO UPDATE SET attempt_count = attempt_count + 1
+      RETURNING attempt_count`).bind(action, bucket_hash, window_started_at, expires_at).first();
+    return Number(row?.attempt_count || 0) <= limit;
+  }
+
+  async upsertGithubUser({ id, github_user_id, github_login, github_name, is_admin, timestamp }) {
+    const targetId = is_admin ? "legacy-admin" : id;
+    const existing = is_admin ? await this.getUser(targetId) : await this.getUserByGithubId(github_user_id);
+    if (existing) {
+      await this.db.prepare(`UPDATE users SET role = ?, status = 'active', display_name = ?,
+        github_user_id = ?, github_login = ?, github_name = ?, updated_at = ? WHERE id = ?`)
+        .bind(is_admin ? "admin" : existing.role, github_name || github_login,
+          github_user_id, github_login, github_name, timestamp, existing.id).run();
+      return this.getUser(existing.id);
+    }
+    await this.db.prepare(`INSERT INTO users
+      (id, role, status, display_name, github_user_id, github_login, github_name, created_at, updated_at)
+      VALUES (?, ?, 'active', ?, ?, ?, ?, ?, ?)`).bind(
+      targetId,
+      is_admin ? "admin" : "user",
+      github_name || github_login,
+      github_user_id,
+      github_login,
+      github_name,
+      timestamp,
+      timestamp,
+    ).run();
+    return this.getUser(targetId);
+  }
+
+  async createUserSession(session) {
+    await this.db.batch([
+      this.db.prepare("DELETE FROM user_sessions WHERE revoked_at IS NOT NULL OR expires_at <= ?")
+        .bind(session.created_at),
+      this.db.prepare(`INSERT INTO user_sessions
+        (id, token_hash, user_id, provider, created_at, last_seen_at, expires_at, user_agent_label)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).bind(
+        session.id,
+        session.token_hash,
+        session.user_id,
+        session.provider,
+        session.created_at,
+        session.created_at,
+        session.expires_at,
+        session.user_agent_label || null,
+      ),
+    ]);
+  }
+
+  async getUserSession(tokenHash, timestamp) {
+    return this.db.prepare(`SELECT s.id AS session_id, s.user_id, s.provider, s.created_at,
+      s.last_seen_at, s.expires_at, u.role, u.status, u.display_name, u.email,
+      u.email_verified_at, u.github_login, u.github_name
+      FROM user_sessions s JOIN users u ON u.id = s.user_id
+      WHERE s.token_hash = ? AND s.revoked_at IS NULL AND s.expires_at > ? AND u.status = 'active'`)
+      .bind(tokenHash, timestamp).first();
+  }
+
+  async revokeUserSession(tokenHash, timestamp) {
+    await this.db.prepare(`UPDATE user_sessions SET revoked_at = ?
+      WHERE token_hash = ? AND revoked_at IS NULL`).bind(timestamp, tokenHash).run();
+  }
+
+  async listUserSessions(userId, currentTokenHash, timestamp) {
+    const result = await this.db.prepare(`SELECT id, provider, created_at, last_seen_at, expires_at,
+      user_agent_label, CASE WHEN token_hash = ? THEN 1 ELSE 0 END AS current
+      FROM user_sessions WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ?
+      ORDER BY created_at DESC`).bind(currentTokenHash || "", userId, timestamp).all();
+    return rows(result).map((session) => ({
+      id: session.id,
+      provider: session.provider,
+      created_at: session.created_at,
+      last_seen_at: session.last_seen_at,
+      expires_at: session.expires_at,
+      user_agent_label: session.user_agent_label,
+      current: Boolean(session.current),
+    }));
+  }
+
+  async revokeUserSessionById(userId, sessionId, timestamp) {
+    const result = await this.db.prepare(`UPDATE user_sessions SET revoked_at = ?
+      WHERE id = ? AND user_id = ? AND revoked_at IS NULL`).bind(timestamp, sessionId, userId).run();
+    return changes(result) > 0;
+  }
+
   async listAccounts({ limit, offset }) {
     const result = await this.db.prepare(`SELECT id, name, phone_masked, status, enabled, last_error,
-      last_connected_at, created_at, updated_at FROM accounts ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`)
-      .bind(limit, offset).all();
+      user_id, last_connected_at, created_at, updated_at FROM accounts
+      ${this.userId ? "WHERE user_id = ?" : ""} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`)
+      .bind(...(this.userId ? [this.userId] : []), limit, offset).all();
     return rows(result).map(mapAccount);
   }
 
   async getAccount(id) {
     return mapAccount(await this.db.prepare(`SELECT id, name, phone_masked, status, enabled, last_error,
-      last_connected_at, created_at, updated_at FROM accounts WHERE id = ?`).bind(id).first());
+      user_id, last_connected_at, created_at, updated_at FROM accounts WHERE id = ?
+      ${this.userId ? "AND user_id = ?" : ""}`).bind(id, ...(this.userId ? [this.userId] : [])).first());
   }
 
   async createAccount({ account, secrets }) {
@@ -244,10 +459,11 @@ export class D1Repository {
     await this.db.batch([
       ...secrets.map((secret) => bindSecret(this.db, secret)),
       this.db.prepare(`INSERT INTO accounts
-        (id, name, phone_masked, phone_secret_id, api_id_secret_id, api_hash_secret_id, session_secret_id,
+        (id, user_id, name, phone_masked, phone_secret_id, api_id_secret_id, api_hash_secret_id, session_secret_id,
          proxy_secret_id, status, enabled, last_connected_at, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
         account.id,
+        this.userId || account.user_id || "legacy-admin",
         account.name,
         account.phone_masked,
         byPurpose.phone || null,
@@ -266,7 +482,8 @@ export class D1Repository {
   }
 
   async updateAccount(id, { changes: accountChanges, secrets, clearSecrets }) {
-    const existing = await this.db.prepare("SELECT * FROM accounts WHERE id = ?").bind(id).first();
+    const existing = await this.db.prepare(`SELECT * FROM accounts WHERE id = ?
+      ${this.userId ? "AND user_id = ?" : ""}`).bind(id, ...(this.userId ? [this.userId] : [])).first();
     if (!existing) return null;
     const values = { ...accountChanges };
     const oldSecretIds = [];
@@ -291,8 +508,9 @@ export class D1Repository {
     ]);
     const entries = Object.entries(values).filter(([key]) => allowed.has(key));
     if (!entries.length) return this.getAccount(id);
-    const update = this.db.prepare(`UPDATE accounts SET ${entries.map(([key]) => `${key} = ?`).join(", ")} WHERE id = ?`)
-      .bind(...entries.map(([, value]) => value), id);
+    const update = this.db.prepare(`UPDATE accounts SET ${entries.map(([key]) => `${key} = ?`).join(", ")} WHERE id = ?
+      ${this.userId ? "AND user_id = ?" : ""}`)
+      .bind(...entries.map(([, value]) => value), id, ...(this.userId ? [this.userId] : []));
     await this.db.batch([
       ...secrets.map((secret) => bindSecret(this.db, secret)),
       update,
@@ -302,12 +520,15 @@ export class D1Repository {
   }
 
   async deleteAccount(id) {
-    const dependent = await this.db.prepare("SELECT COUNT(*) AS count FROM tasks WHERE account_id = ?").bind(id).first();
+    if (!await this.getAccount(id)) return { deleted: false, blocked: false };
+    const dependent = await this.db.prepare(`SELECT COUNT(*) AS count FROM tasks WHERE account_id = ?
+      ${this.userId ? "AND user_id = ?" : ""}`).bind(id, ...(this.userId ? [this.userId] : [])).first();
     if (Number(dependent?.count || 0) > 0) return { deleted: false, blocked: true };
     const result = await this.db.batch([
       this.db.prepare(`DELETE FROM secret_values WHERE owner_type = 'login_flow'
         AND owner_id IN (SELECT id FROM login_flows WHERE account_id = ?)`).bind(id),
-      this.db.prepare("DELETE FROM accounts WHERE id = ?").bind(id),
+      this.db.prepare(`DELETE FROM accounts WHERE id = ? ${this.userId ? "AND user_id = ?" : ""}`)
+        .bind(id, ...(this.userId ? [this.userId] : [])),
       this.db.prepare("DELETE FROM secret_values WHERE owner_type = 'account' AND owner_id = ?").bind(id),
     ]);
     return { deleted: changes(result[1]) > 0, blocked: false };
@@ -330,6 +551,7 @@ export class D1Repository {
   async listTasks({ limit, offset, accountId, enabled }) {
     const conditions = [];
     const bindings = [];
+    if (this.userId) { conditions.push("t.user_id = ?"); bindings.push(this.userId); }
     if (accountId) { conditions.push("t.account_id = ?"); bindings.push(accountId); }
     if (enabled !== undefined) { conditions.push("t.enabled = ?"); bindings.push(enabled ? 1 : 0); }
     const where = conditions.length ? ` WHERE ${conditions.join(" AND ")}` : "";
@@ -339,18 +561,19 @@ export class D1Repository {
   }
 
   async getTask(id) {
-    return mapTask(await this.db.prepare(`${TASK_SELECT} WHERE t.id = ?`).bind(id).first());
+    return mapTask(await this.db.prepare(`${TASK_SELECT} WHERE t.id = ?
+      ${this.userId ? "AND t.user_id = ?" : ""}`).bind(id, ...(this.userId ? [this.userId] : [])).first());
   }
 
   async createTask(task, signerImportSecret = null) {
     await this.db.batch([
       ...(signerImportSecret ? [bindSecret(this.db, signerImportSecret)] : []),
       this.db.prepare(`INSERT INTO tasks
-      (id, name, account_id, skill_id, tg_signer_import_secret_id, bot, command, cron, timezone, retry, timeout_seconds, thread_id,
+      (id, user_id, name, account_id, skill_id, tg_signer_import_secret_id, bot, command, cron, timezone, retry, timeout_seconds, thread_id,
        delete_after_seconds, enabled, next_run_at, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .bind(
-        task.id, task.name, task.account_id, task.skill_id, signerImportSecret?.id || null,
+        task.id, this.userId || task.user_id || "legacy-admin", task.name, task.account_id, task.skill_id, signerImportSecret?.id || null,
         task.bot, task.command, task.cron, task.timezone,
         task.retry, task.timeout_seconds, task.thread_id, task.delete_after_seconds, task.enabled,
         task.next_run_at, task.created_at, task.updated_at,
@@ -360,7 +583,8 @@ export class D1Repository {
   }
 
   async updateTask(id, values, { signerImportSecret = null, clearSignerImport = false } = {}) {
-    const existing = await this.db.prepare("SELECT tg_signer_import_secret_id FROM tasks WHERE id = ?").bind(id).first();
+    const existing = await this.db.prepare(`SELECT tg_signer_import_secret_id FROM tasks WHERE id = ?
+      ${this.userId ? "AND user_id = ?" : ""}`).bind(id, ...(this.userId ? [this.userId] : [])).first();
     if (!existing) return null;
     const updateValues = { ...values };
     const oldConfigId = existing.tg_signer_import_secret_id;
@@ -375,8 +599,9 @@ export class D1Repository {
     if (!entries.length) return this.getTask(id);
     const results = await this.db.batch([
       ...(signerImportSecret ? [bindSecret(this.db, signerImportSecret)] : []),
-      this.db.prepare(`UPDATE tasks SET ${entries.map(([key]) => `${key} = ?`).join(", ")} WHERE id = ?`)
-        .bind(...entries.map(([, value]) => value), id),
+      this.db.prepare(`UPDATE tasks SET ${entries.map(([key]) => `${key} = ?`).join(", ")} WHERE id = ?
+        ${this.userId ? "AND user_id = ?" : ""}`)
+        .bind(...entries.map(([, value]) => value), id, ...(this.userId ? [this.userId] : [])),
       ...((signerImportSecret || clearSignerImport) && oldConfigId
         ? [deleteUnusedTaskSecrets(this.db)]
         : []),
@@ -386,23 +611,25 @@ export class D1Repository {
   }
 
   async deleteTask(id, timestamp) {
+    if (!await this.getTask(id)) return { deleted: false, blocked: false };
     const result = await this.db.batch([
       this.db.prepare(`UPDATE task_runs SET status = 'cancelled', finished_at = ?,
         error_code = 'task_deleted', error_message = 'Task was deleted before execution.', updated_at = ?
-        WHERE task_id = ? AND status = 'queued' AND NOT EXISTS (
+        WHERE task_id = ? ${this.userId ? "AND user_id = ?" : ""} AND status = 'queued' AND NOT EXISTS (
           SELECT 1 FROM task_runs active
           WHERE active.task_id = task_runs.task_id AND active.status IN ('claimed', 'running')
-        )`).bind(timestamp, timestamp, id),
+        )`).bind(timestamp, timestamp, id, ...(this.userId ? [this.userId] : [])),
       this.db.prepare(`DELETE FROM account_leases WHERE task_run_id IN (
         SELECT id FROM task_runs WHERE task_id = ? AND status = 'cancelled' AND error_code = 'task_deleted'
       )`).bind(id),
-      this.db.prepare(`DELETE FROM tasks WHERE id = ? AND NOT EXISTS (
+      this.db.prepare(`DELETE FROM tasks WHERE id = ? ${this.userId ? "AND user_id = ?" : ""} AND NOT EXISTS (
         SELECT 1 FROM task_runs active
         WHERE active.task_id = tasks.id AND active.status IN ('claimed', 'running')
-      )`).bind(id),
+      )`).bind(id, ...(this.userId ? [this.userId] : [])),
       this.db.prepare(`DELETE FROM secret_values WHERE owner_type = 'task' AND owner_id = ?
         AND NOT EXISTS (SELECT 1 FROM tasks WHERE id = ?)`).bind(id, id),
-      this.db.prepare("SELECT COUNT(*) AS count FROM tasks WHERE id = ?").bind(id),
+      this.db.prepare(`SELECT COUNT(*) AS count FROM tasks WHERE id = ? ${this.userId ? "AND user_id = ?" : ""}`)
+        .bind(id, ...(this.userId ? [this.userId] : [])),
     ]);
     const deleted = changes(result[2]) > 0;
     return {
@@ -461,7 +688,8 @@ export class D1Repository {
 
   async getLegacyTelegramApplicationSecretRefs() {
     return this.db.prepare(`SELECT id AS account_id, api_id_secret_id, api_hash_secret_id
-      FROM accounts WHERE api_id_secret_id IS NOT NULL AND api_hash_secret_id IS NOT NULL
+      FROM accounts WHERE user_id = 'legacy-admin'
+      AND api_id_secret_id IS NOT NULL AND api_hash_secret_id IS NOT NULL
       ORDER BY created_at, id LIMIT 1`).first();
   }
 
@@ -489,19 +717,39 @@ export class D1Repository {
   }
 
   async dashboard(dayStart, limit = 10) {
-    const [counts, recentRuns, recentLogs] = await this.db.batch([
+    const workspaceBindings = this.userId ? [this.userId, this.userId, this.userId, this.userId] : [];
+    const [counts, recentRuns, recentLogs, workspaceCounts, upcomingTasks, accountHealth] = await this.db.batch([
       this.db.prepare(`SELECT COUNT(*) AS total,
         SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success,
         SUM(CASE WHEN status IN ('failed', 'ambiguous') THEN 1 ELSE 0 END) AS failed,
         SUM(CASE WHEN status IN ('queued', 'claimed', 'running') THEN 1 ELSE 0 END) AS running
-        FROM task_runs WHERE created_at >= ?`).bind(dayStart),
-      this.db.prepare(`${RUN_SELECT} ORDER BY r.created_at DESC LIMIT ?`).bind(limit),
+        FROM task_runs WHERE created_at >= ? ${this.userId ? "AND user_id = ?" : ""}`)
+        .bind(dayStart, ...(this.userId ? [this.userId] : [])),
+      this.db.prepare(`${RUN_SELECT} ${this.userId ? "WHERE r.user_id = ?" : ""} ORDER BY r.created_at DESC LIMIT ?`)
+        .bind(...(this.userId ? [this.userId] : []), limit),
       this.db.prepare(`SELECT l.id, l.task_run_id, l.level, l.message, l.created_at,
         CASE WHEN r.context_snapshot_version IS NOT NULL THEN r.task_name_snapshot ELSE t.name END AS task_name
         FROM task_logs l LEFT JOIN task_runs r ON r.id = l.task_run_id LEFT JOIN tasks t ON t.id = r.task_id
-        ORDER BY l.id DESC LIMIT ?`).bind(limit),
+        ${this.userId ? "WHERE r.user_id = ?" : ""} ORDER BY l.id DESC LIMIT ?`)
+        .bind(...(this.userId ? [this.userId] : []), limit),
+      this.db.prepare(`SELECT
+        (SELECT COUNT(*) FROM accounts ${this.userId ? "WHERE user_id = ?" : ""}) AS accounts,
+        (SELECT COUNT(*) FROM tasks ${this.userId ? "WHERE user_id = ?" : ""}) AS tasks,
+        (SELECT COUNT(*) FROM task_runs ${this.userId ? "WHERE user_id = ?" : ""}) AS all_runs,
+        (SELECT COUNT(*) FROM task_runs ${this.userId ? "WHERE user_id = ? AND" : "WHERE"}
+          status IN ('failed', 'ambiguous')) AS failed_runs`).bind(...workspaceBindings),
+      this.db.prepare(`SELECT t.id, t.name, t.account_id, a.name AS account_name, t.skill_id,
+        s.skill_key, t.bot, t.command, t.next_run_at, t.timezone
+        FROM tasks t JOIN accounts a ON a.id = t.account_id JOIN skills s ON s.id = t.skill_id
+        WHERE t.enabled = 1 AND t.next_run_at IS NOT NULL ${this.userId ? "AND t.user_id = ?" : ""}
+        ORDER BY t.next_run_at, t.id LIMIT ?`).bind(...(this.userId ? [this.userId] : []), 6),
+      this.db.prepare(`SELECT id, user_id, name, phone_masked, status, enabled, last_error,
+        last_connected_at, created_at, updated_at FROM accounts
+        ${this.userId ? "WHERE user_id = ?" : ""} ORDER BY created_at DESC, id DESC LIMIT ?`)
+        .bind(...(this.userId ? [this.userId] : []), 10),
     ]);
     const count = rows(counts)[0] || {};
+    const workspace = rows(workspaceCounts)[0] || {};
     return {
       today: {
         total: Number(count.total || 0),
@@ -511,12 +759,21 @@ export class D1Repository {
       },
       recent_runs: rows(recentRuns).map(mapRun),
       recent_logs: rows(recentLogs),
+      workspace: {
+        accounts: Number(workspace.accounts || 0),
+        tasks: Number(workspace.tasks || 0),
+        all_runs: Number(workspace.all_runs || 0),
+        failed_runs: Number(workspace.failed_runs || 0),
+      },
+      upcoming_tasks: rows(upcomingTasks),
+      account_health: rows(accountHealth).map(mapAccount),
     };
   }
 
   async listRuns({ limit, offset, taskId, status }) {
     const conditions = [];
     const bindings = [];
+    if (this.userId) { conditions.push("r.user_id = ?"); bindings.push(this.userId); }
     if (taskId) {
       conditions.push("(r.task_id_snapshot = ? OR (r.task_id_snapshot IS NULL AND r.task_id = ?))");
       bindings.push(taskId, taskId);
@@ -529,7 +786,8 @@ export class D1Repository {
   }
 
   async getRun(id) {
-    const run = mapRun(await this.db.prepare(`${RUN_SELECT} WHERE r.id = ?`).bind(id).first());
+    const run = mapRun(await this.db.prepare(`${RUN_SELECT} WHERE r.id = ?
+      ${this.userId ? "AND r.user_id = ?" : ""}`).bind(id, ...(this.userId ? [this.userId] : [])).first());
     if (!run) return null;
     const [attempts, logsResult] = await this.db.batch([
       this.db.prepare("SELECT * FROM task_attempts WHERE task_run_id = ? ORDER BY attempt_number").bind(id),
@@ -539,7 +797,8 @@ export class D1Repository {
   }
 
   async getRunByDedupeKey(dedupeKey) {
-    return mapRun(await this.db.prepare(`${RUN_SELECT} WHERE r.dedupe_key = ?`).bind(dedupeKey).first());
+    return mapRun(await this.db.prepare(`${RUN_SELECT} WHERE r.dedupe_key = ?
+      ${this.userId ? "AND r.user_id = ?" : ""}`).bind(dedupeKey, ...(this.userId ? [this.userId] : [])).first());
   }
 
   async getDueTasks(timestamp, limit = 20) {
@@ -560,13 +819,13 @@ export class D1Repository {
         .bind(nextRunAt, run.scheduled_for, run.updated_at, run.task_id, run.id);
     const result = await this.db.batch([
       this.db.prepare(`INSERT OR IGNORE INTO task_runs
-        (id, task_id, trigger_type, status, scheduled_for, dedupe_key, max_attempts, claim_expires_at,
+        (id, user_id, task_id, trigger_type, status, scheduled_for, dedupe_key, max_attempts, claim_expires_at,
          dispatch_status, next_dispatch_at, created_at, updated_at, context_snapshot_version,
          task_id_snapshot, task_name_snapshot, account_id_snapshot, account_name_snapshot,
          skill_key_snapshot, skill_name_snapshot, bot_snapshot, command_snapshot, cron_snapshot,
          timezone_snapshot, retry_snapshot, timeout_seconds_snapshot, thread_id_snapshot, delete_after_seconds_snapshot,
          tg_signer_import_secret_id_snapshot)
-        SELECT ?, t.id, ?, 'queued', ?, ?, ?, ?, 'pending', ?, ?, ?, 1,
+        SELECT ?, t.user_id, t.id, ?, 'queued', ?, ?, ?, ?, 'pending', ?, ?, ?, 1,
           t.id, t.name, a.id, a.name, s.skill_key, s.display_name, t.bot, t.command, t.cron,
           t.timezone, t.retry, t.timeout_seconds, t.thread_id, t.delete_after_seconds,
           t.tg_signer_import_secret_id
@@ -847,34 +1106,36 @@ export class D1Repository {
   }
 
   async createLoginFlow({ account, secrets, flow }) {
+    const userId = this.userId || account.user_id || "legacy-admin";
     const byPurpose = Object.fromEntries(secrets.map((secret) => [secret.purpose, secret.id]));
     await this.db.batch([
       ...secrets.map((secret) => bindSecret(this.db, secret)),
       this.db.prepare(`INSERT INTO accounts
-        (id, name, phone_masked, phone_secret_id, api_id_secret_id, api_hash_secret_id, proxy_secret_id,
-         status, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'login_pending', 1, ?, ?)`)
-        .bind(account.id, account.name, account.phone_masked, byPurpose.phone, byPurpose.api_id || null,
+        (id, user_id, name, phone_masked, phone_secret_id, api_id_secret_id, api_hash_secret_id, proxy_secret_id,
+         status, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'login_pending', 1, ?, ?)`)
+        .bind(account.id, userId, account.name, account.phone_masked, byPurpose.phone, byPurpose.api_id || null,
           byPurpose.api_hash || null, byPurpose.proxy || null, account.created_at, account.updated_at),
       this.db.prepare(`INSERT INTO login_flows
-        (id, account_id, mode, status, expires_at, created_at, updated_at)
-        VALUES (?, ?, 'interactive_login', 'created', ?, ?, ?)`)
-        .bind(flow.id, account.id, flow.expires_at, flow.created_at, flow.updated_at),
+        (id, user_id, account_id, mode, status, expires_at, created_at, updated_at)
+        VALUES (?, ?, ?, 'interactive_login', 'created', ?, ?, ?)`)
+        .bind(flow.id, userId, account.id, flow.expires_at, flow.created_at, flow.updated_at),
     ]);
     return this.getLoginFlow(flow.id);
   }
 
   async getAccountSecretRefs(id) {
     return this.db.prepare(`SELECT id, phone_secret_id, api_id_secret_id, api_hash_secret_id,
-      session_secret_id, proxy_secret_id, status, enabled FROM accounts WHERE id = ?`).bind(id).first();
+      session_secret_id, proxy_secret_id, status, enabled FROM accounts WHERE id = ?
+      ${this.userId ? "AND user_id = ?" : ""}`).bind(id, ...(this.userId ? [this.userId] : [])).first();
   }
 
   async getActiveLoginFlowForAccount(accountId) {
     return this.db.prepare(`SELECT f.id, f.account_id, f.mode, a.name AS account_name, a.phone_masked,
       f.status, f.expires_at, f.last_error, f.created_at, f.updated_at
       FROM login_flows f JOIN accounts a ON a.id = f.account_id
-      WHERE f.account_id = ? AND f.status IN
+      WHERE f.account_id = ? ${this.userId ? "AND f.user_id = ?" : ""} AND f.status IN
         ('created', 'starting', 'code_required', 'code_submitted', 'password_required', 'password_submitted')
-      ORDER BY f.created_at DESC LIMIT 1`).bind(accountId).first();
+      ORDER BY f.created_at DESC LIMIT 1`).bind(accountId, ...(this.userId ? [this.userId] : [])).first();
   }
 
   async createSessionValidationFlow(accountId, flow) {
@@ -882,13 +1143,14 @@ export class D1Repository {
     if (active) return active;
     const result = await this.db.batch([
       this.db.prepare(`INSERT INTO login_flows
-        (id, account_id, mode, status, expires_at, created_at, updated_at)
-        SELECT ?, id, 'session_validation', 'created', ?, ?, ? FROM accounts
-        WHERE id = ? AND session_secret_id IS NOT NULL`)
-        .bind(flow.id, flow.expires_at, flow.created_at, flow.updated_at, accountId),
+        (id, user_id, account_id, mode, status, expires_at, created_at, updated_at)
+        SELECT ?, user_id, id, 'session_validation', 'created', ?, ?, ? FROM accounts
+        WHERE id = ? ${this.userId ? "AND user_id = ?" : ""} AND session_secret_id IS NOT NULL`)
+        .bind(flow.id, flow.expires_at, flow.created_at, flow.updated_at, accountId,
+          ...(this.userId ? [this.userId] : [])),
       this.db.prepare(`UPDATE accounts SET status = 'login_pending', last_error = NULL, updated_at = ?
-        WHERE id = ? AND session_secret_id IS NOT NULL`)
-        .bind(flow.updated_at, accountId),
+        WHERE id = ? ${this.userId ? "AND user_id = ?" : ""} AND session_secret_id IS NOT NULL`)
+        .bind(flow.updated_at, accountId, ...(this.userId ? [this.userId] : [])),
     ]);
     return changes(result[0]) ? this.getLoginFlow(flow.id) : null;
   }
@@ -896,7 +1158,8 @@ export class D1Repository {
   async getLoginFlow(id) {
     const row = await this.db.prepare(`SELECT f.id, f.account_id, a.name AS account_name, a.phone_masked,
       f.mode, f.status, f.expires_at, f.last_error, f.created_at, f.updated_at
-      FROM login_flows f JOIN accounts a ON a.id = f.account_id WHERE f.id = ?`).bind(id).first();
+      FROM login_flows f JOIN accounts a ON a.id = f.account_id WHERE f.id = ?
+      ${this.userId ? "AND f.user_id = ?" : ""}`).bind(id, ...(this.userId ? [this.userId] : [])).first();
     return row || null;
   }
 
@@ -953,6 +1216,7 @@ export class D1Repository {
   }
 
   async expireLoginFlow(id, timestamp) {
+    if (!await this.getLoginFlow(id)) return null;
     await this.db.batch([
       this.db.prepare(`UPDATE login_flows SET status = 'expired', code_secret_id = NULL,
         password_secret_id = NULL, updated_at = ? WHERE id = ?
@@ -995,6 +1259,7 @@ export class D1Repository {
   }
 
   async submitLoginSecret(id, secret, expectedStatus, nextStatus, column) {
+    if (!await this.getLoginFlow(id)) return null;
     const result = await this.db.batch([
       bindSecret(this.db, secret),
       this.db.prepare(`UPDATE login_flows SET ${column} = ?, status = ?, updated_at = ?
@@ -1054,6 +1319,7 @@ export class D1Repository {
   }
 
   async requestLoginCodeResend(id, timestamp) {
+    if (!await this.getLoginFlow(id)) return null;
     const result = await this.db.prepare(`UPDATE login_flows
       SET resend_requested_at = ?, updated_at = ?
       WHERE id = ? AND mode = 'interactive_login' AND status = 'code_required' AND expires_at > ?

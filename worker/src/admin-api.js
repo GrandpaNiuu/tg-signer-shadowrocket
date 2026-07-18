@@ -459,6 +459,9 @@ async function settings(request, env, repository, context, parts) {
   if (parts.length === 2) {
     if (parts[1] === "telegram") {
       if (request.method !== "PATCH") return methodNotAllowed(["PATCH"]);
+      if (context.identity?.role !== "admin") {
+        throw new HttpError(403, "administrator_required", "??????????? Telegram ?????");
+      }
       const input = telegramApplicationSettingsInput(await readJson(request, 16_000));
       const secrets = await Promise.all(Object.entries(input).map(([purpose, value]) => createSecretRecord({
         env,
@@ -472,6 +475,9 @@ async function settings(request, env, repository, context, parts) {
     }
     if (parts[1] !== "notifications") return null;
     if (request.method !== "PATCH") return methodNotAllowed(["PATCH"]);
+    if (context.identity?.role !== "admin") {
+      throw new HttpError(403, "administrator_required", "????????????????");
+    }
     const input = notificationSettingsInput(await readJson(request, 16_000));
     const purposeMap = { bot_token: "bot_token", chat_id: "chat_id" };
     const secrets = [];
@@ -493,6 +499,9 @@ async function settings(request, env, repository, context, parts) {
   }
   if (request.method === "GET") return json({ data: await settingsSnapshot(repository) });
   if (request.method === "PATCH") {
+    if (context.identity?.role !== "admin") {
+      throw new HttpError(403, "administrator_required", "????????????????");
+    }
     const values = settingsInput(await readJson(request));
     await repository.updateSettings(values, iso(context.now));
     return json({ data: await settingsSnapshot(repository) });
@@ -509,7 +518,11 @@ async function loginFlows(request, env, repository, context, parts) {
     if (request.method !== "POST") return methodNotAllowed(["POST"]);
     const input = loginStartInput(await readJson(request));
     if (!input.api_id && !await resolveTelegramApplicationCredentialRefs(repository)) {
-      throw new HttpError(409, "telegram_application_not_configured", "Telegram application credentials are not configured.");
+      throw new HttpError(409, "telegram_application_not_configured", "???? Telegram ????????????", {
+        action: "configure_telegram_application",
+        settings_path: "#/settings",
+        documentation_url: "https://my.telegram.org/apps",
+      });
     }
     const accountId = context.uuid();
     const flowId = context.uuid();

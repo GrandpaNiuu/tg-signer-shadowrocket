@@ -108,3 +108,50 @@ test("GitHub administrator auth migration preserves an existing control-plane da
   assert.equal(sqlite.prepare("SELECT code_verifier FROM admin_oauth_states WHERE state_hash = ?")
     .get("pkce-state-hash").code_verifier, "a".repeat(43));
 });
+
+test("public-user migration assigns every legacy record and session to the preserved administrator", () => {
+  const sqlite = new DatabaseSync(":memory:");
+  for (const name of [
+    "0001_initial.sql",
+    "0002_task_run_snapshots.sql",
+    "0003_login_flow_modes.sql",
+    "0004_tg_signer_secret_snapshots.sql",
+    "0005_github_admin_auth.sql",
+    "0006_admin_oauth_pkce.sql",
+  ]) sqlite.exec(readFileSync(new URL(`../migrations/${name}`, import.meta.url), "utf8"));
+  const timestamp = "2026-07-18T00:00:00.000Z";
+  sqlite.prepare(`INSERT INTO accounts
+    (id, name, phone_masked, status, enabled, created_at, updated_at)
+    VALUES (?, ?, ?, 'connected', 1, ?, ?)`).run(
+    "legacy-account", "Legacy account", "+86*******5678", timestamp, timestamp,
+  );
+  sqlite.prepare(`INSERT INTO tasks
+    (id, name, account_id, skill_id, bot, command, cron, timezone, retry, timeout_seconds,
+     enabled, created_at, updated_at)
+    VALUES (?, ?, ?, 'skill-send-text', ?, ?, ?, 'UTC', 0, 120, 1, ?, ?)`).run(
+    "legacy-task", "Legacy task", "legacy-account", "@legacy_bot", "/checkin", "0 * * * *", timestamp, timestamp,
+  );
+  sqlite.prepare(`INSERT INTO task_runs
+    (id, task_id, trigger_type, status, scheduled_for, dedupe_key, max_attempts, created_at, updated_at)
+    VALUES (?, ?, 'manual', 'success', ?, ?, 1, ?, ?)`).run(
+    "legacy-run", "legacy-task", timestamp, "manual:legacy-run", timestamp, timestamp,
+  );
+  sqlite.prepare(`INSERT INTO admin_sessions
+    (token_hash, github_user_id, github_login, github_name, created_at, expires_at)
+    VALUES (?, ?, ?, ?, ?, ?)`).run(
+    "legacy-session", "225517310", "GrandpaNiuu", "Grandpa Niu", timestamp, "2026-07-25T00:00:00.000Z",
+  );
+
+  sqlite.exec(readFileSync(new URL("../migrations/0007_public_users.sql", import.meta.url), "utf8"));
+
+  assert.deepEqual({ ...sqlite.prepare("SELECT id, role, status, display_name FROM users WHERE id = 'legacy-admin'").get() }, {
+    id: "legacy-admin",
+    role: "admin",
+    status: "active",
+    display_name: "GrandpaNiuu",
+  });
+  assert.equal(sqlite.prepare("SELECT user_id FROM accounts WHERE id = 'legacy-account'").get().user_id, "legacy-admin");
+  assert.equal(sqlite.prepare("SELECT user_id FROM tasks WHERE id = 'legacy-task'").get().user_id, "legacy-admin");
+  assert.equal(sqlite.prepare("SELECT user_id FROM task_runs WHERE id = 'legacy-run'").get().user_id, "legacy-admin");
+  assert.equal(sqlite.prepare("SELECT user_id FROM admin_sessions WHERE token_hash = 'legacy-session'").get().user_id, "legacy-admin");
+});

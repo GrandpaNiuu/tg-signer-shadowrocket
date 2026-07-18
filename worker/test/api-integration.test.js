@@ -868,6 +868,28 @@ test("admin can configure one encrypted Telegram application without exposing it
   assert.equal(data.telegram_application_configured, true);
 });
 
+test("phone login without platform credentials returns an actionable setup response without residue", async () => {
+  const { sqlite, worker, env } = harness();
+  const response = await worker.fetch(request("/api/v1/login-flows", {
+    method: "POST",
+    body: { phone: "+8613812345678" },
+  }), env);
+  assert.equal(response.status, 409);
+  const payload = await response.json();
+  assert.deepEqual(payload.error, {
+    code: "telegram_application_not_configured",
+    message: "???? Telegram ????????????",
+    details: {
+      action: "configure_telegram_application",
+      settings_path: "#/settings",
+      documentation_url: "https://my.telegram.org/apps",
+    },
+  });
+  assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM accounts").get().count, 0);
+  assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM login_flows").get().count, 0);
+  assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM secret_values").get().count, 0);
+});
+
 test("phone-only login uses the global Telegram application credentials", async () => {
   const { sqlite, worker, env } = harness();
   const apiId = "123456";
@@ -886,7 +908,7 @@ test("phone-only login uses the global Telegram application credentials", async 
   const flow = (await response.json()).data;
   const account = sqlite.prepare(`SELECT name, api_id_secret_id, api_hash_secret_id
     FROM accounts WHERE id = ?`).get(flow.account_id);
-  assert.equal(account.name, "Telegram ••••5678");
+  assert.equal(account.name, "Telegram ????5678");
   assert.equal(account.api_id_secret_id, null);
   assert.equal(account.api_hash_secret_id, null);
 
@@ -1006,7 +1028,7 @@ test("configured notification secrets are decrypted only to send a completed run
   assert.equal(response.status, 200);
   assert.equal(telegramMessages.length, 1);
   assert.equal(telegramMessages[0].body.chat_id, chatId);
-  assert.match(telegramMessages[0].body.text, /GitHub Actions：https:\/\/github\.com\/owner\/repo\/actions\/runs\/9001/);
+  assert.match(telegramMessages[0].body.text, /GitHub Actions?https:\/\/github\.com\/owner\/repo\/actions\/runs\/9001/);
   assert.match(telegramMessages[0].body.text, /check-in done/);
   assert.equal(telegramMessages[0].body.text.includes("must-not-leak"), false);
   assert.equal(telegramMessages[0].body.text.includes(token), false);

@@ -8,7 +8,7 @@ test("unwraps data and sends same-origin mutation headers", async () => {
     captured = { url, options };
     return new Response(JSON.stringify({ data: { id: "task-1" } }), { status: 202, headers: { "content-type": "application/json" } });
   }});
-  const result = await client.createTask({ name: "签到" });
+  const result = await client.createTask({ name: "??" });
   assert.deepEqual(result, { id: "task-1" });
   assert.equal(captured.url, "/api/v1/tasks");
   assert.equal(captured.options.credentials, "same-origin");
@@ -20,7 +20,7 @@ test("encodes filters and never puts values in an error message", async () => {
   const secret = "secret-session-value";
   const client = new ApiClient({ fetchImpl: async (url) => {
     requestedUrl = url;
-    return new Response(JSON.stringify({ error: { code: "BAD_REQUEST", message: "输入无效" } }), { status: 400 });
+    return new Response(JSON.stringify({ error: { code: "BAD_REQUEST", message: "????" } }), { status: 400 });
   }});
   await assert.rejects(client.taskRuns({ status: "failed", task_id: "a/b" }), (error) => {
     assert.equal(error instanceof ApiError, true);
@@ -47,7 +47,7 @@ test("sends account secret clears as explicit null PATCH values", async () => {
     return new Response(JSON.stringify({ data: { id: "account-1" } }), { status: 200 });
   }});
   await client.updateAccount("account/1", {
-    name: "主账号",
+    name: "???",
     enabled: true,
     session: null,
     proxy: null,
@@ -55,7 +55,7 @@ test("sends account secret clears as explicit null PATCH values", async () => {
   assert.deepEqual(captured, {
     url: "/api/v1/accounts/account%2F1",
     method: "PATCH",
-    body: { name: "主账号", enabled: true, session: null, proxy: null },
+    body: { name: "???", enabled: true, session: null, proxy: null },
   });
 });
 
@@ -152,4 +152,34 @@ test("calls receiver-sensitive browser fetch implementations with the global rec
   const client = new ApiClient({ fetchImpl: receiverSensitiveFetch });
   assert.deepEqual(await client.identity(), { authenticated: false, provider: "github" });
   assert.equal(receiver, globalThis);
+});
+
+test("email registration, login, reset, and session management use dedicated auth endpoints", async () => {
+  const requests = [];
+  const client = new ApiClient({ fetchImpl: async (url, options) => {
+    requests.push({ url, method: options.method, body: options.body ? JSON.parse(options.body) : undefined });
+    return url === "/api/auth/sessions/session%2F1"
+      ? new Response(null, { status: 204 })
+      : Response.json({ data: url === "/api/auth/config" ? { email_enabled: true } : { status: "ok" } });
+  }});
+
+  await client.authConfig();
+  await client.registerEmail({ email: "user@example.com", password: "long-password", display_name: "User", turnstile_token: "captcha" });
+  await client.verifyEmail("verify-token");
+  await client.loginEmail({ email: "user@example.com", password: "long-password", turnstile_token: "captcha" });
+  await client.forgotPassword({ email: "user@example.com", turnstile_token: "captcha" });
+  await client.resetPassword({ token: "reset-token", password: "new-long-password", turnstile_token: "captcha" });
+  await client.sessions();
+  await client.revokeSession("session/1");
+
+  assert.deepEqual(requests.map(({ url, method }) => ({ url, method })), [
+    { url: "/api/auth/config", method: "GET" },
+    { url: "/api/auth/email/register", method: "POST" },
+    { url: "/api/auth/email/verify", method: "POST" },
+    { url: "/api/auth/email/login", method: "POST" },
+    { url: "/api/auth/email/forgot-password", method: "POST" },
+    { url: "/api/auth/email/reset-password", method: "POST" },
+    { url: "/api/auth/sessions", method: "GET" },
+    { url: "/api/auth/sessions/session%2F1", method: "DELETE" },
+  ]);
 });
