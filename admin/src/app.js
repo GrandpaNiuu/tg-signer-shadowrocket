@@ -521,24 +521,28 @@ function sessionImportGuide() {
       <section>
         <h3>在自己的电脑本地生成（高级）</h3>
         <p>下面的方法只会在你的电脑上运行，但仍然需要 Telegram 提供的有效 API_ID 和 API_HASH。生成的是本平台 Runner 可用的 Kurigram / Pyrogram Session。</p>
+        <p><strong>注意：</strong>API_ID 是 Telegram 应用提供的数字编号，不是手机号；手机号会在脚本连接成功后另行询问。</p>
+        <div class="session-guide-actions"><a class="button primary small" href="/assets/make_session.py" download="make_session.py">下载安全生成脚本</a><span>脚本公开可查看；生成时只与 Telegram 通信，不写入本地 Session 文件。只有你明确点击“加密导入”后，Session 才会发送到本平台并加密保存。</span></div>
+        <div class="session-platforms">
+          <div><h4>Windows PowerShell</h4><pre><code>py -m pip install --upgrade kurigram</code></pre><pre><code>py "$env:USERPROFILE\Downloads\make_session.py"</code></pre></div>
+          <div><h4>macOS / Linux</h4><pre><code>python3 -m pip install --upgrade kurigram</code></pre><pre><code>python3 ~/Downloads/make_session.py</code></pre></div>
+        </div>
+        <div class="notice warning"><span aria-hidden="true">!</span><span><strong>出现 Connection timed out / 网络超时？</strong><br>先开启代理软件，再重新运行脚本并在“是否使用本机代理”处输入 <code>y</code>。v2rayN 常用 SOCKS5 地址为 <code>127.0.0.1:10808</code>，请以你自己的客户端设置为准。</span></div>
         <ol class="session-guide-steps">
-          <li>安装 Python 3，然后在终端运行：</li>
+          <li>先安装 Kurigram，再下载脚本；不要把脚本里的 Python 代码直接粘贴进 PowerShell。</li>
+          <li>运行脚本并输入真正的 API_ID、API_HASH；随后按 Telegram 提示输入手机号、验证码和二步验证密码。</li>
+          <li>只复制两条分隔线之间的 Session，立即粘贴到下方并点击“加密导入”。</li>
         </ol>
-        <pre><code>python -m pip install --upgrade kurigram tgcrypto</code></pre>
-        <ol class="session-guide-steps" start="2">
-          <li>把下面内容保存为 <code>make_session.py</code>，只在自己的电脑运行：</li>
-        </ol>
-        <pre><code>from getpass import getpass
-from pyrogram import Client
-
-api_id = int(input("API_ID: "))
-api_hash = getpass("API_HASH: ")
-
-with Client("session-export", api_id=api_id, api_hash=api_hash, in_memory=True) as app:
-    print(app.export_session_string())</code></pre>
-        <ol class="session-guide-steps" start="3">
-          <li>按提示完成验证码和二步验证；复制最后输出的一整段 Session，立即粘贴到下方并点击“加密导入”。</li>
-        </ol>
+        <p class="field-help"><code>tgcrypto</code> 只是可选加速组件，生成 Session 不需要安装；Windows 缺少 C++ 编译工具时可直接忽略它。</p>
+        <details class="session-troubleshooting">
+          <summary>遇到报错？查看对应处理方法</summary>
+          <ul class="session-guide-list">
+            <li><code>No module named pip</code>：Windows 上的 <code>python</code> 可能指向其他软件的隔离环境，请改用教程中的 <code>py -m pip</code>。</li>
+            <li><code>Microsoft Visual C++ 14.0 or greater is required</code>：这是可选 <code>tgcrypto</code> 的编译错误；不要安装它，只安装 <code>kurigram</code>。</li>
+            <li><code>can't open file '...make_session.py'</code>：脚本还没有下载或路径不正确；重新点击“下载安全生成脚本”，再从浏览器实际下载位置运行。</li>
+            <li>PowerShell 提示不支持 <code>from</code>：你把 Python 源码粘进了 PowerShell。不要逐行粘贴源码，直接运行下载的 <code>make_session.py</code>。</li>
+          </ul>
+        </details>
       </section>
       <div class="notice danger"><span aria-hidden="true">!</span><span><strong>Session 等同于账号钥匙</strong><br>不要使用在线 Session 生成网站或机器人，不要上传 Telegram Desktop 的 tdata，也不要把 Session 或截图发给任何人。若怀疑泄露，请立即前往 Telegram 设置 → 设备，终止对应会话。</span></div>
       <section>

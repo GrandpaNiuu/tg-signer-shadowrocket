@@ -2,6 +2,19 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
+async function readSessionGuide() {
+  const app = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
+  const start = app.indexOf("function sessionImportGuide");
+  const end = app.indexOf("function openAccountWizard", start);
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+  return { app, end, guide: app.slice(start, end) };
+}
+
+function readSessionHelper() {
+  return readFile(new URL("../assets/make_session.py", import.meta.url), "utf8");
+}
+
 test("browser code does not persist data or use inline executable content", async () => {
   const [html, app, headers] = await Promise.all([
     readFile(new URL("../index.html", import.meta.url), "utf8"),
@@ -65,25 +78,59 @@ test("missing platform credentials fall back to Session import instead of blocki
 });
 
 test("Session import teaches new users the compatible and safe local workflow", async () => {
-  const app = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
-  const start = app.indexOf("function sessionImportGuide");
-  const end = app.indexOf("function openAccountWizard", start);
-  assert.notEqual(start, -1);
-  assert.notEqual(end, -1);
-  const guide = app.slice(start, end);
+  const [{ app, end, guide }, helper] = await Promise.all([readSessionGuide(), readSessionHelper()]);
 
   assert.match(guide, /第一次使用 Session/);
   assert.match(guide, /Kurigram \/ Pyrogram/);
-  assert.match(guide, /python -m pip install --upgrade kurigram tgcrypto/);
-  assert.match(guide, /export_session_string/);
+  assert.match(guide, /href="\/assets\/make_session\.py"[^>]*download/);
+  assert.match(guide, /py -m pip install --upgrade kurigram/);
+  assert.match(guide, /python3 -m pip install --upgrade kurigram/);
+  assert.doesNotMatch(guide, /pip install[^<\n]*tgcrypto/i);
   assert.match(guide, /在线 Session 生成网站或机器人/);
   assert.match(guide, /Telegram 设置.*设备/);
   assert.match(guide, /API_ID.*API_HASH/s);
   assert.doesNotMatch(guide, /name="api_(?:id|hash)"/);
   assert.doesNotMatch(guide, /localStorage|sessionStorage|indexedDB/);
+  assert.match(guide, /只与 Telegram 通信/);
+  assert.match(guide, /点击.*加密导入.*Session.*本平台/s);
+  assert.doesNotMatch(guide, /不会上传凭据/);
+
+  assert.match(helper, /from getpass import getpass/);
+  assert.match(helper, /in_memory=True/);
+  assert.match(helper, /export_session_string/);
+  assert.doesNotMatch(helper, /requests|subprocess|os\.environ|https?:\/\//);
 
   const wizard = app.slice(end, app.indexOf("function accountPayload", end));
   assert.match(wizard, /sessionImportGuide\(\)/);
+});
+
+test("the downloadable Session helper handles blocked Telegram networks without hiding credential mistakes", async () => {
+  const [{ guide }, helper] = await Promise.all([readSessionGuide(), readSessionHelper()]);
+  assert.match(helper, /API_ID（不是手机号/);
+  assert.match(helper, /def read_proxy/);
+  assert.match(helper, /"scheme"/);
+  assert.match(helper, /"hostname"/);
+  assert.match(helper, /proxy=proxy/);
+  assert.match(helper, /127\.0\.0\.1/);
+  assert.match(helper, /10808/);
+  assert.match(helper, /except OSError/);
+
+  assert.match(guide, /Connection timed out|网络超时/);
+  assert.match(guide, /127\.0\.0\.1:10808/);
+});
+
+test("the downloadable Session helper remains compatible with older supported Python 3 versions", async () => {
+  const helper = await readSessionHelper();
+  assert.match(helper, /from typing import Dict, Optional/);
+  assert.doesNotMatch(helper, /dict\[[^\]]+\]|\| None/);
+});
+
+test("the Session guide explains the common Windows errors before users retry unsafe workarounds", async () => {
+  const { guide } = await readSessionGuide();
+  assert.match(guide, /No module named pip/);
+  assert.match(guide, /Microsoft Visual C\+\+/);
+  assert.match(guide, /can't open file/);
+  assert.match(guide, /from.*PowerShell/s);
 });
 
 test("notification settings render only blank sensitive inputs with explicit clear controls", async () => {

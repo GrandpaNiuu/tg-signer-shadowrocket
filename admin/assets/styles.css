@@ -375,6 +375,15 @@ details > .form-grid { margin-top: 14px; }
 .session-guide-body h3 { color: var(--ink); font-size: 12px; }
 .session-guide-list, .session-guide-steps { margin: 0; padding-left: 20px; }
 .session-guide-list li + li { margin-top: 5px; }
+.session-guide-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; padding: 10px; border: 1px solid #d7e7da; border-radius: 9px; background: #f1f8f2; }
+.session-guide-actions span { flex: 1; min-width: 190px; color: #4f6556; font-size: 10px; }
+.session-platforms { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.session-platforms > div { min-width: 0; }
+.session-platforms h4 { margin: 0 0 6px; color: var(--ink); font-size: 11px; }
+.session-platforms pre + pre { margin-top: 6px; }
+.session-troubleshooting { border: 1px solid var(--line); border-radius: 9px; background: #fff; }
+.session-troubleshooting > summary { padding: 10px 12px; color: #46564b; font-weight: 700; }
+.session-troubleshooting > .session-guide-list { margin: 0; padding: 0 16px 12px 31px; }
 .session-guide-body pre { max-width: 100%; margin: 0; padding: 11px 12px; overflow-x: auto; border: 1px solid #dce6de; border-radius: 8px; background: #17251c; color: #e8f3eb; font-size: 10px; line-height: 1.55; tab-size: 2; }
 .session-guide-body code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 
@@ -476,6 +485,7 @@ details > .form-grid { margin-top: 14px; }
   .stat-card { min-height: 108px; }
   .form-grid { grid-template-columns: 1fr; }
   .form-grid .span-2 { grid-column: span 1; }
+  .session-platforms { grid-template-columns: 1fr; }
   .modal-backdrop { padding: 0; place-items: end center; }
   .modal { width: 100%; max-height: 94vh; border-radius: 17px 17px 0 0; }
   .modal.wide { width: 100%; }
