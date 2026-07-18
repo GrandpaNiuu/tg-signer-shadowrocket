@@ -8,7 +8,7 @@ test("unwraps data and sends same-origin mutation headers", async () => {
     captured = { url, options };
     return new Response(JSON.stringify({ data: { id: "task-1" } }), { status: 202, headers: { "content-type": "application/json" } });
   }});
-  const result = await client.createTask({ name: "??" });
+  const result = await client.createTask({ name: "签到" });
   assert.deepEqual(result, { id: "task-1" });
   assert.equal(captured.url, "/api/v1/tasks");
   assert.equal(captured.options.credentials, "same-origin");
@@ -20,7 +20,7 @@ test("encodes filters and never puts values in an error message", async () => {
   const secret = "secret-session-value";
   const client = new ApiClient({ fetchImpl: async (url) => {
     requestedUrl = url;
-    return new Response(JSON.stringify({ error: { code: "BAD_REQUEST", message: "????" } }), { status: 400 });
+    return new Response(JSON.stringify({ error: { code: "BAD_REQUEST", message: "输入无效" } }), { status: 400 });
   }});
   await assert.rejects(client.taskRuns({ status: "failed", task_id: "a/b" }), (error) => {
     assert.equal(error instanceof ApiError, true);
@@ -47,7 +47,7 @@ test("sends account secret clears as explicit null PATCH values", async () => {
     return new Response(JSON.stringify({ data: { id: "account-1" } }), { status: 200 });
   }});
   await client.updateAccount("account/1", {
-    name: "???",
+    name: "主账号",
     enabled: true,
     session: null,
     proxy: null,
@@ -55,7 +55,7 @@ test("sends account secret clears as explicit null PATCH values", async () => {
   assert.deepEqual(captured, {
     url: "/api/v1/accounts/account%2F1",
     method: "PATCH",
-    body: { name: "???", enabled: true, session: null, proxy: null },
+    body: { name: "主账号", enabled: true, session: null, proxy: null },
   });
 });
 

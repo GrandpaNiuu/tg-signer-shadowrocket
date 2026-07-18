@@ -26,7 +26,7 @@ test("account edit controls never render stored credentials and support explicit
     assert.match(fields, new RegExp(`name=\\"${name}\\"[^>]*data-sensitive[^>]*value=\\"\\"`));
   }
   assert.doesNotMatch(fields, /name="api_id"|name="api_hash"/);
-  assert.match(fields, /??/);
+  assert.match(fields, /设置/);
   assert.match(fields, /name="session"[^>]*data-sensitive/);
   assert.match(fields, /name="clear_session"/);
   assert.match(fields, /name="clear_proxy"/);
@@ -47,8 +47,8 @@ test("new account login asks for a phone number instead of per-account API crede
   const wizardStart = app.indexOf("function openAccountWizard", end);
   const wizardEnd = app.indexOf("function accountPayload", wizardStart);
   const wizard = app.slice(wizardStart, wizardEnd);
-  assert.match(wizard, /?????/);
-  assert.match(wizard, /?????/);
+  assert.match(wizard, /手机号登录/);
+  assert.match(wizard, /输入手机号/);
 });
 
 test("missing platform credentials open a one-time setup wizard instead of a dead-end toast", async () => {
@@ -76,7 +76,7 @@ test("global Telegram application settings use blank secret inputs and explain l
     assert.match(app, new RegExp(`name=\\"${name}\\"[^>]*data-sensitive[^>]*value=\\"\\"`));
   }
   assert.match(app, /telegram_application_source/);
-  assert.match(app, /???/);
+  assert.match(app, /旧账号/);
   assert.doesNotMatch(app, /value="\$\{settings\.telegram_(?:api_id|api_hash)/);
 });
 
@@ -88,7 +88,7 @@ test("transient Telegram login errors keep polling the current account", async (
   assert.notEqual(end, -1);
   const loginFlow = app.slice(start, end);
   assert.match(loginFlow, /status === "starting" && flow\.last_error/);
-  assert.match(loginFlow, /Runner ??????????????/);
+  assert.match(loginFlow, /Runner 会自动重试，无需重新添加账号/);
   assert.match(loginFlow, /shouldPoll = true/);
 });
 

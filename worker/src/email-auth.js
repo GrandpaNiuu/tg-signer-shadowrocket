@@ -21,14 +21,14 @@ function normalizeEmail(value) {
 
 function exactInput(body, fields) {
   const unknown = Object.keys(body).filter((key) => !fields.includes(key));
-  if (unknown.length) throw new HttpError(422, "validation_failed", "???????", { fields: unknown });
+  if (unknown.length) throw new HttpError(422, "validation_failed", "输入内容无效。", { fields: unknown });
 }
 
 function emailInput(value) {
   const original = String(value || "").trim().normalize("NFKC");
   const normalized = normalizeEmail(original);
   if (!normalized || normalized.length > 254 || !EMAIL_PATTERN.test(normalized)) {
-    throw new HttpError(422, "validation_failed", "???????????", { fields: ["email"] });
+    throw new HttpError(422, "validation_failed", "请输入有效的邮箱地址。", { fields: ["email"] });
   }
   return { original, normalized };
 }
@@ -36,7 +36,7 @@ function emailInput(value) {
 function passwordInput(value) {
   const password = String(value || "");
   if (password.length < 12 || password.length > 1024) {
-    throw new HttpError(422, "validation_failed", "?????? 12 ????", { fields: ["password"] });
+    throw new HttpError(422, "validation_failed", "密码至少需要 12 个字符。", { fields: ["password"] });
   }
   return password;
 }
@@ -44,7 +44,7 @@ function passwordInput(value) {
 function turnstileInput(value) {
   const token = String(value || "").trim();
   if (!token || token.length > 2048) {
-    throw new HttpError(422, "validation_failed", "????????", { fields: ["turnstile_token"] });
+    throw new HttpError(422, "validation_failed", "请完成人机验证。", { fields: ["turnstile_token"] });
   }
   return token;
 }
@@ -53,7 +53,7 @@ function authConfiguration(env, { emailDelivery = false } = {}) {
   const turnstileSecret = String(env.TURNSTILE_SECRET_KEY || "").trim();
   const pepper = String(env.PASSWORD_PEPPER || "");
   if (!turnstileSecret || pepper.length < 16) {
-    throw new HttpError(503, "email_auth_not_configured", "?????????????");
+    throw new HttpError(503, "email_auth_not_configured", "邮箱登录服务尚未完成配置。");
   }
   const config = { turnstileSecret };
   if (emailDelivery) {
@@ -64,10 +64,10 @@ function authConfiguration(env, { emailDelivery = false } = {}) {
       origin = new URL(String(env.ADMIN_ORIGIN || ""));
       if (origin.protocol !== "https:") throw new Error();
     } catch {
-      throw new HttpError(503, "email_auth_not_configured", "?????????????");
+      throw new HttpError(503, "email_auth_not_configured", "邮箱登录服务尚未完成配置。");
     }
     if (!apiKey || !from) {
-      throw new HttpError(503, "email_auth_not_configured", "?????????????");
+      throw new HttpError(503, "email_auth_not_configured", "邮箱登录服务尚未完成配置。");
     }
     Object.assign(config, { apiKey, from, origin: origin.origin });
   }
@@ -92,7 +92,7 @@ async function verifyTurnstile(request, responseToken, config, fetchImpl) {
   } catch {
     result = null;
   }
-  if (!result?.success) throw new HttpError(400, "turnstile_failed", "?????????????");
+  if (!result?.success) throw new HttpError(400, "turnstile_failed", "人机验证失败，请重新尝试。");
 }
 
 async function sendEmail(fetchImpl, config, message) {
@@ -104,7 +104,7 @@ async function sendEmail(fetchImpl, config, message) {
     },
     body: JSON.stringify({ from: config.from, ...message }),
   });
-  if (!response.ok) throw new HttpError(502, "email_delivery_failed", "?????????????????");
+  if (!response.ok) throw new HttpError(502, "email_delivery_failed", "验证邮件暂时无法发送，请稍后重试。");
 }
 
 function sessionTtlSeconds(env) {
@@ -123,7 +123,7 @@ async function enforceRateLimit(repository, request, action, identity, now, limi
     expires_at: new Date(windowStart + windowSeconds * 1000).toISOString(),
     limit,
   });
-  if (!allowed) throw new HttpError(429, "rate_limited", "?????????????");
+  if (!allowed) throw new HttpError(429, "rate_limited", "尝试次数过多，请稍后再试。");
 }
 
 function sessionIdentity(user, provider = "email") {
@@ -176,7 +176,7 @@ export function createEmailAuth(dependencies = {}) {
         const email = emailInput(body.email);
         const displayName = String(body.display_name || "").trim().normalize("NFKC");
         if (!displayName || displayName.length > 80) {
-          throw new HttpError(422, "validation_failed", "????????", { fields: ["display_name"] });
+          throw new HttpError(422, "validation_failed", "请输入显示名称。", { fields: ["display_name"] });
         }
         const password = passwordInput(body.password);
         await verifyTurnstile(request, turnstileInput(body.turnstile_token), config, fetchImpl);
@@ -204,8 +204,8 @@ export function createEmailAuth(dependencies = {}) {
           const verificationUrl = `${config.origin}/#/verify-email?token=${token}`;
           await sendEmail(fetchImpl, config, {
             to: [email.original],
-            subject: "?? Telegram ??????",
-            html: `<p>???????????????</p><p><a href="${verificationUrl}">????</a></p><p>???? 24 ??????</p>`,
+            subject: "验证 Telegram 自动签到邮箱",
+            html: `<p>请点击下面的链接完成邮箱验证：</p><p><a href="${verificationUrl}">验证邮箱</a></p><p>链接将在 24 小时后失效。</p>`,
           });
         }
         return json({ data: { status: "verification_required" } }, 202);
@@ -215,9 +215,9 @@ export function createEmailAuth(dependencies = {}) {
         const body = await readJson(request, 2_048);
         exactInput(body, ["token"]);
         const token = String(body.token || "").trim();
-        if (!TOKEN_PATTERN.test(token)) throw new HttpError(400, "invalid_or_expired_token", "???????????");
+        if (!TOKEN_PATTERN.test(token)) throw new HttpError(400, "invalid_or_expired_token", "验证链接无效或已过期。");
         const user = await repository.consumeEmailVerification(await sha256(token), timestamp.toISOString());
-        if (!user) throw new HttpError(400, "invalid_or_expired_token", "???????????");
+        if (!user) throw new HttpError(400, "invalid_or_expired_token", "验证链接无效或已过期。");
         return json({ data: { status: "verified" } });
       }
 
@@ -234,10 +234,10 @@ export function createEmailAuth(dependencies = {}) {
           ? await verifyPassword(password, user, env)
           : (await hashPassword(password, env), false);
         if (!valid || user.status === "disabled") {
-          throw new HttpError(401, "invalid_credentials", "?????????");
+          throw new HttpError(401, "invalid_credentials", "邮箱或密码不正确。");
         }
         if (user.status !== "active" || !user.email_verified_at) {
-          throw new HttpError(403, "email_verification_required", "?????????");
+          throw new HttpError(403, "email_verification_required", "请先完成邮箱验证。");
         }
         return createSession(request, env, repository, user);
       }
@@ -264,8 +264,8 @@ export function createEmailAuth(dependencies = {}) {
           const resetUrl = `${config.origin}/#/reset-password?token=${token}`;
           await sendEmail(fetchImpl, config, {
             to: [user.email],
-            subject: "?? Telegram ??????",
-            html: `<p>?????????????</p><p><a href="${resetUrl}">????</a></p><p>???? 30 ??????</p>`,
+            subject: "重置 Telegram 自动签到密码",
+            html: `<p>请点击下面的链接重置密码：</p><p><a href="${resetUrl}">重置密码</a></p><p>链接将在 30 分钟后失效。</p>`,
           });
         }
         return json({ data: { status: "accepted" } }, 202);
@@ -276,13 +276,13 @@ export function createEmailAuth(dependencies = {}) {
         const body = await readJson(request, 8_192);
         exactInput(body, ["token", "password", "turnstile_token"]);
         const token = String(body.token || "").trim();
-        if (!TOKEN_PATTERN.test(token)) throw new HttpError(400, "invalid_or_expired_token", "???????????");
+        if (!TOKEN_PATTERN.test(token)) throw new HttpError(400, "invalid_or_expired_token", "重置链接无效或已过期。");
         const password = passwordInput(body.password);
         await verifyTurnstile(request, turnstileInput(body.turnstile_token), config, fetchImpl);
         await enforceRateLimit(repository, request, "reset_password", await sha256(token), timestamp, 10, 3600);
         const passwordRecord = await hashPassword(password, env);
         const user = await repository.consumePasswordReset(await sha256(token), passwordRecord, timestamp.toISOString());
-        if (!user) throw new HttpError(400, "invalid_or_expired_token", "???????????");
+        if (!user) throw new HttpError(400, "invalid_or_expired_token", "重置链接无效或已过期。");
         return json({ data: { status: "password_reset" } });
       }
 

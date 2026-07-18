@@ -30,7 +30,7 @@ async function parseResponse(response, { unwrap = true } = {}) {
     payload = await response.json();
   } catch {
     if (!response.ok) {
-      throw new ApiError("?????????????", {
+      throw new ApiError("服务返回了无法识别的错误。", {
         status: response.status,
         code: "INVALID_RESPONSE",
       });
@@ -39,7 +39,7 @@ async function parseResponse(response, { unwrap = true } = {}) {
 
   if (!response.ok) {
     const error = payload?.error || {};
-    throw new ApiError(error.message || "????????????", {
+    throw new ApiError(error.message || "请求未完成，请稍后重试。", {
       status: response.status,
       code: error.code || "REQUEST_FAILED",
       details: error.details || null,
@@ -74,9 +74,9 @@ export class ApiClient {
     } catch (error) {
       if (error instanceof ApiError) throw error;
       if (error?.name === "AbortError") {
-        throw new ApiError("????????????????", { code: "REQUEST_TIMEOUT" });
+        throw new ApiError("请求超时，请检查服务状态后重试。", { code: "REQUEST_TIMEOUT" });
       }
-      throw new ApiError("?????????", { code: "NETWORK_ERROR" });
+      throw new ApiError("无法连接管理服务。", { code: "NETWORK_ERROR" });
     } finally {
       if (timeout) clearTimeout(timeout);
     }
@@ -92,12 +92,12 @@ export class ApiClient {
         unwrap: false,
       });
       if (!Array.isArray(page?.data)) {
-        throw new ApiError("?????????????", { code: "INVALID_RESPONSE" });
+        throw new ApiError("服务返回了无效的列表数据。", { code: "INVALID_RESPONSE" });
       }
       items.push(...page.data);
       cursor = page.pagination?.next_cursor || null;
       if (cursor && seenCursors.has(cursor)) {
-        throw new ApiError("?????????????", { code: "INVALID_RESPONSE" });
+        throw new ApiError("服务返回了重复的分页游标。", { code: "INVALID_RESPONSE" });
       }
       if (cursor) seenCursors.add(cursor);
     } while (cursor);

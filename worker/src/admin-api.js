@@ -460,7 +460,7 @@ async function settings(request, env, repository, context, parts) {
     if (parts[1] === "telegram") {
       if (request.method !== "PATCH") return methodNotAllowed(["PATCH"]);
       if (context.identity?.role !== "admin") {
-        throw new HttpError(403, "administrator_required", "??????????? Telegram ?????");
+        throw new HttpError(403, "administrator_required", "只有平台管理员可以修改 Telegram 应用凭据。");
       }
       const input = telegramApplicationSettingsInput(await readJson(request, 16_000));
       const secrets = await Promise.all(Object.entries(input).map(([purpose, value]) => createSecretRecord({
@@ -476,7 +476,7 @@ async function settings(request, env, repository, context, parts) {
     if (parts[1] !== "notifications") return null;
     if (request.method !== "PATCH") return methodNotAllowed(["PATCH"]);
     if (context.identity?.role !== "admin") {
-      throw new HttpError(403, "administrator_required", "????????????????");
+      throw new HttpError(403, "administrator_required", "只有平台管理员可以修改通知凭据。");
     }
     const input = notificationSettingsInput(await readJson(request, 16_000));
     const purposeMap = { bot_token: "bot_token", chat_id: "chat_id" };
@@ -500,7 +500,7 @@ async function settings(request, env, repository, context, parts) {
   if (request.method === "GET") return json({ data: await settingsSnapshot(repository) });
   if (request.method === "PATCH") {
     if (context.identity?.role !== "admin") {
-      throw new HttpError(403, "administrator_required", "????????????????");
+      throw new HttpError(403, "administrator_required", "只有平台管理员可以修改平台设置。");
     }
     const values = settingsInput(await readJson(request));
     await repository.updateSettings(values, iso(context.now));
@@ -518,7 +518,7 @@ async function loginFlows(request, env, repository, context, parts) {
     if (request.method !== "POST") return methodNotAllowed(["POST"]);
     const input = loginStartInput(await readJson(request));
     if (!input.api_id && !await resolveTelegramApplicationCredentialRefs(repository)) {
-      throw new HttpError(409, "telegram_application_not_configured", "???? Telegram ????????????", {
+      throw new HttpError(409, "telegram_application_not_configured", "请先完成 Telegram 应用初始化，再添加账号。", {
         action: "configure_telegram_application",
         settings_path: "#/settings",
         documentation_url: "https://my.telegram.org/apps",

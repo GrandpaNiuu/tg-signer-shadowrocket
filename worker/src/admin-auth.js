@@ -185,7 +185,7 @@ export function createAdminAuth(dependencies = {}) {
       if ((url.pathname === "/api/auth/sessions" || url.pathname.startsWith("/api/auth/sessions/"))) {
         const timestamp = new Date(now()).toISOString();
         const identity = await sessionIdentity(request, env, repository, timestamp);
-        if (!identity) throw new HttpError(401, "authentication_required", "?????");
+        if (!identity) throw new HttpError(401, "authentication_required", "请先登录。");
         if (url.pathname === "/api/auth/sessions" && request.method === "GET") {
           const token = cookieValue(request, "tg_session");
           const currentHash = TOKEN_PATTERN_FOR_SESSION.test(token) ? await tokenHash(token) : "";
@@ -194,10 +194,10 @@ export function createAdminAuth(dependencies = {}) {
         if (request.method === "DELETE") {
           const sessionId = decodeURIComponent(url.pathname.slice("/api/auth/sessions/".length));
           if (!/^[A-Za-z0-9_-]{8,160}$/.test(sessionId)) {
-            throw new HttpError(404, "session_not_found", "????????");
+            throw new HttpError(404, "session_not_found", "登录会话不存在。");
           }
           const revoked = await repository.revokeUserSessionById(identity.user_id, sessionId, timestamp);
-          if (!revoked) throw new HttpError(404, "session_not_found", "????????");
+          if (!revoked) throw new HttpError(404, "session_not_found", "登录会话不存在。");
           return new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
         }
         throw new HttpError(405, "method_not_allowed", "Method not allowed.");
@@ -292,7 +292,7 @@ export function createAdminAuth(dependencies = {}) {
     async verify(request, env, repository) {
       const identity = await sessionIdentity(request, env, repository, new Date(now()).toISOString());
       if (!identity) {
-        throw new HttpError(401, "authentication_required", "?????");
+        throw new HttpError(401, "authentication_required", "请先登录。");
       }
       return identity;
     },

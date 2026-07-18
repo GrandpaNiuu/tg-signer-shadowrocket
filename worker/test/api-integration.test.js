@@ -878,7 +878,7 @@ test("phone login without platform credentials returns an actionable setup respo
   const payload = await response.json();
   assert.deepEqual(payload.error, {
     code: "telegram_application_not_configured",
-    message: "???? Telegram ????????????",
+    message: "请先完成 Telegram 应用初始化，再添加账号。",
     details: {
       action: "configure_telegram_application",
       settings_path: "#/settings",
@@ -908,7 +908,7 @@ test("phone-only login uses the global Telegram application credentials", async 
   const flow = (await response.json()).data;
   const account = sqlite.prepare(`SELECT name, api_id_secret_id, api_hash_secret_id
     FROM accounts WHERE id = ?`).get(flow.account_id);
-  assert.equal(account.name, "Telegram ????5678");
+  assert.equal(account.name, "Telegram ••••5678");
   assert.equal(account.api_id_secret_id, null);
   assert.equal(account.api_hash_secret_id, null);
 
@@ -1028,7 +1028,7 @@ test("configured notification secrets are decrypted only to send a completed run
   assert.equal(response.status, 200);
   assert.equal(telegramMessages.length, 1);
   assert.equal(telegramMessages[0].body.chat_id, chatId);
-  assert.match(telegramMessages[0].body.text, /GitHub Actions?https:\/\/github\.com\/owner\/repo\/actions\/runs\/9001/);
+  assert.match(telegramMessages[0].body.text, /GitHub Actions：https:\/\/github\.com\/owner\/repo\/actions\/runs\/9001/);
   assert.match(telegramMessages[0].body.text, /check-in done/);
   assert.equal(telegramMessages[0].body.text.includes("must-not-leak"), false);
   assert.equal(telegramMessages[0].body.text.includes(token), false);

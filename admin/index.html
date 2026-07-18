@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light">
     <meta name="theme-color" content="#f5f7f4">
-    <title>Telegram ????</title>
+    <title>Telegram 自动签到</title>
     <link rel="stylesheet" href="/assets/styles.css">
     <script type="module" src="/src/app.js"></script>
   </head>
@@ -13,50 +13,50 @@
     <section id="auth-gate" class="auth-gate" aria-labelledby="auth-title" hidden>
       <div class="auth-card">
         <span class="brand-mark auth-mark" aria-hidden="true">T</span>
-        <p class="auth-eyebrow">???????</p>
-        <h1 id="auth-title">Telegram ????</h1>
-        <p id="auth-message">??????????? Telegram ????????</p>
+        <p class="auth-eyebrow">自动签到工作台</p>
+        <h1 id="auth-title">Telegram 自动签到</h1>
+        <p id="auth-message">登录或注册后管理自己的 Telegram 账号与签到任务。</p>
         <div id="auth-content" aria-live="polite"></div>
-        <small>??????????????????? Telegram Session ??????????</small>
+        <small>每个用户拥有独立工作区；验证码、密码与 Telegram Session 不会保存在浏览器中。</small>
       </div>
     </section>
-    <a class="skip-link" href="#main-content">??????</a>
+    <a class="skip-link" href="#main-content">跳到主要内容</a>
     <div id="app" class="app-shell" hidden>
-      <aside class="sidebar" aria-label="???">
-        <a class="brand" href="#/dashboard" aria-label="Telegram ??????">
+      <aside class="sidebar" aria-label="主导航">
+        <a class="brand" href="#/dashboard" aria-label="Telegram 自动签到首页">
           <span class="brand-mark" aria-hidden="true">T</span>
           <span>
             <strong>Telegram</strong>
-            <small>????</small>
+            <small>自动签到</small>
           </span>
         </a>
 
         <nav class="nav-list">
-          <a href="#/dashboard" data-route="dashboard"><span aria-hidden="true">?</span>??</a>
-          <a href="#/accounts" data-route="accounts"><span aria-hidden="true">?</span>Telegram ??</a>
-          <a href="#/tasks" data-route="tasks"><span aria-hidden="true">?</span>????</a>
-          <a href="#/skills" data-route="skills"><span aria-hidden="true">?</span>Skills</a>
-          <a href="#/runs" data-route="runs"><span aria-hidden="true">?</span>????</a>
-          <a href="#/sessions" data-route="sessions"><span aria-hidden="true">?</span>????</a>
-          <a href="#/settings" data-route="settings"><span aria-hidden="true">?</span>??</a>
+          <a href="#/dashboard" data-route="dashboard"><span aria-hidden="true">⌂</span>概览</a>
+          <a href="#/accounts" data-route="accounts"><span aria-hidden="true">◎</span>Telegram 账号</a>
+          <a href="#/tasks" data-route="tasks"><span aria-hidden="true">✓</span>签到任务</a>
+          <a href="#/skills" data-route="skills"><span aria-hidden="true">◇</span>Skills</a>
+          <a href="#/runs" data-route="runs"><span aria-hidden="true">↻</span>执行记录</a>
+          <a href="#/sessions" data-route="sessions"><span aria-hidden="true">▣</span>登录会话</a>
+          <a href="#/settings" data-route="settings"><span aria-hidden="true">⚙</span>设置</a>
         </nav>
 
         <div class="sidebar-foot">
-          <div class="security-note"><span aria-hidden="true">?</span> ????</div>
-          <p>??????????</p>
+          <div class="security-note"><span aria-hidden="true">●</span> 加密会话</div>
+          <p>每位用户数据相互隔离</p>
         </div>
       </aside>
 
       <div class="workspace">
         <header class="topbar">
-          <button id="menu-toggle" class="icon-button mobile-only" type="button" aria-label="????" aria-expanded="false">?</button>
-          <div id="breadcrumb" class="breadcrumb">??</div>
+          <button id="menu-toggle" class="icon-button mobile-only" type="button" aria-label="打开导航" aria-expanded="false">☰</button>
+          <div id="breadcrumb" class="breadcrumb">概览</div>
           <div class="topbar-actions">
-            <span id="api-status" class="api-status" data-status="loading"><i></i><span>???</span></span>
-            <div class="identity" title="? GitHub ??">
+            <span id="api-status" class="api-status" data-status="loading"><i></i><span>连接中</span></span>
+            <div class="identity" title="由 GitHub 认证">
               <span class="avatar" aria-hidden="true">A</span>
-              <span><strong id="identity-name">???</strong><small id="identity-email">GitHub</small></span>
-              <button id="logout-button" class="button small ghost" type="button">??</button>
+              <span><strong id="identity-name">管理员</strong><small id="identity-email">GitHub</small></span>
+              <button id="logout-button" class="button small ghost" type="button">退出</button>
             </div>
           </div>
         </header>
@@ -70,6 +70,6 @@
     <div id="toast-region" class="toast-region" aria-live="assertive" aria-atomic="true"></div>
     <div id="modal-root"></div>
     <div id="drawer-root"></div>
-    <noscript>??????? JavaScript?</noscript>
+    <noscript>此后台需要启用 JavaScript。</noscript>
   </body>
 </html>

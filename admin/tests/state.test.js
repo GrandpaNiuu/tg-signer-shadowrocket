@@ -25,9 +25,9 @@ test("store notifies subscribers and keeps state in memory", () => {
 });
 
 test("extracts collection envelopes and filters rows", () => {
-  const rows = [{ id: 1, name: "???", status: "connected" }, { id: 2, name: "??", status: "pending" }];
+  const rows = [{ id: 1, name: "主账号", status: "connected" }, { id: 2, name: "备用", status: "pending" }];
   assert.deepEqual(listFrom({ accounts: rows }, ["accounts"]), rows);
-  assert.deepEqual(filterRows(rows, { query: "?", status: "connected" }), [rows[0]]);
+  assert.deepEqual(filterRows(rows, { query: "主", status: "connected" }), [rows[0]]);
   assert.deepEqual(filterRows(rows, { status: "failed" }), []);
 });
 
