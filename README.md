@@ -80,15 +80,15 @@ D1 的 `scheduler_mode` 初始值为 `legacy`。只有完成迁移并在后台�
 
 1. 在 Cloudflare 创建 D1 数据库 `telegram-checkin`，记录 database id。
 2. 在 Cloudflare Pages 先创建 **Direct Upload** 项目 `telegram-checkin-admin` 并做一次初始上传。不要同时启用 Git integration。
-3. 使用 Pages 项目的默认生产地址 **`https://telegram-checkin-admin.pages.dev`**；不要求绑定自定义域名。
+3. 将 Pages 项目绑定生产域名 **`https://grandpaniu.ccwu.cc`**；默认 `pages.dev` 地址由中间件重定向到该域名。
 4. 在 GitHub 创建一个 OAuth App，供登录与自动注册使用；无需 Cloudflare Zero Trust 或账单授权：
-   - Homepage URL：`https://telegram-checkin-admin.pages.dev`
-   - Authorization callback URL：`https://telegram-checkin-admin.pages.dev/api/auth/github/callback`
+   - Homepage URL：`https://grandpaniu.ccwu.cc`
+   - Authorization callback URL：`https://grandpaniu.ccwu.cc/api/auth/github/callback`
    - 记录 Client ID，并生成 Client Secret；两者只写入 Worker Secret。
 5. 在 `worker/wrangler.toml` 填写：
    - D1 database id；
    - `RUNNER_OIDC_AUDIENCE`：生产 Worker URL 加 `/api/runner`；
-   - `ADMIN_ORIGIN=https://telegram-checkin-admin.pages.dev`；
+   - `ADMIN_ORIGIN=https://grandpaniu.ccwu.cc`；
    - 唯一管理员的 `ADMIN_GITHUB_LOGIN` 与不可变 `ADMIN_GITHUB_USER_ID`。
 6. 配置 Worker Secrets：
    - 保留原 `GITHUB_TOKEN`、`TRIGGER_KEY`；
@@ -102,7 +102,7 @@ D1 的 `scheduler_mode` 初始值为 `legacy`。只有完成迁移并在后台�
    - `WORKER_URL`；
    - `WORKER_OIDC_AUDIENCE`（必须与 Worker 的 `RUNNER_OIDC_AUDIENCE` 完全一致）。
 10. 运行 `Deploy Cloudflare Worker`；workflow 会先应用远程 D1 migration，再部署 Worker。
-11. 运行 `Deploy Cloudflare Pages Admin`；`CONTROL_PLANE` Service Binding 指向 `tg-signer-shadowrocket`，生产环境保持 `CANONICAL_HOST=telegram-checkin-admin.pages.dev`。不创建 Cloudflare Access Application。
+11. 运行 `Deploy Cloudflare Pages Admin`；`CONTROL_PLANE` Service Binding 指向 `tg-signer-shadowrocket`，生产环境保持 `CANONICAL_HOST=grandpaniu.ccwu.cc`。不创建 Cloudflare Access Application。
 
 本仓库沿用原 Worker 名称，通常可以直接保留已有 Worker Secrets。若确实是全新 Cloudflare 账号，先完成一次 Worker 部署以创建服务，再设置 Worker Secrets，并重新部署/验证；不要把真实 Secret 写入 TOML 或仓库。
 

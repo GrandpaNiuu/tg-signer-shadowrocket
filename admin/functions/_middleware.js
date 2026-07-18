@@ -1,4 +1,4 @@
-const DEFAULT_CANONICAL_HOST = "telegram-checkin-admin.pages.dev";
+const DEFAULT_CANONICAL_HOST = "grandpaniu.ccwu.cc";
 
 function canonicalHost(env) {
   const value = String(env.CANONICAL_HOST || DEFAULT_CANONICAL_HOST).trim().toLowerCase();

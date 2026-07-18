@@ -3,7 +3,7 @@ pages_build_output_dir = "."
 compatibility_date = "2026-07-01"
 
 [vars]
-CANONICAL_HOST = "telegram-checkin-admin.pages.dev"
+CANONICAL_HOST = "grandpaniu.ccwu.cc"
 
 # Pages Functions uses this binding to call the Worker without exposing a
 # second public API origin. Keep the binding name in sync with functions/api.
