@@ -14,10 +14,10 @@ function base64UrlToBytes(value) {
 }
 
 function iterationsFromEnv(env) {
-  const configured = Number(env.PASSWORD_HASH_ITERATIONS || 600000);
+  const configured = Number(env.PASSWORD_HASH_ITERATIONS || 100000);
   return Number.isInteger(configured) && configured >= 100000 && configured <= 1000000
     ? configured
-    : 600000;
+    : 100000;
 }
 
 function passwordMaterial(password, env) {
