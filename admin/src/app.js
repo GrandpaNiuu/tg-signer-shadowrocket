@@ -393,6 +393,23 @@ function renderRunsTable(runs, { compact = false } = {}) {
   </table></div>`;
 }
 
+function renderDashboardRecentRuns(runs) {
+  if (!runs.length) return emptyState("↻", "还没有执行记录", "手动执行或到达计划时间后，结果会显示在这里。");
+  const mobileRuns = runs.slice(0, 3);
+  return `<div class="mobile-run-list" aria-label="最近三条执行记录">
+    ${mobileRuns.map((run) => `<article class="mobile-run-item">
+      <div class="mobile-run-head"><div><strong>${escapeHtml(runName(run))}</strong><small class="mono">${escapeHtml(shortId(run.id))}</small></div>${statusBadge(run.status)}</div>
+      <div class="mobile-run-meta">
+        <span><small>时间</small><strong>${formatDate(run.started_at || run.created_at || run.scheduled_for)}</strong></span>
+        <span><small>耗时</small><strong>${formatDuration(run.duration_ms)}</strong></span>
+        <span><small>偏差</small><strong>${escapeHtml(formatScheduleLag(run))}</strong></span>
+      </div>
+      <button class="mobile-run-detail" type="button" data-action="run-detail" data-id="${escapeHtml(run.id)}">查看详情 <span aria-hidden="true">›</span></button>
+    </article>`).join("")}
+  </div>
+  <div class="desktop-run-list">${renderRunsTable(runs.slice(0, 5), { compact: true })}</div>`;
+}
+
 async function renderDashboard(token) {
   const [dashboard, settings] = await Promise.all([
     api.dashboard(new Date().toISOString().slice(0, 10)),
@@ -417,7 +434,7 @@ async function renderDashboard(token) {
       <article class="stat-card running"><div class="stat-label">进行中</div><div class="stat-value">${escapeHtml(today.running ?? 0)}</div><div class="stat-meta">排队和执行中的任务</div></article>
     </section>
     <div class="dashboard-grid">
-      <section class="card"><div class="card-head"><div><h2>最近执行</h2><p>最新的自动与手动任务</p></div><a class="button small ghost" href="#/runs">查看全部 →</a></div>${renderRunsTable(runs, { compact: true })}</section>
+      <section class="card recent-runs-card"><div class="card-head"><div><h2>最近执行</h2><p>最新的自动与手动任务</p></div><a class="button small ghost" href="#/runs">查看全部 →</a></div>${renderDashboardRecentRuns(runs)}</section>
       <div class="stack">
         <section class="card"><div class="card-head"><div><h2>系统状态</h2><p>Serverless 执行链路</p></div></div><div class="card-body service-list">
           ${serviceRow("D1 数据库", health.database ?? "ok", "配置与运行记录")}
@@ -1393,6 +1410,42 @@ function confirmPlatformUserStatus(user, status) {
   });
 }
 
+function renderNotificationSettings(settings) {
+  const tokenConfigured = settings.notification_bot_token_configured === true;
+  const chatConfigured = settings.notification_chat_id_configured === true;
+  const ready = tokenConfigured && chatConfigured;
+  const statusTitle = ready ? "通知通道已就绪" : tokenConfigured ? "Bot 已连接，还差接收位置" : "通知尚未配置";
+  const statusDescription = ready
+    ? "可先发送一条测试通知；启用后，每次任务结束都会推送摘要。"
+    : tokenConfigured
+      ? "先给 Bot 发送 /start，再让后台自动查找 Chat ID。"
+      : "这是可选功能，不配置也不会影响定时消息和签到任务。";
+  return `<div class="settings-section notification-section" id="notification-settings">
+    <div class="settings-title-row"><div><h2>任务结果通知</h2><p>通知只影响任务结果提醒，不会改变任务内容，也不会影响自动执行。</p></div><span class="badge ${ready ? "success" : "pending"}">${ready ? "已就绪" : "可选"}</span></div>
+    <div class="notification-state ${ready ? "ready" : ""}"><span class="notification-state-icon" aria-hidden="true">${ready ? "✓" : "i"}</span><div><strong>${statusTitle}</strong><small>${statusDescription}</small></div></div>
+    <ol class="notification-steps" aria-label="通知配置步骤">
+      <li><span>1</span><div><strong>创建通知 Bot</strong><p>在 Telegram 打开 <a href="https://t.me/BotFather" target="_blank" rel="noopener noreferrer">官方 @BotFather ↗</a>，发送 <code>/newbot</code>，复制它给你的 Bot Token。</p></div></li>
+      <li><span>2</span><div><strong>让 Bot 认识接收位置</strong><p>打开刚创建的 Bot 并发送 <code>/start</code>；群组或频道则先把 Bot 加进去，再发送一条消息。</p></div></li>
+      <li><span>3</span><div><strong>保存、查找并测试</strong><p>先保存 Bot Token，然后点击“查找 Chat ID”；选中会话、再次保存，最后发送测试通知。</p></div></li>
+    </ol>
+    <div class="notification-enable-row"><div><strong>任务完成后推送</strong><small>成功与失败都会发送任务名、耗时、Actions 链接和脱敏日志尾部。</small></div><label class="switch"><input type="checkbox" name="notifications_enabled" ${settings.notifications_enabled ? "checked" : ""} aria-label="任务结束后发送通知"><span></span></label></div>
+    <div class="form-grid notification-fields">
+      <div class="field"><label for="notification-bot-token">Bot Token</label><input id="notification-bot-token" name="notification_bot_token" type="password" maxlength="256" autocomplete="new-password" data-sensitive value="" placeholder="${tokenConfigured ? "已配置；留空保持不变" : "从 @BotFather 复制到这里"}"><p class="field-help">当前：${tokenConfigured ? '<span class="badge success">已配置</span>' : '<span class="badge pending">未配置</span>'}</p></div>
+      <div class="field"><label for="notification-chat-id">Chat ID</label><input id="notification-chat-id" name="notification_chat_id" type="password" maxlength="33" autocomplete="new-password" data-sensitive value="" placeholder="${chatConfigured ? "已配置；留空保持不变" : "可让后台自动查找"}"><p class="field-help">当前：${chatConfigured ? '<span class="badge success">已配置</span>' : '<span class="badge pending">未配置</span>'}</p></div>
+    </div>
+    <div class="notification-actions">
+      <button class="button" type="button" data-action="discover-notification-chats" ${tokenConfigured ? "" : "disabled"}>查找 Chat ID</button>
+      <button class="button" type="button" data-action="test-notification" ${ready ? "" : "disabled"}>发送测试通知</button>
+      <small>${ready ? "测试只使用已保存的加密配置。" : "按上面的 3 步完成后，这两个按钮会自动启用。"}</small>
+    </div>
+    <details class="credential-clear"><summary>更换或清除已有配置</summary><div class="credential-clear-body">
+      <label class="check-row"><input type="checkbox" name="clear_notification_bot_token">明确清除现有 Bot Token</label>
+      <label class="check-row"><input type="checkbox" name="clear_notification_chat_id">明确清除现有 Chat ID</label>
+    </div></details>
+    <div class="notice mt-md"><span aria-hidden="true">i</span><span>Token 和 Chat ID 会加密写入 D1，保存后不会在网页、API 或日志中回显。不要把 Token 发给他人。</span></div>
+  </div>`;
+}
+
 async function renderSettings(token) {
   const identity = store.get().identity || {};
   if (identity.role !== "admin") {
@@ -1426,16 +1479,7 @@ async function renderSettings(token) {
         </div>
         <div class="notice mt-md"><span aria-hidden="true">i</span><span>${settings.telegram_application_source === "legacy_account" ? "当前已从一个旧账号安全复用完整凭据；无需重新配置。" : "只有同时填写两项时才会替换；凭据加密写入 D1 且永不回显。"}</span></div>
       </div>
-      <div class="settings-section"><h2>通知</h2><p>任务结束后通过 Telegram Bot 发送结果、GitHub Actions 链接和脱敏日志尾部。现有秘密永远不会回显，空白表示保留。</p>
-        <label class="check-row"><input type="checkbox" name="notifications_enabled" ${settings.notifications_enabled ? "checked" : ""}>任务结束后发送通知</label>
-        <div class="form-grid">
-          <div class="field"><label for="notification-bot-token">新 Bot Token（可选）</label><input id="notification-bot-token" name="notification_bot_token" type="password" maxlength="256" autocomplete="new-password" data-sensitive value="" placeholder="留空保留"><p class="field-help">当前：${settings.notification_bot_token_configured ? '<span class="badge success">已配置</span>' : '<span class="badge pending">未配置</span>'}</p></div>
-          <div class="field"><label for="notification-chat-id">新 Chat ID（可选）</label><input id="notification-chat-id" name="notification_chat_id" type="password" maxlength="33" autocomplete="new-password" data-sensitive value="" placeholder="留空保留；支持数字或 @频道"><p class="field-help">当前：${settings.notification_chat_id_configured ? '<span class="badge success">已配置</span>' : '<span class="badge pending">未配置</span>'}</p></div>
-          <label class="check-row"><input type="checkbox" name="clear_notification_bot_token">明确清除现有 Bot Token</label>
-          <label class="check-row"><input type="checkbox" name="clear_notification_chat_id">明确清除现有 Chat ID</label>
-        </div>
-        <div class="notice mt-md"><span aria-hidden="true">i</span><span>Token 与 Chat ID 通过独立 API 加密写入 D1；保存或校验失败后输入框也会保持空白。</span></div>
-      </div>
+      ${renderNotificationSettings(settings)}
       <div class="settings-section"><button class="button primary" type="submit">保存设置</button></div>
     </form></section>
     <aside class="stack"><section class="card"><div class="card-head"><h2>安全边界</h2></div><div class="card-body service-list">${serviceRow("管理员登录", "ok", "GitHub OAuth")}${serviceRow("凭据存储", "ok", "AES-256-GCM")}${serviceRow("Runner 鉴权", "ok", "GitHub OIDC")}${serviceRow("任务调度", "ok", "D1 + 秒级 Runner 对时")}</div></section><div class="notice"><span aria-hidden="true">i</span><span><strong>秒级说明</strong><br>Runner 会等待到目标秒；GitHub Actions 排队造成的延迟会显示在执行记录中。</span></div></aside></div>`;
@@ -1505,6 +1549,52 @@ async function submitSettings(form) {
     toast("保存失败", errorMessage(error), "error");
     button.disabled = false;
     button.textContent = "保存设置";
+  }
+}
+
+function notificationChatType(type) {
+  return ({ private: "私聊", group: "群组", supergroup: "超级群组", channel: "频道" })[type] || "会话";
+}
+
+async function discoverNotificationChats(button) {
+  button.disabled = true;
+  const label = button.textContent;
+  button.textContent = "正在查找…";
+  try {
+    const chats = await api.notificationChats();
+    const body = chats.length
+      ? `<div class="chat-picker">${chats.map((chat) => `<button type="button" data-action="select-notification-chat" data-chat-id="${escapeHtml(chat.id)}"><span><strong>${escapeHtml(chat.label)}</strong><small>${escapeHtml(notificationChatType(chat.type))} · ${escapeHtml(chat.id)}</small></span><b aria-hidden="true">›</b></button>`).join("")}</div>`
+      : `<div class="notice warning"><span aria-hidden="true">!</span><span>暂时没有找到会话。请先在 Telegram 打开这个 Bot 并发送 <strong>/start</strong>；群组或频道内也要先发送一条消息，然后再试。</span></div>`;
+    openModal({
+      title: chats.length ? "选择通知接收位置" : "还没有收到 Bot 会话",
+      description: chats.length ? "只显示这个 Bot 最近收到消息的会话" : "Telegram 只有在收到消息后才会返回 Chat ID",
+      body,
+      footer: `<span class="field-help">Chat ID 只会填入表单，点击“保存设置”后才加密保存</span><div><button class="button" type="button" data-action="close-modal">关闭</button></div>`,
+    });
+  } catch (error) {
+    toast("无法查找 Chat ID", errorMessage(error), "error");
+  } finally {
+    if (button.isConnected) {
+      button.disabled = false;
+      button.textContent = label;
+    }
+  }
+}
+
+async function testConfiguredNotification(button) {
+  button.disabled = true;
+  const label = button.textContent;
+  button.textContent = "正在发送…";
+  try {
+    await api.testNotification();
+    toast("测试通知已发送", "请到 Telegram 检查接收结果。");
+  } catch (error) {
+    toast("测试通知失败", errorMessage(error), "error");
+  } finally {
+    if (button.isConnected) {
+      button.disabled = false;
+      button.textContent = label;
+    }
   }
 }
 
@@ -1670,6 +1760,8 @@ view.addEventListener("click", async (event) => {
   if (action === "import-tasks") return document.querySelector("#task-import-file")?.click();
   if (action === "export-tasks") return exportTasks();
   if (action === "run-detail") return showRunDetail(id);
+  if (action === "discover-notification-chats") return discoverNotificationChats(target);
+  if (action === "test-notification") return testConfiguredNotification(target);
   if (action === "revoke-session") {
     target.disabled = true;
     try { await api.revokeSession(id); toast("登录会话已撤销"); return refreshRoute(); }
@@ -1764,6 +1856,14 @@ modalRoot.addEventListener("click", async (event) => {
   const action = actionTarget.dataset.action;
   const id = actionTarget.dataset.id;
   if (action === "close-modal") return closeModal();
+  if (action === "select-notification-chat") {
+    const input = view.querySelector("#notification-chat-id");
+    if (input) input.value = actionTarget.dataset.chatId || "";
+    const clear = view.querySelector('input[name="clear_notification_chat_id"]');
+    if (clear) clear.checked = false;
+    closeModal();
+    return toast("Chat ID 已填入", "请点击页面底部的“保存设置”。");
+  }
   if (action === "account-tab") return openAccountWizard(actionTarget.dataset.mode);
   if (action === "restart-login") return openAccountWizard();
   if (action === "retry-account-validation") {

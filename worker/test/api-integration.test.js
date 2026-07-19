@@ -20,7 +20,7 @@ function request(path, { method = "GET", body, headers = {} } = {}) {
   });
 }
 
-function harness({ dispatchStatus = 204, identity = { user_id: "legacy-admin", role: "admin", email: "admin@example.com" } } = {}) {
+function harness({ dispatchStatus = 204, identity = { user_id: "legacy-admin", role: "admin", email: "admin@example.com" }, telegramUpdates = [] } = {}) {
   const { sqlite, db, repository } = createTestRepository();
   const dispatches = [];
   const telegramMessages = [];
@@ -35,6 +35,9 @@ function harness({ dispatchStatus = 204, identity = { user_id: "legacy-admin", r
     now: () => current,
     fetch: async (url, init) => {
       if (String(url).startsWith("https://api.telegram.org/")) {
+        if (String(url).endsWith("/getUpdates")) {
+          return Response.json({ ok: true, result: telegramUpdates });
+        }
         telegramMessages.push({ url: String(url), body: JSON.parse(init.body) });
         return new Response(null, { status: 200 });
       }
@@ -890,6 +893,30 @@ test("admin notification settings replace, retain, and clear encrypted secrets w
   }), env);
   assert.equal(response.status, 422);
   assert.equal(JSON.stringify(await response.json()).includes(invalidSecret), false);
+});
+
+test("admin can discover a notification destination and send a test message", async () => {
+  const { worker, env, telegramMessages } = harness({ telegramUpdates: [
+    { update_id: 1, message: { chat: { id: 12345, type: "private", first_name: "GrandpaNiu" } } },
+  ] });
+  const token = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd";
+  let response = await worker.fetch(request("/api/v1/settings/notifications", {
+    method: "PATCH", body: { bot_token: token, chat_id: "12345" },
+  }), env);
+  assert.equal(response.status, 200);
+
+  response = await worker.fetch(request("/api/v1/settings/notifications/chats"), env);
+  assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
+  assert.deepEqual((await response.json()).data, [{ id: "12345", label: "GrandpaNiu", type: "private" }]);
+
+  response = await worker.fetch(request("/api/v1/settings/notifications/test", {
+    method: "POST", body: {},
+  }), env);
+  assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
+  assert.deepEqual((await response.json()).data, { sent: true });
+  assert.equal(telegramMessages.length, 1);
+  assert.match(telegramMessages[0].body.text, /测试通知/);
+  assert.equal(JSON.stringify(await worker.fetch(request("/api/v1/settings"), env).then((item) => item.json())).includes(token), false);
 });
 
 test("admin can configure one encrypted Telegram application without exposing its credentials", async () => {

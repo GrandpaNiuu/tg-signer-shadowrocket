@@ -4,6 +4,7 @@ import { dispatchWorkflow } from "./github.js";
 import { HttpError, json, methodNotAllowed, readJson } from "./http.js";
 import { ACTIVE_LOGIN_STATUSES } from "./login-states.js";
 import { enqueueAndDispatch } from "./scheduler.js";
+import { discoverNotificationChats, sendTestNotification } from "./notifications.js";
 import { resolveTelegramApplicationCredentialRefs } from "./telegram-application.js";
 import {
   accountInput,
@@ -541,9 +542,10 @@ async function platformUsers(request, repository, context, parts, url) {
 }
 
 async function settings(request, env, repository, context, parts) {
-  if (parts[0] !== "settings" || parts.length > 2) return null;
-  if (parts.length === 2) {
+  if (parts[0] !== "settings" || parts.length > 3) return null;
+  if (parts.length >= 2) {
     if (parts[1] === "telegram") {
+      if (parts.length !== 2) return null;
       if (request.method !== "PATCH") return methodNotAllowed(["PATCH"]);
       if (context.identity?.role !== "admin") {
         throw new HttpError(403, "administrator_required", "只有平台管理员可以修改 Telegram 应用凭据。");
@@ -560,10 +562,32 @@ async function settings(request, env, repository, context, parts) {
       return json({ data: await repository.updateTelegramApplicationSecrets(secrets) });
     }
     if (parts[1] !== "notifications") return null;
-    if (request.method !== "PATCH") return methodNotAllowed(["PATCH"]);
     if (context.identity?.role !== "admin") {
       throw new HttpError(403, "administrator_required", "只有平台管理员可以修改通知凭据。");
     }
+    if (parts[2] === "chats" && parts.length === 3) {
+      if (request.method !== "GET") return methodNotAllowed(["GET"]);
+      const result = await discoverNotificationChats(env, repository, context.fetch);
+      if (!result.ok) {
+        const missing = result.reason === "not_configured";
+        throw new HttpError(missing ? 409 : 502, missing ? "notification_bot_not_configured" : "notification_bot_unavailable",
+          missing ? "请先保存 Bot Token，再查找接收位置。" : "Telegram 暂时无法读取这个 Bot 的最近会话，请检查 Token 后重试。");
+      }
+      return json({ data: result.chats });
+    }
+    if (parts[2] === "test" && parts.length === 3) {
+      if (request.method !== "POST") return methodNotAllowed(["POST"]);
+      exactObject(await readJson(request, 1_000), []);
+      const result = await sendTestNotification(env, repository, context.fetch);
+      if (!result.sent) {
+        const missing = result.reason === "not_configured";
+        throw new HttpError(missing ? 409 : 502, missing ? "notification_not_configured" : "notification_send_failed",
+          missing ? "请先保存 Bot Token 与 Chat ID。" : "测试通知发送失败，请确认 Bot 已加入目标会话且 Chat ID 正确。");
+      }
+      return json({ data: { sent: true } });
+    }
+    if (parts.length !== 2) return null;
+    if (request.method !== "PATCH") return methodNotAllowed(["PATCH"]);
     const input = notificationSettingsInput(await readJson(request, 16_000));
     const purposeMap = { bot_token: "bot_token", chat_id: "chat_id" };
     const secrets = [];

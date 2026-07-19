@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { encryptSecret } from "../src/crypto.js";
-import { sendRunNotification } from "../src/notifications.js";
+import { discoverNotificationChats, sendRunNotification, sendTestNotification } from "../src/notifications.js";
 
 const ROOT_KEY = Buffer.alloc(32, 23).toString("base64");
 const BOT_TOKEN = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd";
@@ -83,4 +83,47 @@ test("disabled notifications do not read secrets or call Telegram", async () => 
     assert.fail("Telegram must not be called");
   }, "run-1");
   assert.deepEqual(result, { sent: false, reason: "disabled" });
+});
+
+test("notification setup discovers deduplicated Telegram chats without exposing the token", async () => {
+  const secrets = new Map([["bot_token", await secret("bot_token", BOT_TOKEN)]]);
+  const repository = {
+    async getSecretByOwnerPurpose(_ownerType, _ownerId, purpose) { return secrets.get(purpose); },
+  };
+  let requestedUrl;
+  const result = await discoverNotificationChats({ SECRET_ROOT_KEY: ROOT_KEY }, repository, async (url, init) => {
+    requestedUrl = String(url);
+    assert.equal(init.method, "POST");
+    return Response.json({ ok: true, result: [
+      { update_id: 1, message: { chat: { id: 12345, type: "private", first_name: "Grandpa", username: "grandpa" } } },
+      { update_id: 2, message: { chat: { id: 12345, type: "private", first_name: "Grandpa", username: "grandpa" } } },
+      { update_id: 3, channel_post: { chat: { id: -100987654321, type: "channel", title: "运行通知" } } },
+    ] });
+  });
+
+  assert.match(requestedUrl, /^https:\/\/api\.telegram\.org\/bot/);
+  assert.equal(JSON.stringify(result).includes(BOT_TOKEN), false);
+  assert.deepEqual(result, { ok: true, reason: null, chats: [
+    { id: "-100987654321", label: "运行通知", type: "channel" },
+    { id: "12345", label: "Grandpa (@grandpa)", type: "private" },
+  ] });
+});
+
+test("test notification sends a harmless message only with configured credentials", async () => {
+  const secrets = new Map([
+    ["bot_token", await secret("bot_token", BOT_TOKEN)],
+    ["chat_id", await secret("chat_id", CHAT_ID)],
+  ]);
+  const repository = {
+    async getSecretByOwnerPurpose(_ownerType, _ownerId, purpose) { return secrets.get(purpose); },
+  };
+  let message;
+  const result = await sendTestNotification({ SECRET_ROOT_KEY: ROOT_KEY }, repository, async (_url, init) => {
+    message = JSON.parse(init.body);
+    return new Response(null, { status: 200 });
+  });
+  assert.deepEqual(result, { sent: true, reason: null });
+  assert.equal(message.chat_id, CHAT_ID);
+  assert.match(message.text, /测试通知/);
+  assert.equal(message.text.includes(BOT_TOKEN), false);
 });

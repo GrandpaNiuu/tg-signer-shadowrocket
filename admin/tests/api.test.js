@@ -129,6 +129,24 @@ test("uses a dedicated endpoint for notification secret replacement and clearing
   assert.equal(result.notification_chat_id_configured, false);
 });
 
+test("discovers notification chats and sends a test through dedicated endpoints", async () => {
+  const requests = [];
+  const client = new ApiClient({ fetchImpl: async (url, options) => {
+    requests.push({ url, method: options.method, body: options.body ? JSON.parse(options.body) : undefined });
+    if (url.endsWith("/chats")) {
+      return Response.json({ data: [{ id: "12345", label: "GrandpaNiu", type: "private" }] });
+    }
+    return Response.json({ data: { sent: true } });
+  }});
+
+  assert.deepEqual(await client.notificationChats(), [{ id: "12345", label: "GrandpaNiu", type: "private" }]);
+  assert.deepEqual(await client.testNotification(), { sent: true });
+  assert.deepEqual(requests, [
+    { url: "/api/v1/settings/notifications/chats", method: "GET", body: undefined },
+    { url: "/api/v1/settings/notifications/test", method: "POST", body: {} },
+  ]);
+});
+
 test("uses a dedicated endpoint for global Telegram application credentials", async () => {
   let captured;
   const client = new ApiClient({ fetchImpl: async (url, options) => {

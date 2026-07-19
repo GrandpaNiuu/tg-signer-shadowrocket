@@ -160,6 +160,10 @@ test("notification settings render only blank sensitive inputs with explicit cle
   }
   assert.match(app, /name="clear_notification_bot_token"/);
   assert.match(app, /name="clear_notification_chat_id"/);
+  assert.match(app, /https:\/\/t\.me\/BotFather/);
+  assert.match(app, /data-action="discover-notification-chats"/);
+  assert.match(app, /data-action="test-notification"/);
+  assert.match(app, /通知只影响任务结果提醒/);
   assert.doesNotMatch(app, /value="\$\{settings\.notification_(?:bot_token|chat_id)/);
 });
 

@@ -173,6 +173,8 @@ export class ApiClient {
   updateNotificationSettings(patch) {
     return this.request("/settings/notifications", { method: "PATCH", body: patch });
   }
+  notificationChats() { return this.request("/settings/notifications/chats"); }
+  testNotification() { return this.request("/settings/notifications/test", { method: "POST", body: {} }); }
   updateTelegramApplicationSettings(credentials) {
     return this.request("/settings/telegram", { method: "PATCH", body: credentials });
   }
