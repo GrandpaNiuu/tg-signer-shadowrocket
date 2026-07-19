@@ -2,6 +2,11 @@ import { nextCronDate } from "./cron.js";
 import { dispatchWorkflow } from "./github.js";
 import { sanitizedError } from "./redaction.js";
 
+export const DISPATCH_ERROR_CODES = Object.freeze({
+  HTTP: "github_dispatch_http_error",
+  NETWORK: "github_dispatch_network_error",
+});
+
 function plusSeconds(date, seconds) {
   return new Date(date.getTime() + seconds * 1_000).toISOString();
 }
@@ -13,6 +18,10 @@ function emptyReconciliation() {
     expired_runs: 0,
     expired_queued: 0,
   };
+}
+
+function dispatchFailureMessage(code, message) {
+  return `[${code}] ${message}`;
 }
 
 export function makeRun(task, { id, triggerType, scheduledFor, now, dedupeKey = null }) {
@@ -47,33 +56,39 @@ export async function dispatchNextForAccount(accountId, env, dependencies) {
   try {
     const response = await dispatchRun(env, dependencies.fetch, run.id);
     if (!response.ok) {
+      const errorCode = DISPATCH_ERROR_CODES.HTTP;
       await dependencies.repository.markRunDispatchFailed(
         run.id,
         dependencies.now().toISOString(),
-        `GitHub workflow dispatch returned HTTP ${response.status}.`,
+        dispatchFailureMessage(errorCode, `GitHub workflow dispatch returned HTTP ${response.status}.`),
       );
-      return { dispatched: false, reason: "github_error", run };
+      return { dispatched: false, reason: "github_error", error_code: errorCode, run };
     }
     await dependencies.repository.markRunDispatched(run.id, dependencies.now().toISOString());
     return { dispatched: true, run };
   } catch (error) {
+    const errorCode = DISPATCH_ERROR_CODES.NETWORK;
     await dependencies.repository.markRunDispatchFailed(
       run.id,
       dependencies.now().toISOString(),
-      sanitizedError(error, 500),
+      dispatchFailureMessage(errorCode, sanitizedError(error, 500)),
     );
-    return { dispatched: false, reason: "github_error", run };
+    return { dispatched: false, reason: "github_error", error_code: errorCode, run };
   }
 }
 
 export async function dispatchPendingRuns(env, dependencies, limit = 20) {
   const timestamp = dependencies.now().toISOString();
   const accountIds = await dependencies.repository.listDispatchableAccountIds(timestamp, limit);
-  const summary = { candidates: accountIds.length, dispatched: 0, failed: 0 };
+  const summary = { candidates: accountIds.length, dispatched: 0, failed: 0, failures_by_code: {} };
   for (const accountId of accountIds) {
     const result = await dispatchNextForAccount(accountId, env, dependencies);
     if (result.dispatched) summary.dispatched += 1;
-    else if (result.reason === "github_error") summary.failed += 1;
+    else if (result.reason === "github_error") {
+      summary.failed += 1;
+      const code = result.error_code || "github_dispatch_error";
+      summary.failures_by_code[code] = (summary.failures_by_code[code] || 0) + 1;
+    }
   }
   return summary;
 }
@@ -130,6 +145,7 @@ export async function runScheduler(env, dependencies) {
     queued: 0,
     dispatched: 0,
     failed: 0,
+    failures_by_code: {},
     reconciliation,
   };
   for (const task of dueTasks) {
@@ -155,5 +171,6 @@ export async function runScheduler(env, dependencies) {
   const dispatch = await dispatchPendingRuns(env, dependencies, 100);
   summary.dispatched = dispatch.dispatched;
   summary.failed = dispatch.failed;
+  summary.failures_by_code = dispatch.failures_by_code;
   return summary;
 }
