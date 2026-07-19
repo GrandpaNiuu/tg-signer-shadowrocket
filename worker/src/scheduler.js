@@ -24,6 +24,20 @@ function dispatchFailureMessage(code, message) {
   return `[${code}] ${message}`;
 }
 
+function withHiddenProperty(object, name, value) {
+  Object.defineProperty(object, name, {
+    value,
+    enumerable: false,
+    configurable: false,
+    writable: true,
+  });
+  return object;
+}
+
+function dispatchFailureResult(reason, errorCode, run) {
+  return withHiddenProperty({ dispatched: false, reason, run }, "error_code", errorCode);
+}
+
 export function makeRun(task, { id, triggerType, scheduledFor, now, dedupeKey = null }) {
   return {
     id,
@@ -62,7 +76,7 @@ export async function dispatchNextForAccount(accountId, env, dependencies) {
         dependencies.now().toISOString(),
         dispatchFailureMessage(errorCode, `GitHub workflow dispatch returned HTTP ${response.status}.`),
       );
-      return { dispatched: false, reason: "github_error", error_code: errorCode, run };
+      return dispatchFailureResult("github_error", errorCode, run);
     }
     await dependencies.repository.markRunDispatched(run.id, dependencies.now().toISOString());
     return { dispatched: true, run };
@@ -73,21 +87,26 @@ export async function dispatchNextForAccount(accountId, env, dependencies) {
       dependencies.now().toISOString(),
       dispatchFailureMessage(errorCode, sanitizedError(error, 500)),
     );
-    return { dispatched: false, reason: "github_error", error_code: errorCode, run };
+    return dispatchFailureResult("github_error", errorCode, run);
   }
 }
 
 export async function dispatchPendingRuns(env, dependencies, limit = 20) {
   const timestamp = dependencies.now().toISOString();
   const accountIds = await dependencies.repository.listDispatchableAccountIds(timestamp, limit);
-  const summary = { candidates: accountIds.length, dispatched: 0, failed: 0, failures_by_code: {} };
+  const failuresByCode = {};
+  const summary = withHiddenProperty(
+    { candidates: accountIds.length, dispatched: 0, failed: 0 },
+    "failures_by_code",
+    failuresByCode,
+  );
   for (const accountId of accountIds) {
     const result = await dispatchNextForAccount(accountId, env, dependencies);
     if (result.dispatched) summary.dispatched += 1;
     else if (result.reason === "github_error") {
       summary.failed += 1;
       const code = result.error_code || "github_dispatch_error";
-      summary.failures_by_code[code] = (summary.failures_by_code[code] || 0) + 1;
+      failuresByCode[code] = (failuresByCode[code] || 0) + 1;
     }
   }
   return summary;
@@ -145,7 +164,6 @@ export async function runScheduler(env, dependencies) {
     queued: 0,
     dispatched: 0,
     failed: 0,
-    failures_by_code: {},
     reconciliation,
   };
   for (const task of dueTasks) {
@@ -171,6 +189,5 @@ export async function runScheduler(env, dependencies) {
   const dispatch = await dispatchPendingRuns(env, dependencies, 100);
   summary.dispatched = dispatch.dispatched;
   summary.failed = dispatch.failed;
-  summary.failures_by_code = dispatch.failures_by_code;
-  return summary;
+  return withHiddenProperty(summary, "failures_by_code", dispatch.failures_by_code);
 }
