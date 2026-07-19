@@ -27,6 +27,8 @@
 
 验证要求：为账号、任务、运行记录各增加至少一个跨用户拒绝测试。
 
+状态：待补充自动化测试。
+
 ### P0-2 不得对不确定发送结果自动重试
 
 Runner 超时、连接中断或 Telegram 返回结果无法确认时必须保持 `ambiguous`，不能转换为普通失败后自动重试。
@@ -35,74 +37,65 @@ Runner 超时、连接中断或 Telegram 返回结果无法确认时必须保持
 
 验证要求：增加超时后状态断言和后续 Scheduler 不重派发测试。
 
+状态：Runner 已有 `retryable && !ambiguous` 才重试的保护；待补充边界测试。
+
 ### P0-3 workflow input 只能包含不敏感 ID
 
 `task-runner.yml` 和 `telegram-login.yml` 的输入必须继续只传 `run_id`、`flow_id` 等非敏感标识。Session、API Hash、验证码、2FA、代理凭据不得进入 workflow input 或命令行。
 
-## P1：下一批应修复的问题
+状态：已核查，当前 workflow input 仅传不敏感 ID。
 
-### P1-1 API 错误响应的 request_id 不完全一致
+## P1：整改进度
 
-Worker 顶层异常和普通 404 会返回 `request_id`，但 `methodNotAllowed()` 当前只返回 `error`，未携带 `request_id`。
+### P1-1 API 错误响应 request_id
 
-影响：前端或日志系统无法用同一请求标识关联 405 错误。
+状态：已完成。所有 Worker 响应带 `x-request-id`，错误 JSON 会补齐 `request_id`，并已有 404、405、`cf-ray` 测试。
 
-建议：将 `requestId` 传入 `methodNotAllowed()`，并增加 Worker 测试，确保 4xx/5xx 均包含 `request_id`。
+### P1-2 `/health` 与 `/ready`
 
-### P1-2 `/health` 仅表示 Worker 进程可响应
+状态：已完成。`/health` 保持存活检查；`/ready` 检查 D1 和关键非敏感配置，并避免泄露内部异常和 Secret。
 
-当前 `/health` 固定返回 `ok: true`，没有检查 D1 binding、Repository 查询或关键配置。
+### P1-3 状态定义集中化
 
-影响：Worker 能返回 200，但数据库未绑定、migration 未完成或关键配置缺失时，外部仍会误判为健康。
+状态：进行中。已新增账号、任务运行和 dispatch 状态常量及合法性测试；关键路径硬编码替换仍在继续。
 
-建议拆分：
+### P1-4 Scheduler reconciliation 可观测性
 
-- `/health`：存活检查，仅证明 Worker 可响应。
-- `/ready`：就绪检查，验证 D1 可执行轻量查询，并检查关键非敏感配置是否存在。
+状态：已完成基础部分。Scheduler summary 与 Cron 结构化日志已输出：
 
-`/ready` 不得返回 Secret、数据库 ID、Token 或内部异常正文。
+- `cancelled_unavailable`
+- `reset_dispatches`
+- `expired_runs`
+- `expired_queued`
 
-### P1-3 状态定义仍分散在 SQL、Worker 与 Runner 中
+并已有 reconciliation 测试。
 
-登录状态已有 `login-states.js` 集中定义，但账号状态、任务运行状态和 dispatch 状态仍大量以字符串形式分散在 SQL 和业务逻辑中。
+### P1-5 调度失败稳定错误码
 
-影响：新增状态或修改状态时容易出现前端、Worker、D1 和 Runner 不一致。
+状态：已完成基础分类。GitHub dispatch 失败分为：
 
-建议新增集中状态模块并逐步迁移；第一阶段只集中常量与校验，不修改数据库枚举和值。
+- `github_dispatch_http_error`
+- `github_dispatch_network_error`
 
-### P1-4 Scheduler reconciliation 缺少可观测结果
+Scheduler summary 会按错误码聚合，持久化错误文本带稳定错误码前缀，且不包含 Token 或请求正文。
 
-Scheduler 会调用 `reconcileRuns()`，但当前调度摘要没有记录 reconciliation 修复了多少 stale dispatch、过期 claim 或异常运行。
+### P1-6 Session 失效与重连状态
 
-影响：系统自动恢复发生时，管理员无法判断恢复了什么，也无法发现持续性故障。
-
-建议让 `reconcileRuns()` 返回结构化计数，并写入 scheduler 脱敏日志。
-
-### P1-5 调度失败原因需要稳定错误码
-
-当前 GitHub dispatch 非 2xx 时主要保存文本，例如 `GitHub workflow dispatch returned HTTP ...`。
-
-影响：后台只能按文本展示，难以聚合、筛选和告警。
-
-建议同时记录稳定错误码，例如 `github_dispatch_http_error`、`github_dispatch_network_error`、`github_dispatch_timeout`。
+状态：待完成。需要统一 Telegram Session 失效错误码，并确保账号进入明确的重连状态，避免无效 Session 持续触发任务。
 
 ## P2：维护性优化
 
 ### P2-1 Repository 文件体积过大
 
-`worker/src/repository.js` 同时承担认证、用户、Session、Secret、账号、任务、运行、登录流程和调度持久化。
-
 不建议立即重写。应在测试覆盖充分后，按领域逐步拆分内部模块，同时保持现有 `createD1Repository()` 对外接口不变。
 
-### P2-2 生产配置基线需要自动验证
+### P2-2 生产配置基线
 
-建议新增只检查非敏感配置的部署验证，确认 DB binding、GitHub owner/repo/workflow 文件名、Runner OIDC audience、Admin origin 与 Scheduler lead seconds。
+基础部分已由 `/ready` 覆盖。后续可增加部署后 smoke check，但不得打印 Secret。
 
-Secret 只检查“是否配置”，不得打印值。
+### P2-3 CI 关键边界
 
-### P2-3 CI 应明确覆盖关键边界
-
-需要补充以下最小集成场景：
+当前仍需补充：
 
 1. 用户 A 不能读取用户 B 的账号、任务和运行。
 2. 同一 dedupe key 只能创建一个 scheduled run。
@@ -112,27 +105,13 @@ Secret 只检查“是否配置”，不得打印值。
 6. Session 失效后账号进入明确的重连状态。
 7. 所有 API 错误响应经过脱敏。
 
-## 推荐实施顺序
+## 剩余实施顺序
 
-### PR #3：统一 API 错误追踪
-
-让 404、405、认证失败、校验失败和 500 都返回 `request_id`，并增加 Worker 测试。风险低，不改数据库、调度或 Runner。
-
-### PR #4：增加 `/ready`
-
-保留现有 `/health` 行为，新增 D1 与非敏感配置就绪检查。风险低。
-
-### PR #5：集中运行状态常量
-
-新增状态常量和合法状态校验，先替换 Worker 内硬编码字符串，不修改数据库中的现有状态值。风险中低。
-
-### PR #6：Scheduler reconciliation metrics
-
-Repository 返回结构化恢复计数，Scheduler 输出脱敏指标，并增加 stale dispatch 和 expired claim 测试。风险中。
-
-### PR #7：Session 失效与重连状态
-
-统一 Telegram Session 失效错误码，明确账号何时进入 `reconnect_required`，防止无效 Session 持续触发失败任务。风险中高。
+1. Session 失效错误分类和账号重连状态。
+2. 跨用户隔离自动化测试。
+3. ambiguous 不重试、stale dispatch 与 dedupe 边界测试。
+4. 完整 CI 验证。
+5. PR 从 Draft 转为 Ready 后统一合并。
 
 ## 当前不建议进行的改动
 
@@ -148,5 +127,6 @@ Repository 返回结构化恢复计数，Scheduler 输出脱敏指标，并增�
 - 健康检查能区分“存活”和“可工作”。
 - 状态名称有单一来源。
 - Scheduler 自动恢复有结构化、脱敏指标。
+- GitHub dispatch 失败有稳定错误码。
 - Session 失效不会造成持续失败或重复执行。
 - 关键安全边界被自动化测试覆盖。
