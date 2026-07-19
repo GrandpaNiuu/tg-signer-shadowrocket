@@ -1,0 +1,80 @@
+name: 缺陷报告
+description: 报告可复现的后台、Worker、调度或 Runner 问题
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请先删除所有真实 Session、Token、验证码、API Hash、手机号、邮箱和生产数据。安全漏洞请不要使用公开 Issue，请按照 SECURITY.md 私密报告。
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: 影响模块
+      options:
+        - admin / Pages 后台
+        - worker / API
+        - worker / scheduler
+        - worker / auth 或安全
+        - D1 migration 或数据
+        - runner / task
+        - runner / Telegram login
+        - GitHub Actions
+        - 部署或配置
+        - 不确定
+    validations:
+      required: true
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: 问题描述
+      description: 说明预期行为与实际行为。
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 最小复现步骤
+      placeholder: |
+        1. 打开……
+        2. 创建……
+        3. 执行……
+        4. 出现……
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: 环境信息
+      description: 提供浏览器、部署分支、Worker/Pages 环境以及相关 commit。不要填写 Secret。
+      placeholder: |
+        Commit:
+        Browser:
+        Cloudflare environment:
+        Workflow run URL:
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 已脱敏日志
+      description: 只粘贴完成脱敏后的日志、错误代码或截图说明。
+      render: text
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我已确认 Issue 中不包含 Session、Token、验证码、密码、API Hash 或个人数据。
+          required: true
+        - label: 我已搜索现有 Issue，未发现相同问题。
+          required: true
+        - label: 这不是需要私密报告的安全漏洞。
+          required: true
