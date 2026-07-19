@@ -15,10 +15,14 @@ function mapAccount(row) {
     user_id: row.user_id,
     name: row.name,
     phone_masked: row.phone_masked,
+    telegram_user_id: row.telegram_user_id,
+    telegram_username: row.telegram_username,
+    telegram_display_name: row.telegram_display_name,
     status: row.status,
     enabled: Boolean(row.enabled),
     last_error: row.last_error,
     last_connected_at: row.last_connected_at,
+    last_checked_at: row.last_checked_at,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -62,6 +66,7 @@ function mapRun(row) {
     id: row.id,
     user_id: row.user_id,
     task_id: row.historical_task_id,
+    current_task_id: row.current_task_id,
     task_name: row.task_name,
     account_id: row.historical_account_id,
     account_name: row.account_name,
@@ -90,6 +95,26 @@ function mapRun(row) {
     error_message: row.error_message,
     github_run_id: row.github_run_id,
     result: safeJson(row.result_json),
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function mapPlatformUser(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    role: row.role,
+    status: row.status,
+    display_name: row.display_name,
+    email: row.email,
+    email_verified_at: row.email_verified_at,
+    github_login: row.github_login,
+    github_name: row.github_name,
+    accounts_count: Number(row.accounts_count || 0),
+    tasks_count: Number(row.tasks_count || 0),
+    active_sessions_count: Number(row.active_sessions_count || 0),
+    last_seen_at: row.last_seen_at,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -161,7 +186,17 @@ const TASK_SELECT = `SELECT t.*, a.name AS account_name, s.skill_key, s.display_
   JOIN accounts a ON a.id = t.account_id
   JOIN skills s ON s.id = t.skill_id`;
 
+const PLATFORM_USER_SELECT = `SELECT u.id, u.role, u.status, u.display_name, u.email,
+  u.email_verified_at, u.github_login, u.github_name, u.created_at, u.updated_at,
+  (SELECT COUNT(*) FROM accounts a WHERE a.user_id = u.id) AS accounts_count,
+  (SELECT COUNT(*) FROM tasks t WHERE t.user_id = u.id) AS tasks_count,
+  (SELECT COUNT(*) FROM user_sessions s
+    WHERE s.user_id = u.id AND s.revoked_at IS NULL AND s.expires_at > ?) AS active_sessions_count,
+  (SELECT MAX(s.last_seen_at) FROM user_sessions s WHERE s.user_id = u.id) AS last_seen_at
+  FROM users u`;
+
 const RUN_SELECT = `SELECT r.*,
+  t.id AS current_task_id,
   CASE WHEN r.context_snapshot_version IS NOT NULL THEN r.task_id_snapshot ELSE r.task_id END AS historical_task_id,
   CASE WHEN r.context_snapshot_version IS NOT NULL THEN r.task_name_snapshot ELSE t.name END AS task_name,
   CASE WHEN r.context_snapshot_version IS NOT NULL THEN r.account_id_snapshot ELSE a.id END AS historical_account_id,
@@ -256,6 +291,30 @@ export class D1Repository {
       email_verified_at, password_algorithm, password_hash, password_salt, password_iterations,
       github_user_id, github_login, github_name, created_at, updated_at
       FROM users WHERE email_normalized = ?`).bind(emailNormalized).first();
+  }
+
+  async listPlatformUsers({ limit, offset, timestamp }) {
+    const result = await this.db.prepare(`${PLATFORM_USER_SELECT}
+      ORDER BY CASE u.role WHEN 'admin' THEN 0 ELSE 1 END, u.created_at DESC, u.id DESC
+      LIMIT ? OFFSET ?`).bind(timestamp, limit, offset).all();
+    return rows(result).map(mapPlatformUser);
+  }
+
+  async getPlatformUser(id, timestamp) {
+    return mapPlatformUser(await this.db.prepare(`${PLATFORM_USER_SELECT} WHERE u.id = ?`)
+      .bind(timestamp, id).first());
+  }
+
+  async updatePlatformUserStatus(id, status, timestamp) {
+    const results = await this.db.batch([
+      this.db.prepare(`UPDATE users SET status = ?, updated_at = ?
+        WHERE id = ? AND role = 'user'`).bind(status, timestamp, id),
+      this.db.prepare(`UPDATE user_sessions SET revoked_at = ?
+        WHERE user_id = ? AND revoked_at IS NULL AND ? = 'disabled'`).bind(timestamp, id, status),
+      this.db.prepare(`DELETE FROM auth_tokens WHERE user_id = ? AND ? = 'disabled'`).bind(id, status),
+    ]);
+    if (!changes(results[0])) return null;
+    return this.getPlatformUser(id, timestamp);
   }
 
   async createOrUpdatePendingEmailUser(user, password) {
@@ -480,15 +539,26 @@ export class D1Repository {
 
   async listAccounts({ limit, offset }) {
     const result = await this.db.prepare(`SELECT id, name, phone_masked, status, enabled, last_error,
-      user_id, last_connected_at, created_at, updated_at FROM accounts
+      user_id, telegram_user_id, telegram_username, telegram_display_name,
+      last_connected_at, last_checked_at, created_at, updated_at FROM accounts
       ${this.userId ? "WHERE user_id = ?" : ""} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`)
       .bind(...(this.userId ? [this.userId] : []), limit, offset).all();
     return rows(result).map(mapAccount);
   }
 
+  async listValidatableAccountIds({ limit, offset = 0 }) {
+    const result = await this.db.prepare(`SELECT id FROM accounts
+      WHERE enabled = 1 AND session_secret_id IS NOT NULL
+      ${this.userId ? "AND user_id = ?" : ""}
+      ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`)
+      .bind(...(this.userId ? [this.userId] : []), limit, offset).all();
+    return rows(result).map((row) => row.id);
+  }
+
   async getAccount(id) {
     return mapAccount(await this.db.prepare(`SELECT id, name, phone_masked, status, enabled, last_error,
-      user_id, last_connected_at, created_at, updated_at FROM accounts WHERE id = ?
+      user_id, telegram_user_id, telegram_username, telegram_display_name,
+      last_connected_at, last_checked_at, created_at, updated_at FROM accounts WHERE id = ?
       ${this.userId ? "AND user_id = ?" : ""}`).bind(id, ...(this.userId ? [this.userId] : [])).first());
   }
 
@@ -782,7 +852,8 @@ export class D1Repository {
         WHERE t.enabled = 1 AND t.next_run_at IS NOT NULL ${this.userId ? "AND t.user_id = ?" : ""}
         ORDER BY t.next_run_at, t.id LIMIT ?`).bind(...(this.userId ? [this.userId] : []), 6),
       this.db.prepare(`SELECT id, user_id, name, phone_masked, status, enabled, last_error,
-        last_connected_at, created_at, updated_at FROM accounts
+        telegram_user_id, telegram_username, telegram_display_name,
+        last_connected_at, last_checked_at, created_at, updated_at FROM accounts
         ${this.userId ? "WHERE user_id = ?" : ""} ORDER BY created_at DESC, id DESC LIMIT ?`)
         .bind(...(this.userId ? [this.userId] : []), 10),
     ]);
@@ -1389,7 +1460,11 @@ export class D1Repository {
       WHERE id = ? AND github_run_id = ? AND status NOT IN ('connected', 'failed', 'cancelled', 'expired')`)
       .bind(completion.status, completion.error, completion.updated_at, id, githubRunId));
     statements.push(this.db.prepare(`UPDATE accounts SET status = ?, session_secret_id = COALESCE(?, session_secret_id),
-      last_connected_at = ?, last_error = ?, updated_at = ? WHERE id = ?
+      last_connected_at = ?, last_checked_at = ?, last_error = ?,
+      telegram_user_id = CASE WHEN ? = 1 THEN ? ELSE telegram_user_id END,
+      telegram_username = CASE WHEN ? = 1 THEN ? ELSE telegram_username END,
+      telegram_display_name = CASE WHEN ? = 1 THEN ? ELSE telegram_display_name END,
+      updated_at = ? WHERE id = ?
       AND EXISTS (
         SELECT 1 FROM login_flows completed_flow
         WHERE completed_flow.id = ? AND completed_flow.account_id = accounts.id
@@ -1397,7 +1472,10 @@ export class D1Repository {
           AND completed_flow.updated_at = ?
       )`)
       .bind(completion.status === "connected" ? "connected" : "error", completion.sessionSecret?.id || null,
-        completion.status === "connected" ? completion.updated_at : null, completion.error,
+        completion.status === "connected" ? completion.updated_at : null, completion.updated_at, completion.error,
+        completion.identity ? 1 : 0, completion.identity?.id || null,
+        completion.identity ? 1 : 0, completion.identity?.username || null,
+        completion.identity ? 1 : 0, completion.identity?.display_name || null,
         completion.updated_at, execution.account_id, id, githubRunId, completion.status, completion.updated_at));
     statements.push(this.db.prepare("DELETE FROM secret_values WHERE owner_type = 'login_flow' AND owner_id = ?").bind(id));
     const result = await this.db.batch(statements);

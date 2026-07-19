@@ -19,6 +19,7 @@ test("uses the GitHub login when an account has no public profile name", () => {
 test("normalizes unknown routes to dashboard", () => {
   assert.equal(routeFromHash("#/accounts"), "accounts");
   assert.equal(routeFromHash("#/runs?id=1"), "runs");
+  assert.equal(routeFromHash("#/users"), "users");
   assert.equal(routeFromHash("#/not-a-page"), "dashboard");
 });
 

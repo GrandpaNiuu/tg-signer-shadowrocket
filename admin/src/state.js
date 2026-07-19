@@ -1,4 +1,4 @@
-export const ROUTES = Object.freeze(["dashboard", "accounts", "tasks", "skills", "runs", "sessions", "settings"]);
+export const ROUTES = Object.freeze(["dashboard", "accounts", "tasks", "skills", "runs", "sessions", "users", "settings"]);
 
 export function routeFromHash(hash = "") {
   const route = hash.replace(/^#?\/?/, "").split(/[/?]/)[0];
@@ -13,6 +13,7 @@ export function createStore(initial = {}) {
     tasks: [],
     skills: [],
     runs: [],
+    users: [],
     settings: {},
     dashboard: null,
     filters: {},
@@ -64,7 +65,8 @@ export function filterRows(rows, { query = "", status = "", accountId = "", task
     if (accountId && String(row.account_id) !== String(accountId)) return false;
     if (taskId && String(row.task_id) !== String(taskId)) return false;
     if (!needle) return true;
-    const haystack = [row.name, row.bot, row.command, row.username, row.phone_masked, row.skill_key, row.error_message]
+    const haystack = [row.name, row.bot, row.command, row.username, row.telegram_username,
+      row.telegram_display_name, row.phone_masked, row.skill_key, row.error_message]
       .filter(Boolean)
       .join(" ")
       .toLocaleLowerCase("zh-CN");

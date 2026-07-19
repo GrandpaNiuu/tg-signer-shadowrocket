@@ -134,6 +134,7 @@ test("D1 repository persists accounts, tasks, and an idempotent task run", async
   assert.equal(await repository.enqueueRun({ run: { ...run, id: "run-duplicate" }, nextRunAt: "2026-07-18T01:00:00.000Z" }), false);
   const stored = await repository.getRun("run-1");
   assert.equal(stored.status, "queued");
+  assert.equal(stored.current_task_id, "task-1");
   assert.equal(stored.max_attempts, 2);
   assert.deepEqual({
     task_id: stored.task_id,
@@ -202,6 +203,7 @@ test("D1 repository persists accounts, tasks, and an idempotent task run", async
   assert.equal(historical.status, "cancelled");
   assert.equal(historical.error_code, "task_deleted");
   assert.equal(historical.task_id, "task-1");
+  assert.equal(historical.current_task_id, null);
   assert.equal(historical.task_name, "Check in");
   assert.equal(historical.account_id, "account-1");
   assert.equal(historical.account_name, "Primary");

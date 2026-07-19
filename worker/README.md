@@ -26,14 +26,16 @@ Authenticated routes are:
 
 - `GET /api/v1/dashboard`
 - `GET|POST /api/v1/accounts`, `GET|PATCH|DELETE /api/v1/accounts/:id`
+- `POST /api/v1/accounts/:id/validate`, `POST /api/v1/accounts/validate-all`
 - `GET|POST /api/v1/tasks`, `GET|PATCH|DELETE /api/v1/tasks/:id`
 - `POST /api/v1/tasks/:id/runs`
 - `GET /api/v1/skills`
 - `GET /api/v1/task-runs`, `GET /api/v1/task-runs/:id`
+- `GET /api/v1/admin/users`, `PATCH /api/v1/admin/users/:id` (administrator only)
 - `GET|PATCH /api/v1/settings` (platform writes require the administrator role)
 - `PATCH /api/v1/settings/telegram`, `PATCH /api/v1/settings/notifications`
 - `POST /api/v1/login-flows`, `GET /api/v1/login-flows/:id`
-- `POST /api/v1/login-flows/:id/code|password|cancel`
+- `POST /api/v1/login-flows/:id/code|password|resend|cancel`
 
 GitHub OIDC protects all runner routes. A dispatch input contains only the
 opaque run or flow id:

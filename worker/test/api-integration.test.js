@@ -20,7 +20,7 @@ function request(path, { method = "GET", body, headers = {} } = {}) {
   });
 }
 
-function harness({ dispatchStatus = 204 } = {}) {
+function harness({ dispatchStatus = 204, identity = { user_id: "legacy-admin", role: "admin", email: "admin@example.com" } } = {}) {
   const { sqlite, db, repository } = createTestRepository();
   const dispatches = [];
   const telegramMessages = [];
@@ -29,7 +29,7 @@ function harness({ dispatchStatus = 204 } = {}) {
   let sequence = 0;
   const worker = createWorker({
     repositoryFactory: () => repository,
-    verifyAdmin: async () => ({ email: "admin@example.com" }),
+    verifyAdmin: async () => identity,
     verifyRunner: async () => ({ run_id: githubRunId, repository: "owner/repo" }),
     uuid: () => `id-${++sequence}`,
     now: () => current,
@@ -62,6 +62,68 @@ function harness({ dispatchStatus = 204 } = {}) {
     setNow: (value) => { current = new Date(value); },
   };
 }
+
+test("platform administrators can inspect users and disable access without exposing credentials", async () => {
+  const { worker, env, repository, sqlite } = harness();
+  const timestamp = "2026-07-18T00:00:00.000Z";
+  sqlite.prepare(`INSERT INTO users
+    (id, role, status, display_name, email, email_normalized, password_algorithm,
+     password_hash, password_salt, password_iterations, created_at, updated_at)
+    VALUES (?, 'user', 'active', ?, ?, ?, 'PBKDF2-SHA256', ?, ?, 210000, ?, ?)`)
+    .run("user-1", "普通用户", "member@example.com", "member@example.com", "secret-password-hash", "secret-salt", timestamp, timestamp);
+  sqlite.prepare(`INSERT INTO user_sessions
+    (id, token_hash, user_id, provider, created_at, last_seen_at, expires_at, user_agent_label)
+    VALUES (?, ?, ?, 'email', ?, ?, ?, ?)`)
+    .run("session-1", "secret-session-token-hash", "user-1", timestamp, timestamp, "2026-08-18T00:00:00.000Z", "Chrome");
+  await repository.forUser({ user_id: "user-1", role: "user" }).createAccount({
+    account: {
+      id: "member-account",
+      name: "成员账号",
+      phone_masked: "+86*******5678",
+      status: "connected",
+      enabled: 1,
+      last_connected_at: timestamp,
+      created_at: timestamp,
+      updated_at: timestamp,
+    },
+    secrets: [],
+  });
+
+  let response = await worker.fetch(request("/api/v1/admin/users"), env);
+  assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
+  const users = (await response.json()).data;
+  const member = users.find((user) => user.id === "user-1");
+  assert.deepEqual({
+    status: member.status,
+    accounts_count: member.accounts_count,
+    active_sessions_count: member.active_sessions_count,
+  }, { status: "active", accounts_count: 1, active_sessions_count: 1 });
+  assert.equal(JSON.stringify(users).includes("secret-password-hash"), false);
+  assert.equal(JSON.stringify(users).includes("secret-session-token-hash"), false);
+
+  response = await worker.fetch(request("/api/v1/admin/users/user-1", {
+    method: "PATCH",
+    body: { status: "disabled" },
+  }), env);
+  assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
+  assert.equal((await response.json()).data.status, "disabled");
+  assert.ok(sqlite.prepare("SELECT revoked_at FROM user_sessions WHERE id = 'session-1'").get().revoked_at);
+
+  response = await worker.fetch(request("/api/v1/admin/users/legacy-admin", {
+    method: "PATCH",
+    body: { status: "disabled" },
+  }), env);
+  assert.equal(response.status, 409);
+
+  const userWorker = createWorker({
+    repositoryFactory: () => repository,
+    verifyAdmin: async () => ({ user_id: "user-1", role: "user", email: "member@example.com" }),
+    uuid: () => "request-id",
+    now: () => new Date("2026-07-18T00:05:00.000Z"),
+  });
+  response = await userWorker.fetch(request("/api/v1/admin/users"), env);
+  assert.equal(response.status, 403);
+});
 
 async function createConnectedAccount(worker, env) {
   let response = await worker.fetch(request("/api/v1/accounts", {
@@ -116,6 +178,125 @@ async function createTask(worker, env, accountId, overrides = {}) {
   assert.equal(response.status, 201, JSON.stringify(await response.clone().json()));
   return (await response.json()).data;
 }
+
+test("account owners can validate every enabled Session account across batches", async () => {
+  const { worker, env } = harness();
+  const createAccount = async (name, phone) => {
+    const response = await worker.fetch(request("/api/v1/accounts", {
+      method: "POST",
+      body: {
+        name,
+        phone,
+        api_id: "123456",
+        api_hash: "0123456789abcdef0123456789abcdef",
+        session: `session-value-${name}-that-is-long-enough`,
+      },
+    }), env);
+    assert.equal(response.status, 201);
+    return (await response.json()).data;
+  };
+
+  const enabled = [];
+  for (let index = 0; index < 21; index += 1) {
+    enabled.push(await createAccount(`Enabled ${index + 1}`, `+86${13800000000 + index}`));
+  }
+  const disabled = await createAccount("Disabled", "+8613912345678");
+  let response = await worker.fetch(request(`/api/v1/accounts/${disabled.id}`, {
+    method: "PATCH",
+    body: { enabled: false },
+  }), env);
+  assert.equal(response.status, 200);
+
+  response = await worker.fetch(request("/api/v1/accounts/validate-all", {
+    method: "POST",
+    body: { cursor: 0 },
+  }), env);
+  assert.equal(response.status, 202, JSON.stringify(await response.clone().json()));
+  const firstBatch = (await response.json()).data;
+  assert.equal(firstBatch.requested, 20);
+  assert.equal(firstBatch.started, 20);
+  assert.equal(firstBatch.next_cursor, 20);
+  assert.deepEqual(firstBatch.failures, []);
+
+  response = await worker.fetch(request("/api/v1/accounts/validate-all", {
+    method: "POST",
+    body: { cursor: firstBatch.next_cursor },
+  }), env);
+  const secondBatch = (await response.json()).data;
+  assert.equal(secondBatch.requested, 1);
+  assert.equal(secondBatch.started, 1);
+  assert.equal(secondBatch.next_cursor, null);
+  assert.deepEqual(new Set([...firstBatch.flows, ...secondBatch.flows].map((flow) => flow.account_id)), new Set(enabled.map((account) => account.id)));
+  assert.equal(JSON.stringify([firstBatch, secondBatch]).includes("session-value"), false);
+});
+
+test("bulk account validation reports dispatch failures without stopping the batch", async () => {
+  const { worker, env } = harness({ dispatchStatus: 500 });
+  for (const [index, phone] of ["+8613812345678", "+8613912345678"].entries()) {
+    const created = await worker.fetch(request("/api/v1/accounts", {
+      method: "POST",
+      body: {
+        name: `Failure ${index + 1}`,
+        phone,
+        session: `session-value-${index}-that-is-long-enough`,
+      },
+    }), env);
+    assert.equal(created.status, 201);
+  }
+
+  const response = await worker.fetch(request("/api/v1/accounts/validate-all", {
+    method: "POST",
+    body: { cursor: 0 },
+  }), env);
+  assert.equal(response.status, 202);
+  const batch = (await response.json()).data;
+  assert.equal(batch.requested, 2);
+  assert.equal(batch.started, 0);
+  assert.equal(batch.failures.length, 2);
+  assert.deepEqual(new Set(batch.failures.map((failure) => failure.code)), new Set(["validation_dispatch_failed"]));
+  assert.equal(JSON.stringify(batch).includes("session-value"), false);
+});
+
+test("Session validation synchronizes the Telegram identity and health timestamp", async () => {
+  const { worker, env } = harness();
+  let response = await worker.fetch(request("/api/v1/accounts", {
+    method: "POST",
+    body: {
+      name: "Primary",
+      phone: "+8613812345678",
+      session: "session-value-that-is-long-enough-and-secret",
+    },
+  }), env);
+  const account = (await response.json()).data;
+  response = await worker.fetch(request(`/api/v1/accounts/${account.id}/validate`, {
+    method: "POST", body: {},
+  }), env);
+  const flow = (await response.json()).data;
+  await worker.fetch(request(`/api/runner/login-flows/${flow.id}/claim`, {
+    method: "POST", body: {},
+  }), env);
+  response = await worker.fetch(request(`/api/runner/login-flows/${flow.id}/complete`, {
+    method: "POST",
+    body: {
+      status: "connected",
+      identity: {
+        id: 424242,
+        username: "alice",
+        first_name: "Alice",
+        last_name: "Example",
+      },
+    },
+  }), env);
+  assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
+
+  response = await worker.fetch(request(`/api/v1/accounts/${account.id}`), env);
+  const connected = (await response.json()).data;
+  assert.equal(connected.telegram_user_id, "424242");
+  assert.equal(connected.telegram_username, "alice");
+  assert.equal(connected.telegram_display_name, "Alice Example");
+  assert.equal(connected.last_checked_at, "2026-07-18T00:01:00.000Z");
+  assert.equal(connected.last_connected_at, connected.last_checked_at);
+});
 
 async function createLoginWaitingWithCode(worker, env, name = "Temporary login") {
   let response = await worker.fetch(request("/api/v1/login-flows", {

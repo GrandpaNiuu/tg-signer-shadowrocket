@@ -277,7 +277,7 @@ tbody tr:hover { background: #fbfcfb; }
 
 .badge { display: inline-flex; align-items: center; gap: 5px; min-height: 23px; padding: 3px 8px; border-radius: 999px; background: var(--soft); color: #627068; font-size: 10px; font-weight: 720; white-space: nowrap; }
 .badge::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: currentColor; opacity: .75; }
-.badge.success, .badge.connected, .badge.succeeded, .badge.enabled { background: var(--green-soft); color: var(--green); }
+.badge.success, .badge.connected, .badge.succeeded, .badge.enabled, .badge.active { background: var(--green-soft); color: var(--green); }
 .badge.failed, .badge.error, .badge.timed_out, .badge.needs_reauth { background: var(--red-soft); color: var(--red); }
 .badge.running, .badge.dispatched, .badge.claimed { background: var(--blue-soft); color: var(--blue); }
 .badge.queued, .badge.pending, .badge.code_required, .badge.password_required, .badge.ambiguous, .badge.disconnected, .badge.login_pending { background: var(--amber-soft); color: var(--amber); }
@@ -442,6 +442,9 @@ details > .form-grid { margin-top: 14px; }
 .summary-item { padding: 11px 12px; border-radius: 9px; background: var(--soft); }
 .summary-item span { display: block; color: var(--muted); font-size: 10px; }
 .summary-item strong { display: block; margin-top: 4px; font-size: 12px; }
+.list-stack { display: grid; gap: 8px; }
+.summary-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 12px; border-radius: 9px; background: var(--soft); font-size: 11px; }
+.summary-row strong { max-width: 55%; overflow: hidden; color: #465249; text-overflow: ellipsis; white-space: nowrap; }
 .section-title { margin: 23px 0 10px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: #667269; }
 .attempt { display: grid; grid-template-columns: auto 1fr auto; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
 .attempt-no { display: grid; place-items: center; width: 27px; height: 27px; border-radius: 8px; background: var(--soft); font-size: 11px; font-weight: 780; }

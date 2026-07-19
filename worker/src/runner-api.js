@@ -362,7 +362,7 @@ async function claimLoginInput(flowId, request, env, repository, context, claims
 
 async function completeLogin(flowId, request, env, repository, context, claims) {
   const body = await readJson(request, 64_000);
-  exactObject(body, ["status", "session_string", "error"], ["status"]);
+  exactObject(body, ["status", "session_string", "error", "identity"], ["status"]);
   if (!/^(connected|failed)$/.test(String(body.status))) {
     throw new HttpError(422, "validation_failed", "Request validation failed.", { fields: ["status"] });
   }
@@ -374,6 +374,33 @@ async function completeLogin(flowId, request, env, repository, context, claims) 
   }
   const now = context.now().toISOString();
   const error = errorFields(body.error);
+  let identity = null;
+  if (body.identity !== undefined) {
+    exactObject(body.identity, ["id", "username", "first_name", "last_name"], ["id"]);
+    if (!Number.isSafeInteger(body.identity.id) || body.identity.id <= 0) {
+      throw new HttpError(422, "validation_failed", "Request validation failed.", { fields: ["identity.id"] });
+    }
+    const optionalIdentityText = (field, max, pattern = null) => {
+      const value = body.identity[field];
+      if (value === undefined || value === null || value === "") return null;
+      if (typeof value !== "string") {
+        throw new HttpError(422, "validation_failed", "Request validation failed.", { fields: [`identity.${field}`] });
+      }
+      const trimmed = value.trim();
+      if (!trimmed || trimmed.length > max || (pattern && !pattern.test(trimmed))) {
+        throw new HttpError(422, "validation_failed", "Request validation failed.", { fields: [`identity.${field}`] });
+      }
+      return trimmed;
+    };
+    const username = optionalIdentityText("username", 64, /^[A-Za-z0-9_]+$/);
+    const firstName = optionalIdentityText("first_name", 128);
+    const lastName = optionalIdentityText("last_name", 128);
+    identity = {
+      id: String(body.identity.id),
+      username,
+      display_name: [firstName, lastName].filter(Boolean).join(" ") || (username ? `@${username}` : String(body.identity.id)),
+    };
+  }
   let sessionSecret = null;
   if (body.status === "connected") {
     if (execution.mode === "session_validation") {
@@ -398,6 +425,7 @@ async function completeLogin(flowId, request, env, repository, context, claims) 
     status: body.status,
     error: error.message,
     sessionSecret,
+    identity,
     updated_at: now,
   });
   if (!flow) throw new HttpError(409, "login_state_conflict", "Login flow cannot be completed.");

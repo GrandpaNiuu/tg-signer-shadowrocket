@@ -1,5 +1,9 @@
 import { ApiClient, ApiError } from "./api.js";
 import { buildNotificationSettingsPatch, validateNotificationSettings } from "./notification-settings.js";
+import { refreshDelayForRoute } from "./live-refresh.js";
+import { cronFromSchedulePreset, schedulePresetFromCron } from "./schedule-presets.js";
+import { buildTaskExport, copyTaskDraft, parseTaskImport, TaskTransferError } from "./task-transfer.js";
+import { rerunnableTaskId } from "./run-actions.js";
 import {
   createStore,
   filterRows,
@@ -49,12 +53,16 @@ const routeMeta = {
   skills: ["Skills", "已部署的安全执行能力"],
   runs: ["执行记录", "检查结果、重试和脱敏日志"],
   sessions: ["登录会话", "查看并撤销已登录的浏览器与设备"],
+  users: ["用户管理", "查看注册用户和独立工作区"],
   settings: ["设置", "个人实例的基础运行配置"],
 };
 
 let renderToken = 0;
 let loginPollTimer = null;
+let routeRefreshTimer = null;
 let turnstileScriptPromise = null;
+let pendingTaskImport = null;
+let pendingTaskImportSource = null;
 
 function pageHead(title, description, actions = "") {
   return `<div class="page-head">
@@ -141,6 +149,7 @@ function closeModal(callHook = true) {
   if (loginPollTimer) clearTimeout(loginPollTimer);
   loginPollTimer = null;
   if (callHook && hook) hook();
+  scheduleRouteRefresh();
 }
 
 function openDrawer({ title, description = "", body }) {
@@ -158,6 +167,31 @@ function openDrawer({ title, description = "", body }) {
 function closeDrawer() {
   drawerRoot.innerHTML = "";
   document.body.style.overflow = modalRoot.firstElementChild ? "hidden" : "";
+  scheduleRouteRefresh();
+}
+
+function clearRouteRefresh() {
+  if (routeRefreshTimer) clearTimeout(routeRefreshTimer);
+  routeRefreshTimer = null;
+}
+
+function scheduleRouteRefresh() {
+  clearRouteRefresh();
+  if (appShell.hidden) return;
+  const state = store.get();
+  const delay = refreshDelayForRoute(state.route, state.runs, {
+    blocked: document.hidden || Boolean(modalRoot.firstElementChild) || Boolean(drawerRoot.firstElementChild),
+  });
+  if (!delay) return;
+  const route = state.route;
+  routeRefreshTimer = setTimeout(() => {
+    routeRefreshTimer = null;
+    if (store.get().route === route && !document.hidden && !modalRoot.firstElementChild && !drawerRoot.firstElementChild) {
+      refreshRoute({ silent: true });
+    } else {
+      scheduleRouteRefresh();
+    }
+  }, delay);
 }
 
 function authLocation() {
@@ -265,7 +299,7 @@ async function completeEmailVerification(token) {
   try {
     await api.verifyEmail(token);
     history.replaceState(null, "", "/#/login");
-    renderAuthGate("login", "邮箱验证成功，现在可以登录。 ");
+    renderAuthGate("login", "邮箱验证成功，现在可以登录。");
   } catch (error) {
     history.replaceState(null, "", "/#/login");
     renderAuthGate("login", errorMessage(error));
@@ -301,6 +335,9 @@ async function loadIdentity() {
     document.querySelector("#identity-name").textContent = identityDisplayName(identity);
     document.querySelector("#identity-email").textContent = `${roleLabel} · ${accountLabel}`;
     document.querySelector(".avatar").textContent = initials(login);
+    document.querySelectorAll("[data-admin-only]").forEach((element) => {
+      element.hidden = identity.role !== "admin";
+    });
     authGate.hidden = true;
     appShell.hidden = false;
     return true;
@@ -390,7 +427,7 @@ function renderUpcomingTasks(tasks) {
 
 function renderAccountHealth(accounts) {
   if (!accounts.length) return `<p class="field-help">尚未绑定 Telegram 账号。</p>`;
-  return `<div class="service-list">${accounts.map((account) => `<div class="service-row"><div><strong>${escapeHtml(account.name)}</strong><small>${escapeHtml(account.phone_masked || "—")} · 最近检查 ${formatDate(account.last_connected_at)}</small></div>${statusBadge(account.status)}</div>`).join("")}</div>`;
+  return `<div class="service-list">${accounts.map((account) => `<div class="service-row"><div><strong>${escapeHtml(account.telegram_display_name || account.name)}</strong><small>${escapeHtml(account.phone_masked || "—")} · 最近检查 ${formatDate(account.last_checked_at || account.last_connected_at)}</small></div>${statusBadge(account.status)}</div>`).join("")}</div>`;
 }
 
 function serviceRow(name, status, description) {
@@ -417,7 +454,8 @@ async function renderAccounts(token) {
   store.set({ accounts, settings });
   setApiState("ok", "服务正常");
   const rows = filterRows(accounts, store.get().filters.accounts || {});
-  view.innerHTML = `${pageHead("Telegram 账号", "账号凭据加密保存，后台永远不会回显 Session 或 API_HASH", `<button class="button primary" type="button" data-action="add-account">＋ 新增账号</button>`)}
+  const canValidate = accounts.some((account) => account.enabled);
+  view.innerHTML = `${pageHead("Telegram 账号", "账号凭据加密保存，后台永远不会回显 Session 或 API_HASH", `<button class="button" type="button" data-action="validate-all-accounts" ${canValidate ? "" : "disabled"}>↻ 检查全部</button><button class="button primary" type="button" data-action="add-account">＋ 新增账号</button>`)}
     <section class="card">
       <div class="toolbar"><div class="field search"><label for="account-search">搜索</label><input id="account-search" data-filter="account-query" type="search" placeholder="账号名称、用户名或手机号" value="${escapeHtml(store.get().filters.accounts?.query || "")}"></div><div class="field"><label for="account-status">连接状态</label><select id="account-status" data-filter="account-status"><option value="">全部状态</option>${["connected","disconnected","login_pending","needs_reauth","error"].map((status) => `<option value="${status}" ${store.get().filters.accounts?.status === status ? "selected" : ""}>${statusText(status)}</option>`).join("")}</select></div></div>
       <div id="accounts-table">${renderAccountsTable(rows)}</div>
@@ -427,7 +465,7 @@ async function renderAccounts(token) {
 function renderAccountsTable(accounts) {
   if (!accounts.length) return emptyState("◎", "还没有 Telegram 账号", "可通过网页登录或导入已有 Session 添加账号。", `<button class="button primary" type="button" data-action="add-account">新增账号</button>`);
   return `<div class="table-wrap"><table><thead><tr><th>账号</th><th>手机号</th><th>连接状态</th><th>最近检查</th><th>启用</th><th><span class="sr-only">操作</span></th></tr></thead><tbody>
-    ${accounts.map((account) => `<tr><td><span class="cell-title">${escapeHtml(account.name)}</span><span class="cell-sub">${account.username ? `@${escapeHtml(String(account.username).replace(/^@/, ""))}` : "尚无 Telegram 用户信息"}</span></td><td class="mono">${textOrDash(account.phone_masked || account.phone_hint)}</td><td>${statusBadge(account.status)}</td><td>${formatDate(account.last_checked_at || account.last_connected_at)}</td><td><label class="switch"><input type="checkbox" data-action="toggle-account" data-id="${escapeHtml(account.id)}" ${account.enabled ? "checked" : ""} aria-label="${account.enabled ? "停用" : "启用"}${escapeHtml(account.name)}"><span></span></label></td><td><div class="actions"><button class="button small" type="button" data-action="validate-account" data-id="${escapeHtml(account.id)}">检查</button><button class="button small ghost" type="button" data-action="edit-account" data-id="${escapeHtml(account.id)}">编辑</button><button class="button small ghost danger" type="button" data-action="delete-account" data-id="${escapeHtml(account.id)}">删除</button></div></td></tr>`).join("")}
+    ${accounts.map((account) => `<tr><td><span class="cell-title">${escapeHtml(account.telegram_display_name || account.name)}</span><span class="cell-sub">${account.telegram_username ? `@${escapeHtml(String(account.telegram_username).replace(/^@/, ""))} · ${escapeHtml(account.name)}` : escapeHtml(account.name)}</span></td><td class="mono">${textOrDash(account.phone_masked || account.phone_hint)}</td><td>${statusBadge(account.status)}</td><td>${formatDate(account.last_checked_at || account.last_connected_at)}</td><td><label class="switch"><input type="checkbox" data-action="toggle-account" data-id="${escapeHtml(account.id)}" ${account.enabled ? "checked" : ""} aria-label="${account.enabled ? "停用" : "启用"}${escapeHtml(account.name)}"><span></span></label></td><td><div class="actions"><button class="button small" type="button" data-action="validate-account" data-id="${escapeHtml(account.id)}">检查</button><button class="button small ghost" type="button" data-action="edit-account" data-id="${escapeHtml(account.id)}">编辑</button><button class="button small ghost danger" type="button" data-action="delete-account" data-id="${escapeHtml(account.id)}">删除</button></div></td></tr>`).join("")}
   </tbody></table></div>`;
 }
 
@@ -895,8 +933,9 @@ async function renderTasks(token) {
   store.set({ tasks, accounts, skills });
   setApiState("ok", "服务正常");
   const rows = filterRows(tasks, store.get().filters.tasks || {});
-  view.innerHTML = `${pageHead("签到任务", "统一 Runner 负责 Skill、重试、超时和日志", `<button class="button primary" type="button" data-action="add-task" ${accounts.length && skills.length ? "" : "disabled"}>＋ 新增任务</button>`)}
+  view.innerHTML = `${pageHead("签到任务", "统一 Runner 负责 Skill、重试、超时和日志", `<button class="button" type="button" data-action="import-tasks" ${accounts.length && skills.length ? "" : "disabled"}>导入</button><button class="button" type="button" data-action="export-tasks" ${tasks.length ? "" : "disabled"}>导出</button><button class="button primary" type="button" data-action="add-task" ${accounts.length && skills.length ? "" : "disabled"}>＋ 新增任务</button>`)}
     ${!accounts.length ? `<div class="notice warning mb-sm"><span aria-hidden="true">!</span><span>请先添加 Telegram 账号，再创建签到任务。</span></div>` : ""}
+    <input id="task-import-file" type="file" accept="application/json,.json" hidden>
     <section class="card"><div class="toolbar"><div class="field search"><label for="task-search">搜索</label><input id="task-search" type="search" data-filter="task-query" placeholder="任务、机器人或命令" value="${escapeHtml(store.get().filters.tasks?.query || "")}"></div><div class="field"><label for="task-account-filter">账号</label><select id="task-account-filter" data-filter="task-account"><option value="">全部账号</option>${accounts.map((account) => `<option value="${escapeHtml(account.id)}" ${store.get().filters.tasks?.accountId === String(account.id) ? "selected" : ""}>${escapeHtml(account.name)}</option>`).join("")}</select></div></div><div id="tasks-table">${renderTasksTable(rows, accounts)}</div></section>`;
 }
 
@@ -904,18 +943,127 @@ function renderTasksTable(tasks, accounts) {
   if (!tasks.length) return emptyState("✓", "还没有签到任务", "选择账号和 Skill，填写机器人、命令与 Cron 即可开始。", `<button class="button primary" type="button" data-action="add-task" ${accounts.length ? "" : "disabled"}>新增任务</button>`);
   const names = new Map(accounts.map((account) => [String(account.id), account.name]));
   return `<div class="table-wrap"><table><thead><tr><th>任务</th><th>账号 / Skill</th><th>机器人 / 命令</th><th>Cron</th><th>下次执行</th><th>启用</th><th><span class="sr-only">操作</span></th></tr></thead><tbody>
-    ${tasks.map((task) => `<tr><td><span class="cell-title">${escapeHtml(task.name)}</span><span class="cell-sub">重试 ${escapeHtml(task.retry ?? task.retry_count ?? 0)} 次 · 超时 ${escapeHtml(task.timeout_seconds ?? 120)} 秒</span></td><td><span class="cell-title">${escapeHtml(task.account_name || names.get(String(task.account_id)) || "未知账号")}</span><span class="cell-sub mono">${escapeHtml(task.skill_key || task.skill || "—")}</span></td><td><span class="cell-title mono">${escapeHtml(task.bot)}</span><span class="cell-sub">${escapeHtml(String(task.command || "").slice(0, 48))}${String(task.command || "").length > 48 ? "…" : ""}</span></td><td><span class="mono">${escapeHtml(task.cron || task.cron_expr)}</span><span class="cell-sub">${escapeHtml(task.timezone || "Asia/Shanghai")}</span></td><td>${formatDate(task.next_run_at)}</td><td><label class="switch"><input type="checkbox" data-action="toggle-task" data-id="${escapeHtml(task.id)}" ${task.enabled ? "checked" : ""} aria-label="${task.enabled ? "停用" : "启用"}${escapeHtml(task.name)}"><span></span></label></td><td><div class="actions"><button class="button small" type="button" data-action="run-task" data-id="${escapeHtml(task.id)}">执行</button><button class="button small ghost" type="button" data-action="edit-task" data-id="${escapeHtml(task.id)}">编辑</button><button class="button small ghost danger" type="button" data-action="delete-task" data-id="${escapeHtml(task.id)}">删除</button></div></td></tr>`).join("")}
+    ${tasks.map((task) => `<tr><td><span class="cell-title">${escapeHtml(task.name)}</span><span class="cell-sub">重试 ${escapeHtml(task.retry ?? task.retry_count ?? 0)} 次 · 超时 ${escapeHtml(task.timeout_seconds ?? 120)} 秒</span></td><td><span class="cell-title">${escapeHtml(task.account_name || names.get(String(task.account_id)) || "未知账号")}</span><span class="cell-sub mono">${escapeHtml(task.skill_key || task.skill || "—")}</span></td><td><span class="cell-title mono">${escapeHtml(task.bot)}</span><span class="cell-sub">${escapeHtml(String(task.command || "").slice(0, 48))}${String(task.command || "").length > 48 ? "…" : ""}</span></td><td><span class="mono">${escapeHtml(task.cron || task.cron_expr)}</span><span class="cell-sub">${escapeHtml(task.timezone || "Asia/Shanghai")}</span></td><td>${formatDate(task.next_run_at)}</td><td><label class="switch"><input type="checkbox" data-action="toggle-task" data-id="${escapeHtml(task.id)}" ${task.enabled ? "checked" : ""} aria-label="${task.enabled ? "停用" : "启用"}${escapeHtml(task.name)}"><span></span></label></td><td><div class="actions"><button class="button small" type="button" data-action="run-task" data-id="${escapeHtml(task.id)}">执行</button><button class="button small ghost" type="button" data-action="copy-task" data-id="${escapeHtml(task.id)}">复制</button><button class="button small ghost" type="button" data-action="edit-task" data-id="${escapeHtml(task.id)}">编辑</button><button class="button small ghost danger" type="button" data-action="delete-task" data-id="${escapeHtml(task.id)}">删除</button></div></td></tr>`).join("")}
   </tbody></table></div>`;
 }
 
+function exportTasks() {
+  try {
+    const documentValue = buildTaskExport(store.get().tasks, store.get().accounts);
+    const blob = new Blob([`${JSON.stringify(documentValue, null, 2)}\n`], { type: "application/json" });
+    const href = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = href;
+    anchor.download = `telegram-checkin-tasks-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(href);
+    toast("任务已导出", "文件不包含 Session、代理密码或 tg_signer 配置。");
+  } catch (error) {
+    toast("导出失败", errorMessage(error), "error");
+  }
+}
+
+async function prepareTaskImport(file) {
+  if (!file) return;
+  try {
+    pendingTaskImportSource = await file.text();
+    const parsed = parseTaskImport(pendingTaskImportSource, {
+      accounts: store.get().accounts,
+      skills: store.get().skills,
+    });
+    showTaskImportConfirmation(parsed);
+  } catch (error) {
+    pendingTaskImport = null;
+    if (error instanceof TaskTransferError && error.unresolvedAccounts?.length) {
+      return showTaskAccountMapping(error.unresolvedAccounts);
+    }
+    pendingTaskImportSource = null;
+    toast("无法导入", errorMessage(error), "error");
+  }
+}
+
+function showTaskImportConfirmation(parsed) {
+  pendingTaskImport = parsed.tasks;
+  openModal({
+    title: "导入签到任务",
+    description: `已读取 ${parsed.tasks.length} 个任务`,
+    body: `<div class="notice warning mb-sm"><span aria-hidden="true">!</span><span>${parsed.warnings.map(escapeHtml).join("<br>")}</span></div><div class="list-stack">${parsed.tasks.slice(0, 12).map((task) => `<div class="summary-row"><span>${escapeHtml(task.name)}</span><strong>${escapeHtml(task.bot)}</strong></div>`).join("")}${parsed.tasks.length > 12 ? `<p class="field-help">以及另外 ${parsed.tasks.length - 12} 个任务</p>` : ""}</div>`,
+    footer: `<button class="button" type="button" data-action="close-modal">取消</button><button class="button primary" type="button" data-action="confirm-import-tasks">确认导入</button>`,
+    onClose: () => {
+      pendingTaskImport = null;
+      pendingTaskImportSource = null;
+    },
+  });
+}
+
+function showTaskAccountMapping(unresolvedAccounts) {
+  const accounts = store.get().accounts;
+  openModal({
+    title: "匹配导入账号",
+    description: "导出文件中的账号名称不唯一或在当前工作区不存在",
+    body: `<form id="task-account-mapping-form"><div class="notice warning mb-sm"><span aria-hidden="true">!</span><span>请选择这些任务在当前工作区中应使用的 Telegram 账号。任务仍会以停用状态导入。</span></div><div class="form-grid">${unresolvedAccounts.map((item, index) => `<div class="field full"><label for="task-account-map-${index}">导出账号：${escapeHtml(item.account_name)}</label><select id="task-account-map-${index}" data-account-ref="${escapeHtml(item.account_ref)}" required><option value="">请选择当前账号</option>${accounts.map((account) => `<option value="${escapeHtml(account.id)}">${escapeHtml(account.name)} · ${escapeHtml(account.phone_masked || "未显示手机号")}</option>`).join("")}</select></div>`).join("")}</div></form>`,
+    footer: `<button class="button" type="button" data-action="close-modal">取消</button><button class="button primary" type="submit" form="task-account-mapping-form">继续导入</button>`,
+    onClose: () => {
+      pendingTaskImport = null;
+      pendingTaskImportSource = null;
+    },
+  });
+}
+
+function submitTaskAccountMapping(form) {
+  const accountMapping = Object.fromEntries([...form.querySelectorAll("[data-account-ref]")]
+    .map((select) => [select.dataset.accountRef, select.value]));
+  const parsed = parseTaskImport(pendingTaskImportSource, {
+    accounts: store.get().accounts,
+    skills: store.get().skills,
+    accountMapping,
+  });
+  showTaskImportConfirmation(parsed);
+}
+
+async function importPendingTasks(button) {
+  const tasks = pendingTaskImport;
+  if (!tasks?.length) return;
+  button.disabled = true;
+  button.textContent = "正在导入…";
+  let imported = 0;
+  const failures = [];
+  for (const task of tasks) {
+    try {
+      await api.createTask(task);
+      imported += 1;
+    } catch (error) {
+      failures.push(`${task.name}：${errorMessage(error)}`);
+    }
+  }
+  pendingTaskImport = null;
+  pendingTaskImportSource = null;
+  closeModal(false);
+  if (failures.length) {
+    toast("部分任务未导入", `成功 ${imported} 个，失败 ${failures.length} 个。${failures[0]}`, "error");
+  } else {
+    toast("任务已导入", `${imported} 个任务已创建并保持停用，请检查后启用。`);
+  }
+  await refreshRoute();
+}
+
 function taskFormValues(task = {}) {
+  const cron = task.cron || task.cron_expr || "0 0 * * *";
+  const schedule = schedulePresetFromCron(cron);
   return {
     name: task.name || "",
     account_id: task.account_id || "",
     skill_key: task.skill_key || task.skill || "send_text",
     bot: task.bot || "",
     command: task.command || "/checkin",
-    cron: task.cron || task.cron_expr || "0 0 * * *",
+    cron,
+    schedule_mode: schedule.mode,
+    schedule_time: `${String(schedule.hour ?? 8).padStart(2, "0")}:${String(schedule.minute ?? 0).padStart(2, "0")}`,
+    schedule_minute: schedule.minute ?? 0,
+    schedule_weekday: schedule.weekday ?? 1,
+    schedule_interval: schedule.interval ?? 15,
     timezone: task.timezone || store.get().settings.default_timezone || "Asia/Shanghai",
     retry: task.retry ?? task.retry_count ?? 1,
     timeout_seconds: task.timeout_seconds ?? 120,
@@ -928,6 +1076,8 @@ function taskFormValues(task = {}) {
 
 function taskFormHtml(values, errors = {}) {
   const { accounts, skills } = store.get();
+  const scheduleMode = values.schedule_mode || "custom";
+  const scheduleGroup = (mode) => scheduleMode === mode ? "" : "hidden";
   return `<form id="task-form" data-id="${escapeHtml(values.id || "")}" data-has-tg-signer-import="${values.has_tg_signer_import ? "true" : "false"}" novalidate><div class="form-grid">
     <div class="field span-2"><label class="required" for="task-name">任务名称</label><input id="task-name" name="name" maxlength="100" value="${escapeHtml(values.name)}" placeholder="例如：每日签到" ${invalidAttr(errors,"name")}>${fieldError(errors,"name")}</div>
     <div class="field"><label class="required" for="task-account">账号</label><select id="task-account" name="account_id" ${invalidAttr(errors,"account_id")}><option value="">请选择</option>${accounts.map((account) => `<option value="${escapeHtml(account.id)}" ${String(values.account_id) === String(account.id) ? "selected" : ""}>${escapeHtml(account.name)}${account.status !== "connected" ? `（${statusText(account.status)}）` : ""}</option>`).join("")}</select>${fieldError(errors,"account_id")}</div>
@@ -935,8 +1085,20 @@ function taskFormHtml(values, errors = {}) {
     <div class="field span-2"><label class="required" for="task-bot">Bot / Chat</label><input id="task-bot" name="bot" maxlength="128" value="${escapeHtml(values.bot)}" placeholder="@example_bot 或 Chat ID" ${invalidAttr(errors,"bot")}>${fieldError(errors,"bot")}</div>
     <div class="field span-2"><label class="required" for="task-command">Command</label><textarea id="task-command" name="command" maxlength="2000" ${invalidAttr(errors,"command")}>${escapeHtml(values.command)}</textarea>${fieldError(errors,"command")}</div>
     <div class="field span-2"><label for="task-signer-import">tg_signer 配置 <small>${values.has_tg_signer_import ? "已加密保存；留空保持不变" : "仅 tg_signer Skill 需要"}</small></label><textarea id="task-signer-import" name="tg_signer_import" maxlength="131072" autocomplete="off" data-sensitive placeholder="粘贴 tg-signer 导出 JSON 或 Base64；提交后立即清空" ${invalidAttr(errors,"tg_signer_import")}></textarea>${fieldError(errors,"tg_signer_import")}</div>
-    <div class="field"><label class="required" for="task-cron">Cron</label><input id="task-cron" class="mono" name="cron" maxlength="96" value="${escapeHtml(values.cron)}" placeholder="0 0 * * *" ${invalidAttr(errors,"cron")}>${fieldError(errors,"cron")}<p class="field-help">标准 5 段：分 时 日 月 星期</p></div>
+    <div class="field"><label class="required" for="task-schedule-mode">执行方式</label><select id="task-schedule-mode" name="schedule_mode" data-schedule-field>
+      <option value="daily" ${scheduleMode === "daily" ? "selected" : ""}>每天固定时间</option>
+      <option value="weekly" ${scheduleMode === "weekly" ? "selected" : ""}>每周固定时间</option>
+      <option value="hourly" ${scheduleMode === "hourly" ? "selected" : ""}>每小时</option>
+      <option value="interval" ${scheduleMode === "interval" ? "selected" : ""}>每隔几分钟</option>
+      <option value="custom" ${scheduleMode === "custom" ? "selected" : ""}>高级 Cron</option>
+    </select><p class="field-help">常用时间无需手写 Cron；旧 Cron 配置继续兼容。</p></div>
     <div class="field"><label class="required" for="task-timezone">时区</label><select id="task-timezone" name="timezone" ${invalidAttr(errors,"timezone")}>${["Asia/Shanghai","Asia/Hong_Kong","Asia/Tokyo","UTC","America/Los_Angeles"].map((zone) => `<option value="${zone}" ${values.timezone === zone ? "selected" : ""}>${zone}</option>`).join("")}</select>${fieldError(errors,"timezone")}</div>
+    <div class="field span-2" data-schedule-group="daily" ${scheduleGroup("daily")}><label class="required" for="task-schedule-daily-time">每天执行时间</label><input id="task-schedule-daily-time" name="schedule_daily_time" type="time" value="${escapeHtml(values.schedule_time)}" data-schedule-field></div>
+    <div class="field" data-schedule-group="weekly" ${scheduleGroup("weekly")}><label class="required" for="task-schedule-weekday">星期</label><select id="task-schedule-weekday" name="schedule_weekday" data-schedule-field>${[[1,"星期一"],[2,"星期二"],[3,"星期三"],[4,"星期四"],[5,"星期五"],[6,"星期六"],[0,"星期日"]].map(([value,label]) => `<option value="${value}" ${Number(values.schedule_weekday) === value ? "selected" : ""}>${label}</option>`).join("")}</select></div>
+    <div class="field" data-schedule-group="weekly" ${scheduleGroup("weekly")}><label class="required" for="task-schedule-weekly-time">执行时间</label><input id="task-schedule-weekly-time" name="schedule_weekly_time" type="time" value="${escapeHtml(values.schedule_time)}" data-schedule-field></div>
+    <div class="field span-2" data-schedule-group="hourly" ${scheduleGroup("hourly")}><label class="required" for="task-schedule-minute">每小时的第几分钟</label><input id="task-schedule-minute" name="schedule_minute" type="number" min="0" max="59" value="${escapeHtml(values.schedule_minute)}" data-schedule-field><p class="field-help">例如填写 15，表示每小时的 15 分执行。</p></div>
+    <div class="field span-2" data-schedule-group="interval" ${scheduleGroup("interval")}><label class="required" for="task-schedule-interval">间隔分钟</label><input id="task-schedule-interval" name="schedule_interval" type="number" min="1" max="59" value="${escapeHtml(values.schedule_interval)}" data-schedule-field><p class="field-help">从整点开始按该间隔执行，例如 15 表示每小时 00、15、30、45 分。</p></div>
+    <div class="field span-2" data-schedule-group="custom" ${scheduleGroup("custom")}><label class="required" for="task-cron">高级 Cron</label><input id="task-cron" class="mono" name="cron" maxlength="96" value="${escapeHtml(values.cron)}" placeholder="0 0 * * *" ${invalidAttr(errors,"cron")}>${fieldError(errors,"cron")}<p class="field-help">标准 5 段：分 时 日 月 星期。已有复杂表达式会原样保留。</p></div>
     <div class="field"><label for="task-retry">Retry <small>额外重试</small></label><input id="task-retry" name="retry" type="number" min="0" max="5" value="${escapeHtml(values.retry)}" ${invalidAttr(errors,"retry")}>${fieldError(errors,"retry")}</div>
     <div class="field"><label for="task-timeout">Timeout <small>秒</small></label><input id="task-timeout" name="timeout_seconds" type="number" min="10" max="900" value="${escapeHtml(values.timeout_seconds)}" ${invalidAttr(errors,"timeout_seconds")}>${fieldError(errors,"timeout_seconds")}</div>
     <div class="field"><label for="task-thread">Thread ID <small>可选</small></label><input id="task-thread" name="thread_id" type="number" min="1" value="${escapeHtml(values.thread_id)}" ${invalidAttr(errors,"thread_id")}>${fieldError(errors,"thread_id")}</div>
@@ -947,7 +1109,7 @@ function taskFormHtml(values, errors = {}) {
 }
 
 function openTaskModal(task = null, errors = {}, attempted = null) {
-  const values = { ...taskFormValues(task || {}), ...(attempted || {}), id: task?.id || "" };
+  const values = { ...taskFormValues({ ...(task || {}), ...(attempted || {}) }), id: task?.id || "" };
   openModal({
     title: task ? "编辑签到任务" : "新增签到任务",
     description: "所有任务由统一 Runner 执行",
@@ -955,7 +1117,7 @@ function openTaskModal(task = null, errors = {}, attempted = null) {
     body: taskFormHtml(values, errors),
     footer: `<span class="field-help">保存前请核对时区与执行预览</span><div><button class="button" type="button" data-action="close-modal">取消</button><button class="button primary" type="submit" form="task-form">保存任务</button></div>`,
   });
-  updateCronPreview();
+  updateScheduleEditor();
 }
 
 function readTaskForm(form) {
@@ -994,6 +1156,38 @@ function updateCronPreview() {
   }
   target.className = "notice";
   target.innerHTML = `<span aria-hidden="true">✓</span><span>${occurrences.map((date) => escapeHtml(new Intl.DateTimeFormat("zh-CN", { timeZone: String(values.get("timezone")), month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(date))).join("　·　")}</span>`;
+}
+
+function updateScheduleEditor() {
+  const form = modalRoot.querySelector("#task-form");
+  if (!form) return;
+  const data = new FormData(form);
+  const mode = String(data.get("schedule_mode") || "custom");
+  for (const group of form.querySelectorAll("[data-schedule-group]")) {
+    group.hidden = group.dataset.scheduleGroup !== mode;
+  }
+  const cronInput = form.elements.namedItem("cron");
+  if (mode !== "custom" && cronInput) {
+    const timeValue = String(data.get(mode === "weekly" ? "schedule_weekly_time" : "schedule_daily_time") || "08:00");
+    const [hour, minute] = timeValue.split(":").map(Number);
+    try {
+      cronInput.value = cronFromSchedulePreset({
+        mode,
+        hour,
+        minute: mode === "hourly" ? Number(data.get("schedule_minute")) : minute,
+        weekday: Number(data.get("schedule_weekday")),
+        interval: Number(data.get("schedule_interval")),
+      });
+    } catch {
+      const target = modalRoot.querySelector("#cron-preview");
+      if (target) {
+        target.className = "notice warning";
+        target.textContent = "请填写有效的执行时间或间隔。";
+      }
+      return;
+    }
+  }
+  updateCronPreview();
 }
 
 async function submitTaskForm(form) {
@@ -1068,6 +1262,7 @@ async function showRunDetail(id) {
     const attempts = listFrom(run?.attempts || detailPayload?.attempts, ["attempts"]);
     const logs = listFrom(run?.logs || detailPayload?.logs, ["logs"]);
     const githubUrl = safeUrl(run.github_run_url || run.github_url);
+    const rerunTaskId = rerunnableTaskId(run);
     drawerRoot.querySelector(".drawer-body").innerHTML = `<div class="run-summary">
       <div class="summary-item"><span>状态</span><strong>${statusBadge(run.status)}</strong></div>
       <div class="summary-item"><span>触发方式</span><strong>${escapeHtml(run.trigger || run.trigger_type || "—")}</strong></div>
@@ -1077,7 +1272,7 @@ async function showRunDetail(id) {
       <div class="summary-item"><span>开始时间</span><strong>${formatDate(run.started_at || run.created_at)}</strong></div>
     </div>
     ${run.error_code || run.error_message ? `<div class="notice danger"><span aria-hidden="true">!</span><span><strong>${escapeHtml(run.error_code || "TASK_FAILED")}</strong><br>${escapeHtml(run.error_message || "任务执行失败。")}</span></div>` : ""}
-    ${githubUrl ? `<p><a class="button small" href="${escapeHtml(githubUrl)}" target="_blank" rel="noopener noreferrer">查看 GitHub Actions ↗</a></p>` : ""}
+    ${rerunTaskId || githubUrl ? `<div class="actions mt-md">${rerunTaskId ? `<button class="button primary small" type="button" data-action="rerun-task" data-id="${escapeHtml(rerunTaskId)}">再次执行</button>` : ""}${githubUrl ? `<a class="button small" href="${escapeHtml(githubUrl)}" target="_blank" rel="noopener noreferrer">查看 GitHub Actions ↗</a>` : ""}</div>` : ""}
     <h3 class="section-title">尝试记录</h3>${attempts.length ? attempts.map((attempt,index) => `<div class="attempt"><div class="attempt-no">${escapeHtml(attempt.attempt_no || index + 1)}</div><div><strong>${escapeHtml(statusText(attempt.status))}</strong><p>${escapeHtml(attempt.error_message || attempt.message || "本次尝试已完成")}</p></div><span class="cell-sub">${formatDuration(attempt.duration_ms)}</span></div>`).join("") : `<p class="field-help">暂无独立尝试记录。</p>`}
     <h3 class="section-title">脱敏日志</h3>${renderRunLogs(logs)}
     <p class="field-help mt-md">日志经过 Worker 脱敏，后台不提供原始秘密日志。</p>`;
@@ -1103,6 +1298,48 @@ async function renderSessions(token) {
   </tbody></table></div>` : emptyState("▣", "没有活动会话", "重新登录后会在这里显示当前浏览器。");
   view.innerHTML = `${pageHead("登录会话", "查看并撤销其他已登录的浏览器与设备", `<button class="button" type="button" data-action="refresh">↻ 刷新</button>`)}
     <section class="card">${rowsHtml}</section>`;
+}
+
+function userStatusBadge(status) {
+  const labels = { active: "正常", pending: "待激活", disabled: "已停用" };
+  return `<span class="badge ${escapeHtml(status)}">${escapeHtml(labels[status] || status || "未知")}</span>`;
+}
+
+async function renderUsers(token) {
+  const identity = store.get().identity || {};
+  if (identity.role !== "admin") {
+    if (token !== renderToken) return;
+    setApiState("ok", "服务正常");
+    view.innerHTML = `${pageHead("用户管理", "仅平台管理员可访问")}${emptyState("!", "没有访问权限", "普通用户只能管理自己的 Telegram 账号、任务与登录会话。")}`;
+    return;
+  }
+  const users = await api.platformUsers();
+  if (token !== renderToken) return;
+  store.set({ users });
+  setApiState("ok", "服务正常");
+  const active = users.filter((user) => user.status === "active").length;
+  const disabled = users.filter((user) => user.status === "disabled").length;
+  const table = users.length ? `<div class="table-wrap"><table><thead><tr><th>用户</th><th>登录账号</th><th>工作区</th><th>最近活动</th><th>状态</th><th><span class="sr-only">操作</span></th></tr></thead><tbody>
+    ${users.map((user) => {
+      const login = user.email || (user.github_login ? `@${user.github_login}` : "—");
+      const nextStatus = user.status === "active" ? "disabled" : "active";
+      return `<tr><td><span class="cell-title">${escapeHtml(user.display_name || "未命名用户")}</span><span class="cell-sub">${user.role === "admin" ? "平台管理员" : "普通用户"}</span></td><td><span class="cell-title">${escapeHtml(login)}</span><span class="cell-sub">${user.email_verified_at ? "邮箱已验证" : user.github_login ? "GitHub" : ""}</span></td><td><span class="cell-title">${escapeHtml(user.accounts_count)} 个账号</span><span class="cell-sub">${escapeHtml(user.tasks_count)} 个任务 · ${escapeHtml(user.active_sessions_count)} 个会话</span></td><td>${formatDate(user.last_seen_at || user.created_at)}</td><td>${userStatusBadge(user.status)}</td><td>${user.role === "admin" ? '<span class="cell-sub">受保护</span>' : `<button class="button small ${nextStatus === "disabled" ? "ghost danger" : ""}" type="button" data-action="change-user-status" data-id="${escapeHtml(user.id)}" data-status="${nextStatus}">${nextStatus === "disabled" ? "停用" : "启用"}</button>`}</td></tr>`;
+    }).join("")}
+  </tbody></table></div>` : emptyState("♙", "还没有注册用户", "新用户注册后会出现在这里。");
+  view.innerHTML = `${pageHead("用户管理", "用户之间的账号、任务、Session 与日志完全隔离", `<button class="button" type="button" data-action="refresh">↻ 刷新</button>`)}
+    <div class="stats-grid mb-md"><section class="stat-card"><span class="stat-label">全部用户</span><strong>${escapeHtml(users.length)}</strong><small>包含平台管理员</small></section><section class="stat-card"><span class="stat-label">正常</span><strong>${escapeHtml(active)}</strong><small>可以登录</small></section><section class="stat-card"><span class="stat-label">已停用</span><strong>${escapeHtml(disabled)}</strong><small>会话已撤销</small></section><section class="stat-card"><span class="stat-label">独立工作区</span><strong>${escapeHtml(users.reduce((sum, user) => sum + Number(user.accounts_count || 0), 0))}</strong><small>Telegram 账号总数</small></section></div>
+    <div class="notice mb-md"><span aria-hidden="true">i</span><span>停用用户会立即撤销其所有网页登录会话，但不会删除账号、任务、加密 Session 或历史日志；重新启用后数据仍在。</span></div>
+    <section class="card">${table}</section>`;
+}
+
+function confirmPlatformUserStatus(user, status) {
+  const disabling = status === "disabled";
+  openModal({
+    title: disabling ? "停用这个用户？" : "启用这个用户？",
+    description: user.display_name || user.email || user.github_login || "普通用户",
+    body: `<div class="notice ${disabling ? "danger" : ""}"><span aria-hidden="true">${disabling ? "!" : "i"}</span><span>${disabling ? "该用户的所有网页登录会话会立即撤销，自动任务不会被删除。建议同时检查其已启用任务是否仍应继续运行。" : "该用户将可以重新登录，并继续访问原有独立工作区。"}</span></div>`,
+    footer: `<button class="button" type="button" data-action="close-modal">取消</button><button class="button ${disabling ? "danger" : "primary"}" type="button" data-action="confirm-user-status" data-id="${escapeHtml(user.id)}" data-status="${escapeHtml(status)}">${disabling ? "确认停用" : "确认启用"}</button>`,
+  });
 }
 
 async function renderSettings(token) {
@@ -1220,7 +1457,8 @@ async function submitSettings(form) {
   }
 }
 
-async function refreshRoute() {
+async function refreshRoute({ silent = false } = {}) {
+  clearRouteRefresh();
   const route = routeFromHash(location.hash);
   store.set({ route });
   const token = ++renderToken;
@@ -1228,8 +1466,10 @@ async function refreshRoute() {
   document.title = `${title} · Telegram 自动签到`;
   document.querySelector("#breadcrumb").textContent = title;
   document.querySelectorAll("[data-route]").forEach((link) => link.classList.toggle("active", link.dataset.route === route));
-  view.innerHTML = loadingPage(title, description);
-  setApiState("loading", "连接中");
+  if (!silent) {
+    view.innerHTML = loadingPage(title, description);
+    setApiState("loading", "连接中");
+  }
   try {
     if (route === "dashboard") await renderDashboard(token);
     if (route === "accounts") await renderAccounts(token);
@@ -1237,7 +1477,9 @@ async function refreshRoute() {
     if (route === "skills") await renderSkills(token);
     if (route === "runs") await renderRuns(token);
     if (route === "sessions") await renderSessions(token);
+    if (route === "users") await renderUsers(token);
     if (route === "settings") await renderSettings(token);
+    if (token === renderToken) scheduleRouteRefresh();
   } catch (error) {
     if (token === renderToken) showPageError(error);
   }
@@ -1323,7 +1565,7 @@ async function submitAuthForm(form) {
         return;
       }
       history.replaceState(null, "", "/#/login");
-      renderAuthGate("login", "验证邮件已发送，请先在邮箱中完成验证。 ");
+      renderAuthGate("login", "验证邮件已发送，请先在邮箱中完成验证。");
       return;
     }
     if (form.id === "forgot-password-form") {
@@ -1336,7 +1578,7 @@ async function submitAuthForm(form) {
       payload.turnstile_token = "";
       await operation;
       history.replaceState(null, "", "/#/login");
-      renderAuthGate("login", "如果该邮箱已注册，重置邮件已经发送。 ");
+      renderAuthGate("login", "如果该邮箱已注册，重置邮件已经发送。");
       return;
     }
     if (form.id === "reset-password-form") {
@@ -1352,7 +1594,7 @@ async function submitAuthForm(form) {
       payload.turnstile_token = "";
       await operation;
       history.replaceState(null, "", "/#/login");
-      renderAuthGate("login", "密码已重置，请使用新密码登录。 ");
+      renderAuthGate("login", "密码已重置，请使用新密码登录。");
     }
   } catch (error) {
     clearSensitive(form);
@@ -1369,6 +1611,8 @@ view.addEventListener("click", async (event) => {
   if (action === "refresh") return refreshRoute();
   if (action === "add-account") return openAccountWizard();
   if (action === "add-task") return openTaskModal();
+  if (action === "import-tasks") return document.querySelector("#task-import-file")?.click();
+  if (action === "export-tasks") return exportTasks();
   if (action === "run-detail") return showRunDetail(id);
   if (action === "revoke-session") {
     target.disabled = true;
@@ -1380,15 +1624,43 @@ view.addEventListener("click", async (event) => {
     try { return renderLoginFlow(await api.validateAccount(id)); }
     catch (error) { target.disabled = false; return toast("无法检查账号", errorMessage(error), "error"); }
   }
+  if (action === "validate-all-accounts") {
+    target.disabled = true;
+    try {
+      const batch = await api.validateAllAccounts();
+      if (batch.failures?.length) {
+        toast(batch.started ? "部分账号检查已启动" : "账号检查未能启动", `已启动 ${batch.started || 0} 个，失败 ${batch.failures.length} 个；状态会自动更新。`, "error");
+      } else {
+        toast("账号检查已启动", `正在检查 ${batch.started || 0} 个账号，状态会自动更新。`);
+      }
+      return setTimeout(() => {
+        if (store.get().route === "accounts" && !modalRoot.firstElementChild) refreshRoute();
+      }, 3500);
+    } catch (error) {
+      target.disabled = false;
+      return toast("批量检查失败", errorMessage(error), "error");
+    }
+  }
   if (action === "edit-account") return openEditAccount(state.accounts.find((item) => String(item.id) === id));
   if (action === "delete-account") return confirmDeleteAccount(state.accounts.find((item) => String(item.id) === id));
+  if (action === "copy-task") return openTaskModal(null, {}, copyTaskDraft(state.tasks.find((item) => String(item.id) === id) || {}));
   if (action === "edit-task") return openTaskModal(state.tasks.find((item) => String(item.id) === id));
   if (action === "delete-task") return confirmDeleteTask(state.tasks.find((item) => String(item.id) === id));
   if (action === "run-task") return confirmRunTask(state.tasks.find((item) => String(item.id) === id));
+  if (action === "change-user-status") {
+    const user = state.users.find((item) => String(item.id) === id);
+    if (user) return confirmPlatformUserStatus(user, target.dataset.status);
+  }
 });
 
 view.addEventListener("change", async (event) => {
   const input = event.target;
+  if (input.matches("#task-import-file")) {
+    const [file] = input.files || [];
+    input.value = "";
+    await prepareTaskImport(file);
+    return;
+  }
   if (input.matches('[data-action="toggle-account"]')) {
     const account = store.get().accounts.find((item) => String(item.id) === input.dataset.id);
     await withToggle(input, () => api.updateAccount(account.id, { enabled: input.checked }), input.checked ? "账号已启用" : "账号已停用");
@@ -1485,6 +1757,21 @@ modalRoot.addEventListener("click", async (event) => {
       actionTarget.textContent = "立即执行";
     }
   }
+  if (action === "confirm-import-tasks") return importPendingTasks(actionTarget);
+  if (action === "confirm-user-status") {
+    actionTarget.disabled = true;
+    actionTarget.textContent = "正在更新…";
+    try {
+      await api.updatePlatformUser(id, { status: actionTarget.dataset.status });
+      closeModal(false);
+      toast(actionTarget.dataset.status === "disabled" ? "用户已停用" : "用户已启用");
+      await refreshRoute();
+    } catch (error) {
+      actionTarget.disabled = false;
+      actionTarget.textContent = actionTarget.dataset.status === "disabled" ? "确认停用" : "确认启用";
+      toast("无法更新用户", errorMessage(error), "error");
+    }
+  }
 });
 
 modalRoot.addEventListener("submit", async (event) => {
@@ -1496,14 +1783,40 @@ modalRoot.addEventListener("submit", async (event) => {
   if (form.id === "login-password-form") await submitLoginSecret(form, "password");
   if (form.id === "task-form") await submitTaskForm(form);
   if (form.id === "edit-account-form") await submitEditAccountForm(form);
+  if (form.id === "task-account-mapping-form") {
+    try { submitTaskAccountMapping(form); }
+    catch (error) { toast("无法导入", errorMessage(error), "error"); }
+  }
 });
 
 modalRoot.addEventListener("input", (event) => {
+  if (event.target.matches("[data-schedule-field]")) updateScheduleEditor();
   if (event.target.matches("#task-cron, #task-timezone")) updateCronPreview();
 });
 
-drawerRoot.addEventListener("click", (event) => {
-  if (event.target.closest('[data-action="close-drawer"]') || event.target.matches("[data-drawer-backdrop]")) closeDrawer();
+modalRoot.addEventListener("change", (event) => {
+  if (event.target.matches("[data-schedule-field]")) updateScheduleEditor();
+  if (event.target.matches("#task-timezone")) updateCronPreview();
+});
+
+drawerRoot.addEventListener("click", async (event) => {
+  const actionTarget = event.target.closest("[data-action]");
+  if (actionTarget?.dataset.action === "rerun-task") {
+    actionTarget.disabled = true;
+    actionTarget.textContent = "正在派发…";
+    try {
+      const run = await api.runTask(actionTarget.dataset.id);
+      closeDrawer();
+      toast("任务已重新进入队列", `Run ${shortId(run?.id || run?.run_id)}`);
+      await refreshRoute();
+    } catch (error) {
+      actionTarget.disabled = false;
+      actionTarget.textContent = "再次执行";
+      toast("无法重新执行", errorMessage(error), "error");
+    }
+    return;
+  }
+  if (actionTarget?.dataset.action === "close-drawer" || event.target.matches("[data-drawer-backdrop]")) closeDrawer();
 });
 
 view.addEventListener("submit", async (event) => {
@@ -1526,11 +1839,17 @@ authGate.addEventListener("submit", async (event) => {
 });
 
 window.addEventListener("hashchange", () => {
+  clearRouteRefresh();
   closeModal();
   closeDrawer();
   document.body.classList.remove("nav-open");
   if (!appShell.hidden) refreshRoute();
   else showLogin();
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) scheduleRouteRefresh();
+  else clearRouteRefresh();
 });
 
 document.querySelector("#menu-toggle").addEventListener("click", (event) => {

@@ -74,6 +74,42 @@ test("starts Session validation and verification-code resend with opaque ids", a
   ]);
 });
 
+test("starts a privacy-safe bulk account validation request", async () => {
+  const captured = [];
+  const client = new ApiClient({ fetchImpl: async (url, options) => {
+    const call = { url, method: options.method, body: JSON.parse(options.body) };
+    captured.push(call);
+    if (call.body.cursor === 0) {
+      return Response.json({ data: {
+        requested: 2,
+        started: 1,
+        flows: [{ id: "flow-1" }],
+        failures: [{ account_id: "account-2", code: "validation_dispatch_failed" }],
+        next_cursor: 20,
+      } }, { status: 202 });
+    }
+    return Response.json({ data: {
+      requested: 1,
+      started: 1,
+      flows: [{ id: "flow-3" }],
+      failures: [],
+      next_cursor: null,
+    } }, { status: 202 });
+  }});
+
+  const result = await client.validateAllAccounts();
+  assert.deepEqual(captured, [
+    { url: "/api/v1/accounts/validate-all", method: "POST", body: { cursor: 0 } },
+    { url: "/api/v1/accounts/validate-all", method: "POST", body: { cursor: 20 } },
+  ]);
+  assert.deepEqual(result, {
+    requested: 3,
+    started: 2,
+    flows: [{ id: "flow-1" }, { id: "flow-3" }],
+    failures: [{ account_id: "account-2", code: "validation_dispatch_failed" }],
+  });
+});
+
 test("uses a dedicated endpoint for notification secret replacement and clearing", async () => {
   let captured;
   const client = new ApiClient({ fetchImpl: async (url, options) => {
@@ -181,5 +217,23 @@ test("email registration, login, reset, and session management use dedicated aut
     { url: "/api/auth/email/reset-password", method: "POST" },
     { url: "/api/auth/sessions", method: "GET" },
     { url: "/api/auth/sessions/session%2F1", method: "DELETE" },
+  ]);
+});
+
+test("platform user management uses administrator-only endpoints", async () => {
+  const requests = [];
+  const client = new ApiClient({ fetchImpl: async (url, options) => {
+    requests.push({ url, method: options.method, body: options.body ? JSON.parse(options.body) : undefined });
+    return Response.json({
+      data: url.endsWith("/users") ? [{ id: "user-1" }] : { id: "user-1", status: "disabled" },
+      pagination: { next_cursor: null },
+    });
+  }});
+
+  assert.deepEqual(await client.platformUsers(), [{ id: "user-1" }]);
+  assert.equal((await client.updatePlatformUser("user/1", { status: "disabled" })).status, "disabled");
+  assert.deepEqual(requests, [
+    { url: "/api/v1/admin/users", method: "GET", body: undefined },
+    { url: "/api/v1/admin/users/user%2F1", method: "PATCH", body: { status: "disabled" } },
   ]);
 });

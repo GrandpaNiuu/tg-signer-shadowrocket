@@ -37,11 +37,12 @@ D1 的 `scheduler_mode` 初始值为 `legacy`。只有完成迁移并在后台�
 
 - 概览：今日执行、成功、失败、进行中和最近脱敏日志。
 - 用户登录：GitHub 首次登录自动注册；邮箱注册必须验证，支持找回密码和撤销其他登录会话。每位用户只能访问自己的账号、任务与运行记录。
-- Telegram 账号：添加、编辑、删除、启停、状态；支持导入旧 Session，并由短时 Runner 调用 `get_me` 验证后才标记 connected。
+- Telegram 账号：添加、编辑、删除、启停、状态；支持导入旧 Session、同步 Telegram 名称/用户名，并可分批检查当前工作区的全部账号。短时 Runner 调用 `get_me` 验证后才标记 connected。
 - 网页登录：新增账号只输入手机号，再依次输入验证码和可选 2FA；API_ID/API_HASH 在设置中统一配置一次，也可自动复用完整的旧账号凭据对。成功后自动导出并加密保存 Session。
-- 签到任务：账号、Skill、Bot、Command、Cron、Retry、Timeout、Thread、Delete After，全字段 CRUD、启停和手动执行。
+- 签到任务：账号、Skill、Bot、Command、Cron、Retry、Timeout、Thread、Delete After，全字段 CRUD、启停和手动执行；提供每日/每周/间隔等可视化时间设置、复制，以及不含秘密的 JSON 导入导出。
 - Skill Registry：代码 allowlist 中的 `send_text` 与 `tg_signer`；数据库不能指定任意 Python/Shell 代码。
-- 执行记录：状态、时间、错误、耗时、重试、attempts 和脱敏日志。
+- 执行记录：状态、时间、错误、耗时、重试、attempts 和脱敏日志；页面自动发现新运行，保留任务仍存在时可直接再次执行。
+- 用户管理：管理员查看公开注册用户、工作区资源数量和最近活动，并可停用/恢复访问；停用会撤销会话但保留用户数据。
 - 设置：全局 Telegram 应用凭据、默认时区、通知开关以及 `legacy`/`d1` 调度切换。
 
 账号和任务数量没有仓库内的固定上限，实际吞吐受 Cloudflare 与 GitHub Actions 的个人账户配额限制。同一账号的任务串行执行，不同账号可以并行，避免多个 Runner 同时使用同一 Telegram Session。

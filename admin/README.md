@@ -7,11 +7,12 @@ Cloudflare Pages 上的轻量 Telegram 自动签到后台。它是一个无构�
 ## 页面
 
 - 概览：今日执行、成功、失败、进行中、最近运行和脱敏日志。
-- Telegram 账号：默认只输入手机号，再由短时 GitHub Login Runner 完成可重发/重试验证码和可选 2FA；旧 Session 导入保留为高级方式。支持编辑、删除、启停和随时检查连接状态。
-- 签到任务：账号、Skill、Bot、Command、Cron、Retry、Timeout、Thread、Delete After 全字段 CRUD，支持手动执行和未来五次 Cron 预览。
+- Telegram 账号：默认只输入手机号，再由短时 GitHub Login Runner 完成可重发/重试验证码和可选 2FA；旧 Session 导入保留为高级方式。支持编辑、删除、启停、同步 Telegram 身份，以及分批检查当前工作区的全部账号。
+- 签到任务：账号、Skill、Bot、Command、Cron、Retry、Timeout、Thread、Delete After 全字段 CRUD；支持手动执行、未来五次 Cron 预览、可视化时间设置、复制，以及不含秘密的 JSON 导入导出。同名账号跨工作区导入时会要求显式映射。
 - Skills：只读展示 Worker 中已部署的 `send_text`、`tg_signer` allowlist Registry。网页不能上传或执行任意代码。
-- 执行记录：按任务和状态筛选，查看 attempts、结构化错误和脱敏日志。
+- 执行记录：按任务和状态筛选，查看 attempts、结构化错误和脱敏日志；有运行时快速刷新、空闲时低频刷新，保留任务仍存在时可再次执行。
 - 登录会话：查看当前账号的设备会话并撤销其他会话。
+- 用户管理：仅管理员可查看注册用户、工作区资源数量和最近活动，并停用或恢复用户访问。
 - 设置：全局 Telegram API_ID/API_HASH（只配置一次或自动复用旧账号）、默认时区、`legacy`/`d1` 调度模式、通知开关。
 
 ## 本地检查
@@ -59,10 +60,12 @@ OAuth state 只能使用一次且十分钟过期；浏览器会话 Token 为随�
 
 - `/dashboard`
 - `/accounts`
+- `/accounts/validate-all`
 - `/login-flows`
 - `/tasks` 与 `/tasks/{id}/runs`
 - `/skills`
 - `/task-runs`
+- `/admin/users`
 - `/settings`
 
 成功响应为 `{ "data": ... }`；失败响应为 `{ "error": { "code", "message", "request_id"? } }`。所有字段使用 `snake_case`。敏感字段永远不能出现在响应或错误中。

@@ -433,7 +433,12 @@ class LoginRunnerTests(unittest.TestCase):
                 pass
 
             def get_me(self):
-                return types.SimpleNamespace(id=42, username="alice")
+                return types.SimpleNamespace(
+                    id=42,
+                    username="alice",
+                    first_name="Alice",
+                    last_name="Example",
+                )
 
         module = types.SimpleNamespace(Client=Client)
         claim = {
@@ -448,7 +453,15 @@ class LoginRunnerTests(unittest.TestCase):
         self.assertEqual(seen["session_string"], "existing-session-secret")
         self.assertNotIn("api_id", seen)
         self.assertNotIn("api_hash", seen)
-        self.assertEqual(identity, {"id": 42, "username": "alice"})
+        self.assertEqual(
+            identity,
+            {
+                "id": 42,
+                "username": "alice",
+                "first_name": "Alice",
+                "last_name": "Example",
+            },
+        )
 
     def test_kurigram_interactive_login_requires_api_credentials(self):
         class Client:
@@ -508,7 +521,13 @@ class LoginRunnerTests(unittest.TestCase):
         self.assertTrue(adapter.disconnected)
         self.assertEqual(
             client.completions,
-            [("flow-validation", {"status": "connected"})],
+            [(
+                "flow-validation",
+                {
+                    "status": "connected",
+                    "identity": {"id": 42, "username": "alice"},
+                },
+            )],
         )
 
     def test_dynamic_login_secrets_are_masked_before_they_are_used(self):

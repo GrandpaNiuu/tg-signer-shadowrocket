@@ -110,6 +110,32 @@ export class ApiClient {
   createAccount(account) { return this.request("/accounts", { method: "POST", body: account }); }
   updateAccount(id, patch) { return this.request(`/accounts/${encodeURIComponent(id)}`, { method: "PATCH", body: patch }); }
   validateAccount(id) { return this.request(`/accounts/${encodeURIComponent(id)}/validate`, { method: "POST", body: {} }); }
+  async validateAllAccounts() {
+    const result = { requested: 0, started: 0, flows: [], failures: [] };
+    const seenCursors = new Set();
+    let cursor = 0;
+    while (cursor !== null) {
+      if (seenCursors.has(cursor)) {
+        throw new ApiError("服务返回了重复的批量检查游标。", { code: "INVALID_RESPONSE" });
+      }
+      seenCursors.add(cursor);
+      const batch = await this.request("/accounts/validate-all", { method: "POST", body: { cursor } });
+      if (!batch || !Array.isArray(batch.flows) || !Array.isArray(batch.failures)) {
+        throw new ApiError("服务返回了无效的批量检查结果。", { code: "INVALID_RESPONSE" });
+      }
+      result.requested += Number(batch.requested || 0);
+      result.started += Number(batch.started || 0);
+      result.flows.push(...batch.flows);
+      result.failures.push(...batch.failures);
+      if (batch.next_cursor === null || batch.next_cursor === undefined) break;
+      const nextCursor = Number(batch.next_cursor);
+      if (!Number.isSafeInteger(nextCursor) || nextCursor < 0) {
+        throw new ApiError("服务返回了无效的批量检查游标。", { code: "INVALID_RESPONSE" });
+      }
+      cursor = nextCursor;
+    }
+    return result;
+  }
   deleteAccount(id) { return this.request(`/accounts/${encodeURIComponent(id)}`, { method: "DELETE" }); }
 
   createLoginFlow(input) { return this.request("/login-flows", { method: "POST", body: input }); }
@@ -136,6 +162,11 @@ export class ApiClient {
 
   taskRuns(query) { return this.listAll("/task-runs", query); }
   taskRun(id) { return this.request(`/task-runs/${encodeURIComponent(id)}`); }
+
+  platformUsers() { return this.listAll("/admin/users"); }
+  updatePlatformUser(id, patch) {
+    return this.request(`/admin/users/${encodeURIComponent(id)}`, { method: "PATCH", body: patch });
+  }
 
   settings() { return this.request("/settings"); }
   updateSettings(values) { return this.request("/settings", { method: "PATCH", body: { values } }); }

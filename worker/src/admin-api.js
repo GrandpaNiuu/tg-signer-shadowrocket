@@ -144,6 +144,39 @@ async function accounts(request, env, repository, context, parts, url) {
   if (!accountPath(parts)) return null;
   const id = parts[1];
   const action = parts[2];
+  if (id === "validate-all" && parts.length === 2) {
+    if (request.method !== "POST") return methodNotAllowed(["POST"]);
+    const body = exactObject(await readJson(request), ["cursor"]);
+    const cursor = body.cursor === undefined ? 0 : body.cursor;
+    if (!Number.isSafeInteger(cursor) || cursor < 0) {
+      throw new HttpError(422, "validation_failed", "Request validation failed.", { fields: ["cursor"] });
+    }
+    const batchSize = 20;
+    const accountIdsWithLookahead = await repository.listValidatableAccountIds({
+      limit: batchSize + 1,
+      offset: cursor,
+    });
+    const accountIds = accountIdsWithLookahead.slice(0, batchSize);
+    const flows = [];
+    const failures = [];
+    for (const accountId of accountIds) {
+      try {
+        flows.push(await startSessionValidation(env, repository, context, accountId));
+      } catch (error) {
+        failures.push({
+          account_id: accountId,
+          code: error instanceof HttpError ? error.code : "account_validation_failed",
+        });
+      }
+    }
+    return json({ data: {
+      requested: accountIds.length,
+      started: flows.length,
+      flows,
+      failures,
+      next_cursor: accountIdsWithLookahead.length > batchSize ? cursor + batchSize : null,
+    } }, 202);
+  }
   if (!id) {
     if (request.method === "GET") {
       const options = listOptions(url);
@@ -474,6 +507,39 @@ async function settingsSnapshot(repository) {
   return { ...values, ...notificationStatus, ...telegramApplicationStatus };
 }
 
+async function platformUsers(request, repository, context, parts, url) {
+  if (parts[0] !== "admin" || parts[1] !== "users" || parts.length > 3) return null;
+  if (context.identity?.role !== "admin") {
+    throw new HttpError(403, "administrator_required", "只有平台管理员可以管理用户。 ");
+  }
+  const id = parts[2];
+  const timestamp = iso(context.now);
+  if (!id) {
+    if (request.method !== "GET") return methodNotAllowed(["GET"]);
+    const options = listOptions(url);
+    const users = await repository.listPlatformUsers({
+      ...options,
+      limit: options.limit + 1,
+      timestamp,
+    });
+    return json(page(users, options));
+  }
+  if (request.method !== "PATCH") return methodNotAllowed(["PATCH"]);
+  const body = await readJson(request, 4_000);
+  exactObject(body, ["status"], ["status"]);
+  if (!['active', 'disabled'].includes(body.status)) {
+    throw new HttpError(422, "validation_failed", "Request validation failed.", { fields: ["status"] });
+  }
+  const target = await repository.getUser(id);
+  if (!target) throw new HttpError(404, "user_not_found", "用户不存在。 ");
+  if (target.role === "admin" || target.id === context.identity?.user_id) {
+    throw new HttpError(409, "protected_administrator", "管理员账号不能在这里停用。 ");
+  }
+  const user = await repository.updatePlatformUserStatus(id, body.status, timestamp);
+  if (!user) throw new HttpError(409, "user_status_conflict", "用户状态无法修改。 ");
+  return json({ data: user });
+}
+
 async function settings(request, env, repository, context, parts) {
   if (parts[0] !== "settings" || parts.length > 2) return null;
   if (parts.length === 2) {
@@ -628,6 +694,7 @@ export async function handleAdminApi(request, env, repository, context) {
     () => tasks(request, env, repository, context, parts, url),
     () => skills(request, repository, parts),
     () => runs(request, repository, parts, url),
+    () => platformUsers(request, repository, context, parts, url),
     () => settings(request, env, repository, context, parts),
     () => loginFlows(request, env, repository, context, parts),
   ]) {

@@ -141,6 +141,8 @@ class KurigramLoginAdapter:
         return {
             "id": int(user_id),
             "username": getattr(user, "username", None),
+            "first_name": getattr(user, "first_name", None),
+            "last_name": getattr(user, "last_name", None),
         }
 
     def close(self) -> None:
@@ -186,8 +188,10 @@ class TelegramLoginRunner:
             phone = str(account.get("phone", "")).strip()
             adapter = self.adapter_factory(claim)
             if isinstance(flow, Mapping) and flow.get("mode") == "session_validation":
-                adapter.verify_account()
-                self.worker_client.complete_login(flow_id, {"status": "connected"})
+                identity = adapter.verify_account()
+                self.worker_client.complete_login(
+                    flow_id, {"status": "connected", "identity": identity}
+                )
                 result = {"flow_id": flow_id, "status": "connected", "error": None}
                 logger.info("session_validated", flow_id=flow_id)
                 return result
@@ -282,13 +286,17 @@ class TelegramLoginRunner:
                             )
                     break
             phone_code_hash = ""
-            adapter.verify_account()
+            identity = adapter.verify_account()
             session_string = adapter.export_session()
             self.masker.add(session_string)
             # The only secret-bearing response goes directly to the authenticated Worker.
             self.worker_client.complete_login(
                 flow_id,
-                {"status": "connected", "session_string": session_string},
+                {
+                    "status": "connected",
+                    "session_string": session_string,
+                    "identity": identity,
+                },
             )
             session_string = ""
             result = {"flow_id": flow_id, "status": "connected", "error": None}
