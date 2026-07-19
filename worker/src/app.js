@@ -10,6 +10,33 @@ function defaultUuid() {
   return crypto.randomUUID();
 }
 
+async function withRequestId(response, requestId) {
+  const headers = new Headers(response.headers);
+  headers.set("x-request-id", requestId);
+
+  const contentType = headers.get("content-type") || "";
+  if (response.status >= 400 && contentType.includes("application/json")) {
+    try {
+      const payload = await response.clone().json();
+      if (payload && typeof payload === "object" && payload.error && !payload.request_id) {
+        return new Response(JSON.stringify({ ...payload, request_id: requestId }), {
+          status: response.status,
+          statusText: response.statusText,
+          headers,
+        });
+      }
+    } catch {
+      // Keep the original response body when an endpoint returns invalid JSON.
+    }
+  }
+
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 export function createWorker(dependencies = {}) {
   const fetchImpl = dependencies.fetch || globalThis.fetch;
   const uuid = dependencies.uuid || defaultUuid;
@@ -28,11 +55,11 @@ export function createWorker(dependencies = {}) {
       try {
         const url = new URL(request.url);
         if (url.pathname === "/health" && request.method === "GET") {
-          return json({ ok: true, worker: "tg-signer-shadowrocket" });
+          return await withRequestId(json({ ok: true, worker: "tg-signer-shadowrocket" }), requestId);
         }
         if (url.pathname.startsWith("/api/auth/")) {
           const repository = repositoryFactory(env);
-          return await adminAuth.handle(request, env, repository);
+          return await withRequestId(await adminAuth.handle(request, env, repository), requestId);
         }
         if (url.pathname.startsWith("/api/v1/")) {
           const repository = repositoryFactory(env);
@@ -45,21 +72,27 @@ export function createWorker(dependencies = {}) {
           const userRepository = typeof repository.forUser === "function"
             ? repository.forUser(identity)
             : repository;
-          return await handleAdminApi(request, env, userRepository, {
+          return await withRequestId(await handleAdminApi(request, env, userRepository, {
             uuid,
             now,
             fetch: fetchImpl,
             identity,
-          });
+          }), requestId);
         }
         if (url.pathname.startsWith("/api/runner/")) {
           const claims = await verifyRunner(request, env);
           const repository = repositoryFactory(env);
-          return await handleRunnerApi(request, env, repository, { uuid, now, fetch: fetchImpl }, claims);
+          return await withRequestId(
+            await handleRunnerApi(request, env, repository, { uuid, now, fetch: fetchImpl }, claims),
+            requestId,
+          );
         }
-        return json({ error: { code: "not_found", message: "Route not found." }, request_id: requestId }, 404);
+        return await withRequestId(
+          json({ error: { code: "not_found", message: "Route not found." }, request_id: requestId }, 404),
+          requestId,
+        );
       } catch (error) {
-        return errorResponse(error, requestId);
+        return await withRequestId(errorResponse(error, requestId), requestId);
       }
     },
 
