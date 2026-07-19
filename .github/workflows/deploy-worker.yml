@@ -135,6 +135,20 @@ jobs:
           console.log(`D1 takeover verified: ${counts.connected_account_count} connected account(s), ${counts.task_count} task(s), ${counts.successful_run_count} successful run(s).`);
           NODE
 
+      # One-time post-migration cleanup. Remove this step after one successful deployment.
+      - name: Remove retired Worker trigger secret
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ steps.normalize_token.outputs.token }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          secret_list="$(npx --yes wrangler@4.94.0 secret list --config worker/wrangler.toml)"
+          if SECRET_LIST="$secret_list" node -e 'const items = JSON.parse(process.env.SECRET_LIST); process.exit(items.some((item) => item.name === "TRIGGER_KEY") ? 0 : 1)'; then
+            printf '%s\n' '{"TRIGGER_KEY":null}' | npx --yes wrangler@4.94.0 secret bulk --config worker/wrangler.toml
+          else
+            echo "Retired TRIGGER_KEY is already absent."
+          fi
+
       - name: Apply D1 migrations
         uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3.15.0
         with:
