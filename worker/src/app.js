@@ -6,6 +6,15 @@ import { createD1Repository } from "./repository.js";
 import { handleRunnerApi } from "./runner-api.js";
 import { runScheduler } from "./scheduler.js";
 
+const REQUIRED_READY_CONFIG = Object.freeze([
+  "GITHUB_OWNER",
+  "GITHUB_REPO",
+  "RUNNER_OIDC_AUDIENCE",
+  "TASK_RUNNER_WORKFLOW_FILE",
+  "LOGIN_WORKFLOW_FILE",
+  "ADMIN_ORIGIN",
+]);
+
 function defaultUuid() {
   return crypto.randomUUID();
 }
@@ -37,6 +46,39 @@ async function withRequestId(response, requestId) {
   });
 }
 
+async function checkReadiness(env) {
+  const missingConfiguration = REQUIRED_READY_CONFIG.filter(
+    (name) => !String(env[name] || "").trim(),
+  );
+  const credentials = String(env.GITHUB_TOKEN || "").trim() ? "ok" : "missing";
+
+  let database = "missing";
+  if (env.DB) {
+    try {
+      const result = await env.DB.prepare("SELECT 1 AS ready").first();
+      database = Number(result?.ready) === 1 ? "ok" : "error";
+    } catch {
+      database = "error";
+    }
+  }
+
+  const configuration = missingConfiguration.length === 0 ? "ok" : "missing";
+  const ok = database === "ok" && configuration === "ok" && credentials === "ok";
+  return {
+    status: ok ? 200 : 503,
+    payload: {
+      ok,
+      worker: "tg-signer-shadowrocket",
+      checks: {
+        database,
+        configuration,
+        credentials,
+      },
+      ...(missingConfiguration.length ? { missing_configuration: missingConfiguration } : {}),
+    },
+  };
+}
+
 export function createWorker(dependencies = {}) {
   const fetchImpl = dependencies.fetch || globalThis.fetch;
   const uuid = dependencies.uuid || defaultUuid;
@@ -56,6 +98,10 @@ export function createWorker(dependencies = {}) {
         const url = new URL(request.url);
         if (url.pathname === "/health" && request.method === "GET") {
           return await withRequestId(json({ ok: true, worker: "tg-signer-shadowrocket" }), requestId);
+        }
+        if (url.pathname === "/ready" && request.method === "GET") {
+          const readiness = await checkReadiness(env);
+          return await withRequestId(json(readiness.payload, readiness.status), requestId);
         }
         if (url.pathname.startsWith("/api/auth/")) {
           const repository = repositoryFactory(env);
