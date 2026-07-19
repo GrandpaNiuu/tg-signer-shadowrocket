@@ -158,14 +158,13 @@ export async function runScheduler(env, dependencies) {
     };
   }
   const dueTasks = await dependencies.repository.getDueTasks(dueThrough.toISOString(), 100);
-  const summary = {
+  const summary = withHiddenProperty({
     mode: "d1",
     due: dueTasks.length,
     queued: 0,
     dispatched: 0,
     failed: 0,
-    reconciliation,
-  };
+  }, "reconciliation", reconciliation);
   for (const task of dueTasks) {
     let scheduledFor = task.next_run_at;
     // A lead window can contain more than one once-per-minute occurrence. Advance
