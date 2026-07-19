@@ -6,6 +6,15 @@ function plusSeconds(date, seconds) {
   return new Date(date.getTime() + seconds * 1_000).toISOString();
 }
 
+function emptyReconciliation() {
+  return {
+    cancelled_unavailable: 0,
+    reset_dispatches: 0,
+    expired_runs: 0,
+    expired_queued: 0,
+  };
+}
+
 export function makeRun(task, { id, triggerType, scheduledFor, now, dedupeKey = null }) {
   return {
     id,
@@ -107,11 +116,22 @@ export async function runScheduler(env, dependencies) {
     : 120;
   const dueThrough = new Date(current.getTime() + leadSeconds * 1_000);
   const staleDispatchBefore = new Date(current.getTime() - 10 * 60_000).toISOString();
+  let reconciliation = emptyReconciliation();
   if (dependencies.repository.reconcileRuns) {
-    await dependencies.repository.reconcileRuns(current.toISOString(), staleDispatchBefore);
+    reconciliation = {
+      ...reconciliation,
+      ...await dependencies.repository.reconcileRuns(current.toISOString(), staleDispatchBefore),
+    };
   }
   const dueTasks = await dependencies.repository.getDueTasks(dueThrough.toISOString(), 100);
-  const summary = { mode: "d1", due: dueTasks.length, queued: 0, dispatched: 0, failed: 0 };
+  const summary = {
+    mode: "d1",
+    due: dueTasks.length,
+    queued: 0,
+    dispatched: 0,
+    failed: 0,
+    reconciliation,
+  };
   for (const task of dueTasks) {
     let scheduledFor = task.next_run_at;
     // A lead window can contain more than one once-per-minute occurrence. Advance
