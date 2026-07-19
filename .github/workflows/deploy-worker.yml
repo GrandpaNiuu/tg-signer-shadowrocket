@@ -144,10 +144,12 @@ jobs:
           set -euo pipefail
           secret_list="$(npx --yes wrangler@4.94.0 secret list --config worker/wrangler.toml)"
           if SECRET_LIST="$secret_list" node -e 'const items = JSON.parse(process.env.SECRET_LIST); process.exit(items.some((item) => item.name === "TRIGGER_KEY") ? 0 : 1)'; then
-            printf '%s\n' '{"TRIGGER_KEY":null}' | npx --yes wrangler@4.94.0 secret bulk --config worker/wrangler.toml
+            printf 'y\n' | npx --yes wrangler@4.94.0 secret delete TRIGGER_KEY --config worker/wrangler.toml
           else
             echo "Retired TRIGGER_KEY is already absent."
           fi
+          secret_list_after="$(npx --yes wrangler@4.94.0 secret list --config worker/wrangler.toml)"
+          SECRET_LIST="$secret_list_after" node -e 'const items = JSON.parse(process.env.SECRET_LIST); if (items.some((item) => item.name === "TRIGGER_KEY")) throw new Error("TRIGGER_KEY cleanup did not take effect.")'
 
       - name: Apply D1 migrations
         uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3.15.0
