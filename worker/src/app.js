@@ -79,6 +79,10 @@ async function checkReadiness(env) {
   };
 }
 
+function hasNonZeroValues(value) {
+  return value && Object.values(value).some((entry) => Number(entry || 0) !== 0);
+}
+
 export function createWorker(dependencies = {}) {
   const fetchImpl = dependencies.fetch || globalThis.fetch;
   const uuid = dependencies.uuid || defaultUuid;
@@ -145,20 +149,7 @@ export function createWorker(dependencies = {}) {
     async scheduled(event, env, ctx) {
       ctx.waitUntil((async () => {
         try {
-          let scheduler = {
-            mode: "unavailable",
-            due: 0,
-            queued: 0,
-            dispatched: 0,
-            failed: 0,
-            failures_by_code: {},
-            reconciliation: {
-              cancelled_unavailable: 0,
-              reset_dispatches: 0,
-              expired_runs: 0,
-              expired_queued: 0,
-            },
-          };
+          let scheduler = { mode: "unavailable", due: 0, queued: 0, dispatched: 0, failed: 0 };
           let schedulerError = null;
           if (env.DB) {
             try {
@@ -174,7 +165,7 @@ export function createWorker(dependencies = {}) {
           } else {
             schedulerError = "D1BindingMissing";
           }
-          console.log(JSON.stringify({
+          const log = {
             ok: !schedulerError && scheduler.failed === 0,
             cron: event.cron,
             scheduled_time: event.scheduledTime,
@@ -183,10 +174,15 @@ export function createWorker(dependencies = {}) {
             queued: scheduler.queued,
             dispatched: scheduler.dispatched,
             failed: scheduler.failed,
-            failures_by_code: scheduler.failures_by_code,
-            reconciliation: scheduler.reconciliation,
             scheduler_error: schedulerError,
-          }));
+          };
+          if (scheduler.failures_by_code && Object.keys(scheduler.failures_by_code).length) {
+            log.failures_by_code = scheduler.failures_by_code;
+          }
+          if (hasNonZeroValues(scheduler.reconciliation)) {
+            log.reconciliation = scheduler.reconciliation;
+          }
+          console.log(JSON.stringify(log));
         } catch (error) {
           console.error(JSON.stringify({
             ok: false,
