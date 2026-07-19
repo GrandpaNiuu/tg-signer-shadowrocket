@@ -131,17 +131,21 @@ test("validates all unified task policy fields", () => {
   assert.deepEqual(validateTask({ ...valid, skill_key: "tg_signer", _has_tg_signer_import: true }), {});
 });
 
-test("checks five-part cron and previews a daily schedule", () => {
+test("checks five- or six-part cron and previews a second-precision schedule", () => {
   assert.equal(validateCron("0 0 * * *"), true);
+  assert.equal(validateCron("5 0 8 * * *"), true);
+  assert.equal(validateCron("*/5 * * * * *"), false);
   assert.equal(validateCron("0 0 * *"), false);
   assert.equal(validateCron("hello 0 * * *"), false);
   const results = nextCronOccurrences("0 8 * * *", "Asia/Shanghai", 5, new Date("2026-07-18T00:01:00Z"));
   assert.equal(results.length, 5);
   assert.equal(results[0].toISOString(), "2026-07-19T00:00:00.000Z");
+  const secondResults = nextCronOccurrences("5 0 8 * * *", "Asia/Shanghai", 2, new Date("2026-07-18T00:01:00Z"));
+  assert.equal(secondResults[0].toISOString(), "2026-07-19T00:00:05.000Z");
 });
 
 test("validates bounded settings", () => {
-  assert.deepEqual(validateSettings({ default_timezone: "Asia/Shanghai", scheduler_mode: "legacy", notifications_enabled: true }), {});
+  assert.deepEqual(validateSettings({ default_timezone: "Asia/Shanghai", scheduler_mode: "d1", notifications_enabled: true }), {});
   assert.deepEqual(Object.keys(validateSettings({ default_timezone: "", scheduler_mode: "both", notifications_enabled: false })).sort(), ["default_timezone", "scheduler_mode"]);
 });
 

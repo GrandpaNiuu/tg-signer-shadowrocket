@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light">
     <meta name="theme-color" content="#f5f7f4">
-    <title>Telegram 自动签到</title>
+    <title>Telegram 自动消息</title>
     <link rel="stylesheet" href="/assets/styles.css">
     <script type="module" src="/src/app.js"></script>
   </head>
@@ -13,9 +13,9 @@
     <section id="auth-gate" class="auth-gate" aria-labelledby="auth-title" hidden>
       <div class="auth-card">
         <span class="brand-mark auth-mark" aria-hidden="true">T</span>
-        <p class="auth-eyebrow">自动签到工作台</p>
-        <h1 id="auth-title">Telegram 自动签到</h1>
-        <p id="auth-message">登录或注册后管理自己的 Telegram 账号与签到任务。</p>
+        <p class="auth-eyebrow">消息与自动化工作台</p>
+        <h1 id="auth-title">Telegram 自动消息</h1>
+        <p id="auth-message">登录或注册后管理 Telegram 账号、定时消息与机器人命令。</p>
         <div id="auth-content" aria-live="polite"></div>
         <small>每个用户拥有独立工作区；验证码、密码与 Telegram Session 不会保存在浏览器中。</small>
       </div>
@@ -23,18 +23,18 @@
     <a class="skip-link" href="#main-content">跳到主要内容</a>
     <div id="app" class="app-shell" hidden>
       <aside class="sidebar" aria-label="主导航">
-        <a class="brand" href="#/dashboard" aria-label="Telegram 自动签到首页">
+        <a class="brand" href="#/dashboard" aria-label="Telegram 自动消息首页">
           <span class="brand-mark" aria-hidden="true">T</span>
           <span>
             <strong>Telegram</strong>
-            <small>自动签到</small>
+            <small>消息与自动化</small>
           </span>
         </a>
 
         <nav class="nav-list">
           <a href="#/dashboard" data-route="dashboard"><span aria-hidden="true">⌂</span>概览</a>
           <a href="#/accounts" data-route="accounts"><span aria-hidden="true">◎</span>Telegram 账号</a>
-          <a href="#/tasks" data-route="tasks"><span aria-hidden="true">✓</span>签到任务</a>
+          <a href="#/tasks" data-route="tasks"><span aria-hidden="true">✓</span>自动消息</a>
           <a href="#/skills" data-route="skills"><span aria-hidden="true">◇</span>Skills</a>
           <a href="#/runs" data-route="runs"><span aria-hidden="true">↻</span>执行记录</a>
           <a href="#/sessions" data-route="sessions"><span aria-hidden="true">▣</span>登录会话</a>
@@ -66,6 +66,14 @@
           <div id="view" aria-live="polite"></div>
         </main>
       </div>
+
+      <nav class="mobile-tabbar" aria-label="移动端主导航">
+        <a href="#/dashboard" data-route="dashboard"><span aria-hidden="true">⌂</span><small>概览</small></a>
+        <a href="#/accounts" data-route="accounts"><span aria-hidden="true">◎</span><small>账号</small></a>
+        <a href="#/tasks" data-route="tasks"><span aria-hidden="true">＋</span><small>消息</small></a>
+        <a href="#/runs" data-route="runs"><span aria-hidden="true">↻</span><small>记录</small></a>
+        <a href="#/settings" data-route="settings"><span aria-hidden="true">⚙</span><small>设置</small></a>
+      </nav>
     </div>
 
     <div id="toast-region" class="toast-region" aria-live="assertive" aria-atomic="true"></div>

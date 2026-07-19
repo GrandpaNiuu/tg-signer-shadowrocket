@@ -216,7 +216,7 @@ export function createEmailAuth(dependencies = {}) {
           const verificationUrl = `${config.origin}/#/verify-email?token=${token}`;
           await sendEmail(fetchImpl, config, {
             to: [email.original],
-            subject: "验证 Telegram 自动签到邮箱",
+            subject: "验证 Telegram 自动消息平台邮箱",
             html: `<p>请点击下面的链接完成邮箱验证：</p><p><a href="${verificationUrl}">验证邮箱</a></p><p>链接将在 24 小时后失效。</p>`,
           });
         }
@@ -281,7 +281,7 @@ export function createEmailAuth(dependencies = {}) {
           const resetUrl = `${config.origin}/#/reset-password?token=${token}`;
           await sendEmail(fetchImpl, config, {
             to: [user.email],
-            subject: "重置 Telegram 自动签到密码",
+            subject: "重置 Telegram 自动消息平台密码",
             html: `<p>请点击下面的链接重置密码：</p><p><a href="${resetUrl}">重置密码</a></p><p>链接将在 30 分钟后失效。</p>`,
           });
         }

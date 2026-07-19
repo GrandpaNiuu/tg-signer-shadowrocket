@@ -112,12 +112,12 @@ export function validateTask(input) {
   if (!required(input.account_id)) errors.account_id = "请选择账号。";
   if (!required(input.skill_key)) errors.skill_key = "请选择 Skill。";
   const bot = String(input.bot || "").trim();
-  if (!BOT_USERNAME.test(bot) && !CHAT_ID.test(bot)) errors.bot = "请输入 @机器人用户名或数字 Chat ID。";
-  if (!required(input.command) || input.command.length > 2000) errors.command = "请输入不超过 2000 个字符的命令。";
+  if (!BOT_USERNAME.test(bot) && !CHAT_ID.test(bot)) errors.bot = "请输入 @用户/机器人/频道用户名或数字 Chat ID。";
+  if (!required(input.command) || input.command.length > 2000) errors.command = "请输入不超过 2000 个字符的消息或命令。";
   if (input.skill_key === "tg_signer" && !required(input.tg_signer_import) && !input._has_tg_signer_import) {
     errors.tg_signer_import = "首次创建 tg_signer 任务时，请导入该任务的配置。";
   }
-  if (!validateCron(input.cron)) errors.cron = "请输入标准 5 段 Cron 表达式。";
+  if (!validateCron(input.cron)) errors.cron = "请输入标准 5 段（分钟）或 6 段（秒）Cron 表达式。";
   if (!required(input.timezone) || input.timezone.length > 64) errors.timezone = "请选择时区。";
   if (!integerInRange(input.retry, 0, 5)) errors.retry = "重试次数应在 0–5 之间。";
   if (!integerInRange(input.timeout_seconds, 10, 900)) errors.timeout_seconds = "超时应在 10–900 秒之间。";
@@ -147,8 +147,19 @@ export function validateTask(input) {
 }
 
 export function validateCron(value) {
-  const parts = String(value || "").trim().split(/\s+/);
-  return parts.length === 5 && parts.every((part) => part.length <= 32 && CRON_PART.test(part));
+  const originalParts = String(value || "").trim().split(/\s+/);
+  if (![5, 6].includes(originalParts.length)
+    || !originalParts.every((part) => part.length <= 32 && CRON_PART.test(part))) return false;
+  if (originalParts.length === 6 && !/^\d+$/.test(originalParts[0])) return false;
+  const parts = originalParts.length === 5 ? ["0", ...originalParts] : originalParts;
+  return Boolean(
+    parseCronPart(parts[0], 0, 59)
+    && parseCronPart(parts[1], 0, 59)
+    && parseCronPart(parts[2], 0, 23)
+    && parseCronPart(parts[3], 1, 31)
+    && parseCronPart(parts[4], 1, 12)
+    && parseCronPart(parts[5], 0, 7, (number) => number === 7 ? 0 : number),
+  );
 }
 
 function parseCronPart(text, min, max, normalize = (value) => value) {
@@ -182,6 +193,7 @@ export function nextCronOccurrences(expression, timezone, count = 5, from = new 
     formatter = new Intl.DateTimeFormat("en-US", {
       timeZone: timezone,
       minute: "numeric",
+      second: "numeric",
       hour: "numeric",
       day: "numeric",
       month: "numeric",
@@ -191,36 +203,45 @@ export function nextCronOccurrences(expression, timezone, count = 5, from = new 
   } catch {
     return [];
   }
-  const [minuteText, hourText, dayText, monthText, weekdayText] = expression.trim().split(/\s+/);
+  const originalParts = expression.trim().split(/\s+/);
+  const [secondText, minuteText, hourText, dayText, monthText, weekdayText]
+    = originalParts.length === 5 ? ["0", ...originalParts] : originalParts;
+  const seconds = parseCronPart(secondText, 0, 59);
   const minutes = parseCronPart(minuteText, 0, 59);
   const hours = parseCronPart(hourText, 0, 23);
   const days = parseCronPart(dayText, 1, 31);
   const months = parseCronPart(monthText, 1, 12);
   const weekdays = parseCronPart(weekdayText, 0, 7, (value) => value === 7 ? 0 : value);
-  if (![minutes, hours, days, months, weekdays].every(Boolean)) return [];
+  if (![seconds, minutes, hours, days, months, weekdays].every(Boolean)) return [];
   const weekdayNumbers = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
   const wildcardDay = dayText === "*";
   const wildcardWeekday = weekdayText === "*";
   const results = [];
-  const cursor = new Date(from);
-  cursor.setUTCSeconds(0, 0);
-  cursor.setUTCMinutes(cursor.getUTCMinutes() + 1);
-  // Sign-in tasks are normally daily. A 45-day preview keeps the UI responsive
-  // while still catching common timezone and day-of-week mistakes.
+  const startTime = from.getTime();
+  const firstMinute = Math.floor(startTime / 60_000) * 60_000;
+  const secondValues = [...seconds].sort((left, right) => left - right);
+  // Most tasks are daily. A 45-day preview keeps the UI responsive while still
+  // catching common timezone and day-of-week mistakes.
   const limit = 45 * 24 * 60;
   for (let index = 0; index < limit && results.length < count; index += 1) {
-    const parts = Object.fromEntries(formatter.formatToParts(cursor).filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
-    const dayMatch = days.has(Number(parts.day));
-    const weekdayMatch = weekdays.has(weekdayNumbers[parts.weekday]);
-    const calendarMatch = wildcardDay && wildcardWeekday
-      ? true
-      : wildcardDay ? weekdayMatch
-        : wildcardWeekday ? dayMatch
-          : dayMatch || weekdayMatch;
-    if (minutes.has(Number(parts.minute)) && hours.has(Number(parts.hour)) && months.has(Number(parts.month)) && calendarMatch) {
-      results.push(new Date(cursor));
+    const minuteBase = firstMinute + index * 60_000;
+    for (const second of secondValues) {
+      const candidate = new Date(minuteBase + second * 1_000);
+      if (candidate.getTime() <= startTime) continue;
+      const parts = Object.fromEntries(formatter.formatToParts(candidate).filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
+      const dayMatch = days.has(Number(parts.day));
+      const weekdayMatch = weekdays.has(weekdayNumbers[parts.weekday]);
+      const calendarMatch = wildcardDay && wildcardWeekday
+        ? true
+        : wildcardDay ? weekdayMatch
+          : wildcardWeekday ? dayMatch
+            : dayMatch || weekdayMatch;
+      if (seconds.has(Number(parts.second)) && minutes.has(Number(parts.minute))
+        && hours.has(Number(parts.hour)) && months.has(Number(parts.month)) && calendarMatch) {
+        results.push(candidate);
+        if (results.length >= count) break;
+      }
     }
-    cursor.setUTCMinutes(cursor.getUTCMinutes() + 1);
   }
   return results;
 }
@@ -228,7 +249,7 @@ export function nextCronOccurrences(expression, timezone, count = 5, from = new 
 export function validateSettings(input) {
   const errors = {};
   if (!required(input.default_timezone) || input.default_timezone.length > 64) errors.default_timezone = "请选择默认时区。";
-  if (!["legacy", "d1"].includes(input.scheduler_mode)) errors.scheduler_mode = "请选择调度模式。";
+  if (input.scheduler_mode !== "d1") errors.scheduler_mode = "当前仅允许 D1 动态调度。";
   return errors;
 }
 

@@ -7,27 +7,31 @@ function boundedInteger(value, name, min, max) {
 }
 
 export function schedulePresetFromCron(cron) {
-  const parts = String(cron || "").trim().split(/\s+/);
-  if (parts.length !== 5) return { mode: "custom", cron: String(cron || "") };
-  const minute = /^\d+$/.test(parts[0]) ? Number(parts[0]) : null;
-  const hour = /^\d+$/.test(parts[1]) ? Number(parts[1]) : null;
-  const weekday = /^\d+$/.test(parts[4]) ? Number(parts[4]) : null;
+  const originalParts = String(cron || "").trim().split(/\s+/);
+  if (![5, 6].includes(originalParts.length)) return { mode: "custom", cron: String(cron || "") };
+  const parts = originalParts.length === 5 ? ["0", ...originalParts] : originalParts;
+  const second = /^\d+$/.test(parts[0]) ? Number(parts[0]) : null;
+  const minute = /^\d+$/.test(parts[1]) ? Number(parts[1]) : null;
+  const hour = /^\d+$/.test(parts[2]) ? Number(parts[2]) : null;
+  const weekday = /^\d+$/.test(parts[5]) ? Number(parts[5]) : null;
+  const validSecond = second !== null && second >= 0 && second <= 59;
   const validMinute = minute !== null && minute >= 0 && minute <= 59;
   const validHour = hour !== null && hour >= 0 && hour <= 23;
-  const intervalMatch = /^\*\/([1-9]|[1-5]\d)$/.exec(parts[0]);
-  if (intervalMatch && parts.slice(1).every((part) => part === "*")) {
-    return { mode: "interval", interval: Number(intervalMatch[1]) };
+  const intervalMatch = /^\*\/([1-9]|[1-5]\d)$/.exec(parts[1]);
+  if (validSecond && intervalMatch && parts.slice(2).every((part) => part === "*")) {
+    return { mode: "interval", second, interval: Number(intervalMatch[1]) };
   }
-  if (validMinute && parts[1] === "*" && parts.slice(2).every((part) => part === "*")) {
-    return { mode: "hourly", minute };
+  if (validSecond && validMinute && parts[2] === "*" && parts.slice(3).every((part) => part === "*")) {
+    return { mode: "hourly", second, minute };
   }
-  if (validMinute && validHour && parts[2] === "*" && parts[3] === "*"
+  if (validSecond && validMinute && validHour && parts[3] === "*" && parts[4] === "*"
     && weekday !== null && weekday >= 0 && weekday <= 6) {
-    return { mode: "weekly", minute, hour, weekday };
+    return { mode: "weekly", second, minute, hour, weekday };
   }
-  if (validMinute && validHour && parts.slice(2).every((part) => part === "*")) {
+  if (validSecond && validMinute && validHour && parts.slice(3).every((part) => part === "*")) {
     return {
       mode: "daily",
+      second,
       minute,
       hour,
     };
@@ -36,22 +40,23 @@ export function schedulePresetFromCron(cron) {
 }
 
 export function cronFromSchedulePreset(input) {
+  const second = boundedInteger(input?.second ?? 0, "second", 0, 59);
   if (input?.mode === "daily") {
     const minute = boundedInteger(input.minute, "minute", 0, 59);
     const hour = boundedInteger(input.hour, "hour", 0, 23);
-    return `${minute} ${hour} * * *`;
+    return `${second} ${minute} ${hour} * * *`;
   }
   if (input?.mode === "weekly") {
     const minute = boundedInteger(input.minute, "minute", 0, 59);
     const hour = boundedInteger(input.hour, "hour", 0, 23);
     const weekday = boundedInteger(input.weekday, "weekday", 0, 6);
-    return `${minute} ${hour} * * ${weekday}`;
+    return `${second} ${minute} ${hour} * * ${weekday}`;
   }
   if (input?.mode === "hourly") {
-    return `${boundedInteger(input.minute, "minute", 0, 59)} * * * *`;
+    return `${second} ${boundedInteger(input.minute, "minute", 0, 59)} * * * *`;
   }
   if (input?.mode === "interval") {
-    return `*/${boundedInteger(input.interval, "interval", 1, 59)} * * * *`;
+    return `${second} */${boundedInteger(input.interval, "interval", 1, 59)} * * * *`;
   }
   return String(input?.cron || "").trim();
 }

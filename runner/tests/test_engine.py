@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 from runner.engine import Engine, SkillExecutionError, SkillTimeout, execute_in_subprocess
@@ -32,6 +33,34 @@ def make_spec(retry=2):
 
 
 class EngineTests(unittest.TestCase):
+    def test_scheduled_run_waits_until_the_exact_second_before_execution(self):
+        target = datetime(2026, 7, 18, 0, 1, 5, tzinfo=timezone.utc)
+        current = target - timedelta(seconds=5)
+        sleeps = []
+        executions = []
+
+        def sleep(seconds):
+            nonlocal current
+            sleeps.append(seconds)
+            current += timedelta(seconds=seconds)
+
+        base = make_spec(retry=0)
+        spec = TaskSpec(
+            **{field: getattr(base, field) for field in base.__dataclass_fields__ if field != "metadata"},
+            metadata={"trigger": "cron", "scheduled_for": target.isoformat()},
+        )
+        result = Engine(
+            FakeClient(),
+            execute_skill=lambda _spec: executions.append(current) or {"data": {}, "logs": []},
+            sleep=sleep,
+            wall_clock=lambda: current,
+        ).run(spec)
+
+        self.assertEqual(sleeps, [5.0])
+        self.assertEqual(executions, [target])
+        self.assertEqual(result["schedule_lag_ms"], 0)
+        self.assertEqual(result["schedule_wait_ms"], 5000)
+
     def test_retries_retryable_pre_send_failure_then_succeeds(self):
         calls = []
 

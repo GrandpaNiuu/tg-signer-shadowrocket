@@ -100,29 +100,37 @@ export async function enqueueAndDispatch(task, env, dependencies, {
 }
 
 export async function runScheduler(env, dependencies) {
-  const settings = await dependencies.repository.getSettings();
-  if (settings.scheduler_mode !== "d1") {
-    return { mode: "legacy", due: 0, queued: 0, dispatched: 0, failed: 0 };
-  }
   const current = dependencies.now();
+  const configuredLead = Number(env.SCHEDULE_DISPATCH_LEAD_SECONDS || 120);
+  const leadSeconds = Number.isFinite(configuredLead)
+    ? Math.min(180, Math.max(120, Math.floor(configuredLead)))
+    : 120;
+  const dueThrough = new Date(current.getTime() + leadSeconds * 1_000);
   const staleDispatchBefore = new Date(current.getTime() - 10 * 60_000).toISOString();
   if (dependencies.repository.reconcileRuns) {
     await dependencies.repository.reconcileRuns(current.toISOString(), staleDispatchBefore);
   }
-  const dueTasks = await dependencies.repository.getDueTasks(current.toISOString(), 100);
+  const dueTasks = await dependencies.repository.getDueTasks(dueThrough.toISOString(), 100);
   const summary = { mode: "d1", due: dueTasks.length, queued: 0, dispatched: 0, failed: 0 };
   for (const task of dueTasks) {
-    const scheduledFor = task.next_run_at;
-    const scheduledDate = new Date(scheduledFor);
-    const baseline = scheduledDate > current ? scheduledDate : current;
-    const nextRunAt = nextCronDate(task.cron, task.timezone, baseline).toISOString();
-    const run = makeRun(task, {
-      id: dependencies.uuid(),
-      triggerType: "schedule",
-      scheduledFor,
-      now: current,
-    });
-    if (await dependencies.repository.enqueueRun({ run, nextRunAt })) summary.queued += 1;
+    let scheduledFor = task.next_run_at;
+    // A lead window can contain more than one once-per-minute occurrence. Advance
+    // every occurrence now so a low second (for example :05) is not first
+    // dispatched by the Worker tick only five seconds before it is due.
+    for (let occurrence = 0; occurrence < 4; occurrence += 1) {
+      const scheduledDate = new Date(scheduledFor);
+      if (Number.isNaN(scheduledDate.getTime()) || scheduledDate > dueThrough) break;
+      const nextRunAt = nextCronDate(task.cron, task.timezone, scheduledDate).toISOString();
+      const run = makeRun(task, {
+        id: dependencies.uuid(),
+        triggerType: "schedule",
+        scheduledFor,
+        now: current,
+      });
+      if (!await dependencies.repository.enqueueRun({ run, nextRunAt })) break;
+      summary.queued += 1;
+      scheduledFor = nextRunAt;
+    }
   }
   const dispatch = await dispatchPendingRuns(env, dependencies, 100);
   summary.dispatched = dispatch.dispatched;

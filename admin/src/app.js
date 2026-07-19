@@ -47,9 +47,9 @@ const authMessage = document.querySelector("#auth-message");
 const authContent = document.querySelector("#auth-content");
 
 const routeMeta = {
-  dashboard: ["概览", "今天的自动签到运行情况"],
+  dashboard: ["概览", "今天的 Telegram 自动任务运行情况"],
   accounts: ["Telegram 账号", "管理登录凭据和连接状态"],
-  tasks: ["签到任务", "配置机器人、命令和执行时间"],
+  tasks: ["自动消息", "配置接收方、消息或机器人命令和执行时间"],
   skills: ["Skills", "已部署的安全执行能力"],
   runs: ["执行记录", "检查结果、重试和脱敏日志"],
   sessions: ["登录会话", "查看并撤销已登录的浏览器与设备"],
@@ -145,6 +145,8 @@ function closeModal(callHook = true) {
   const hook = modalRoot._onClose;
   modalRoot.innerHTML = "";
   modalRoot._onClose = null;
+  delete modalRoot.dataset.loginFlowId;
+  delete modalRoot.dataset.loginFlowRenderKey;
   document.body.style.overflow = drawerRoot.firstElementChild ? "hidden" : "";
   if (loginPollTimer) clearTimeout(loginPollTimer);
   loginPollTimer = null;
@@ -254,7 +256,7 @@ function renderAuthGate(mode = "login", message = "") {
   const config = store.get().authConfig || {};
   authMessage.textContent = message || (mode === "register"
     ? "创建独立工作区，随后绑定自己的 Telegram 账号。"
-    : "登录后管理自己的 Telegram 账号与签到任务。");
+    : "登录后管理自己的 Telegram 账号与自动消息任务。");
   const github = config.github_enabled
     ? `<a class="button auth-button github-button" href="/api/auth/github/start">使用 GitHub 继续</a><div class="auth-divider"><span>或者使用邮箱</span></div>`
     : "";
@@ -306,7 +308,7 @@ async function completeEmailVerification(token) {
   }
 }
 
-function showLogin(message = "登录或注册后管理自己的签到任务。") {
+function showLogin(message = "登录或注册后管理自己的自动消息任务。") {
   closeModal(false);
   closeDrawer();
   appShell.hidden = true;
@@ -355,6 +357,16 @@ function accountName(item) {
   return item.account_name || item.account?.name || "—";
 }
 
+function formatScheduleLag(run) {
+  if (!run?.scheduled_for || !run?.started_at || (run.trigger_type || run.trigger) === "manual") return "—";
+  const delta = Date.parse(run.started_at) - Date.parse(run.scheduled_for);
+  if (!Number.isFinite(delta)) return "—";
+  const prefix = delta < 0 ? "提前 " : "+";
+  const absolute = Math.abs(delta);
+  if (absolute < 1_000) return `${prefix}${absolute} ms`;
+  return `${prefix}${(absolute / 1_000).toFixed(absolute < 10_000 ? 1 : 0)} 秒`;
+}
+
 function normalizeSkill(skill) {
   return {
     ...skill,
@@ -367,15 +379,16 @@ function normalizeSkill(skill) {
 function renderRunsTable(runs, { compact = false } = {}) {
   if (!runs.length) return emptyState("↻", "还没有执行记录", "手动执行或到达 Cron 时间后，结果会显示在这里。");
   return `<div class="table-wrap"><table>
-    <thead><tr><th>任务</th>${compact ? "" : "<th>账号</th>"}<th>状态</th><th>时间</th><th>耗时</th><th>重试</th><th><span class="sr-only">操作</span></th></tr></thead>
+    <thead><tr><th>任务</th>${compact ? "" : "<th>账号</th>"}<th>状态</th><th>时间</th><th>调度偏差</th><th>耗时</th><th>重试</th><th><span class="sr-only">操作</span></th></tr></thead>
     <tbody>${runs.map((run) => `<tr>
-      <td><span class="cell-title">${escapeHtml(runName(run))}</span><span class="cell-sub mono">${escapeHtml(shortId(run.id))}</span></td>
-      ${compact ? "" : `<td>${escapeHtml(accountName(run))}</td>`}
-      <td>${statusBadge(run.status)}</td>
-      <td class="nowrap">${formatDate(run.started_at || run.created_at || run.scheduled_for)}</td>
-      <td>${formatDuration(run.duration_ms)}</td>
-      <td>${escapeHtml(run.attempt_count ?? run.retry_count ?? 0)}</td>
-      <td><div class="actions"><button class="button small ghost" type="button" data-action="run-detail" data-id="${escapeHtml(run.id)}">详情</button></div></td>
+      <td data-label="任务"><span class="cell-title">${escapeHtml(runName(run))}</span><span class="cell-sub mono">${escapeHtml(shortId(run.id))}</span></td>
+      ${compact ? "" : `<td data-label="账号">${escapeHtml(accountName(run))}</td>`}
+      <td data-label="执行状态">${statusBadge(run.status)}</td>
+      <td data-label="时间" class="nowrap">${formatDate(run.started_at || run.created_at || run.scheduled_for)}</td>
+      <td data-label="调度偏差" class="nowrap">${escapeHtml(formatScheduleLag(run))}</td>
+      <td data-label="耗时">${formatDuration(run.duration_ms)}</td>
+      <td data-label="重试">${escapeHtml(run.attempt_count ?? run.retry_count ?? 0)}</td>
+      <td data-label="操作"><div class="actions"><button class="button small ghost" type="button" data-action="run-detail" data-id="${escapeHtml(run.id)}">详情</button></div></td>
     </tr>`).join("")}</tbody>
   </table></div>`;
 }
@@ -409,7 +422,7 @@ async function renderDashboard(token) {
         <section class="card"><div class="card-head"><div><h2>系统状态</h2><p>Serverless 执行链路</p></div></div><div class="card-body service-list">
           ${serviceRow("D1 数据库", health.database ?? "ok", "配置与运行记录")}
           ${serviceRow("GitHub Actions", health.github ?? "unknown", "Telegram Runner")}
-          ${serviceRow("任务调度器", health.scheduler ?? settings?.scheduler_mode ?? "legacy", (settings?.scheduler_mode ?? "legacy") === "d1" ? "D1 动态调度" : "Legacy 兼容模式")}
+          ${serviceRow("任务调度器", health.scheduler ?? settings?.scheduler_mode ?? "d1", "D1 动态调度 · Runner 秒级对时")}
         </div></section>
         <section class="card"><div class="card-head"><div><h2>最近日志</h2><p>仅显示已脱敏内容</p></div></div><div class="card-body">${renderDashboardLogs(logs)}</div></section>
       </div>
@@ -465,7 +478,7 @@ async function renderAccounts(token) {
 function renderAccountsTable(accounts) {
   if (!accounts.length) return emptyState("◎", "还没有 Telegram 账号", "可通过网页登录或导入已有 Session 添加账号。", `<button class="button primary" type="button" data-action="add-account">新增账号</button>`);
   return `<div class="table-wrap"><table><thead><tr><th>账号</th><th>手机号</th><th>连接状态</th><th>最近检查</th><th>启用</th><th><span class="sr-only">操作</span></th></tr></thead><tbody>
-    ${accounts.map((account) => `<tr><td><span class="cell-title">${escapeHtml(account.telegram_display_name || account.name)}</span><span class="cell-sub">${account.telegram_username ? `@${escapeHtml(String(account.telegram_username).replace(/^@/, ""))} · ${escapeHtml(account.name)}` : escapeHtml(account.name)}</span></td><td class="mono">${textOrDash(account.phone_masked || account.phone_hint)}</td><td>${statusBadge(account.status)}</td><td>${formatDate(account.last_checked_at || account.last_connected_at)}</td><td><label class="switch"><input type="checkbox" data-action="toggle-account" data-id="${escapeHtml(account.id)}" ${account.enabled ? "checked" : ""} aria-label="${account.enabled ? "停用" : "启用"}${escapeHtml(account.name)}"><span></span></label></td><td><div class="actions"><button class="button small" type="button" data-action="validate-account" data-id="${escapeHtml(account.id)}">检查</button><button class="button small ghost" type="button" data-action="edit-account" data-id="${escapeHtml(account.id)}">编辑</button><button class="button small ghost danger" type="button" data-action="delete-account" data-id="${escapeHtml(account.id)}">删除</button></div></td></tr>`).join("")}
+    ${accounts.map((account) => `<tr><td data-label="账号"><span class="cell-title">${escapeHtml(account.telegram_display_name || account.name)}</span><span class="cell-sub">${account.telegram_username ? `@${escapeHtml(String(account.telegram_username).replace(/^@/, ""))} · ${escapeHtml(account.name)}` : escapeHtml(account.name)}</span></td><td data-label="手机号" class="mono">${textOrDash(account.phone_masked || account.phone_hint)}</td><td data-label="连接状态">${statusBadge(account.status)}</td><td data-label="最近检查">${formatDate(account.last_checked_at || account.last_connected_at)}</td><td data-label="启用"><label class="switch"><input type="checkbox" data-action="toggle-account" data-id="${escapeHtml(account.id)}" ${account.enabled ? "checked" : ""} aria-label="${account.enabled ? "停用" : "启用"}${escapeHtml(account.name)}"><span></span></label></td><td data-label="操作"><div class="actions"><button class="button small" type="button" data-action="validate-account" data-id="${escapeHtml(account.id)}">检查</button><button class="button small ghost" type="button" data-action="edit-account" data-id="${escapeHtml(account.id)}">编辑</button><button class="button small ghost danger" type="button" data-action="delete-account" data-id="${escapeHtml(account.id)}">删除</button></div></td></tr>`).join("")}
   </tbody></table></div>`;
 }
 
@@ -738,6 +751,26 @@ function loginStep(status) {
   return 1;
 }
 
+const LOGIN_POLLING_STATUSES = new Set(["created", "starting", "code_submitted", "password_submitted"]);
+
+function loginFlowRenderKey(flow) {
+  return JSON.stringify({
+    id: flow?.id || flow?.login_flow_id || null,
+    status: flow?.status || "starting",
+    mode: flow?.mode || null,
+    last_error: flow?.last_error || null,
+    error_code: flow?.error_code || null,
+    error_message: flow?.error_message || null,
+    account_id: flow?.account_id || null,
+    account_name: flow?.account_name || flow?.name || null,
+  });
+}
+
+function scheduleLoginPoll(id, delay = 1800) {
+  if (loginPollTimer) clearTimeout(loginPollTimer);
+  loginPollTimer = setTimeout(() => pollLoginFlow(id), delay);
+}
+
 function loginStepper(status) {
   const current = loginStep(status);
   return `<div class="stepper" aria-label="登录进度">${["输入手机号","验证码","二步验证","完成"].map((label,index) => `<div class="step ${index + 1 < current ? "done" : index + 1 === current ? "active" : ""}"><b>${index + 1 < current ? "✓" : index + 1}</b>${label}</div>`).join("")}</div>`;
@@ -749,6 +782,13 @@ function renderLoginFlow(flow) {
   const sessionValidation = flow?.mode === "session_validation";
   if (!id) {
     toast("登录流程异常", "服务未返回流程 ID。", "error");
+    return;
+  }
+  const renderKey = loginFlowRenderKey(flow);
+  if (modalRoot.firstElementChild
+    && modalRoot.dataset.loginFlowId === String(id)
+    && modalRoot.dataset.loginFlowRenderKey === renderKey) {
+    if (LOGIN_POLLING_STATUSES.has(status)) scheduleLoginPoll(id);
     return;
   }
   if (loginPollTimer) clearTimeout(loginPollTimer);
@@ -784,7 +824,9 @@ function renderLoginFlow(flow) {
     footer,
     onClose: status === "connected" || ["failed","cancelled","expired"].includes(status) ? null : () => api.cancelLoginFlow(id).catch(() => {}),
   });
-  if (shouldPoll) loginPollTimer = setTimeout(() => pollLoginFlow(id), 1800);
+  modalRoot.dataset.loginFlowId = String(id);
+  modalRoot.dataset.loginFlowRenderKey = renderKey;
+  if (shouldPoll) scheduleLoginPoll(id);
 }
 
 async function pollLoginFlow(id) {
@@ -793,7 +835,7 @@ async function pollLoginFlow(id) {
     renderLoginFlow(flow?.login_flow || flow);
   } catch (error) {
     toast("无法查询登录状态", errorMessage(error), "error");
-    loginPollTimer = setTimeout(() => pollLoginFlow(id), 3500);
+    scheduleLoginPoll(id, 3500);
   }
 }
 
@@ -933,17 +975,17 @@ async function renderTasks(token) {
   store.set({ tasks, accounts, skills });
   setApiState("ok", "服务正常");
   const rows = filterRows(tasks, store.get().filters.tasks || {});
-  view.innerHTML = `${pageHead("签到任务", "统一 Runner 负责 Skill、重试、超时和日志", `<button class="button" type="button" data-action="import-tasks" ${accounts.length && skills.length ? "" : "disabled"}>导入</button><button class="button" type="button" data-action="export-tasks" ${tasks.length ? "" : "disabled"}>导出</button><button class="button primary" type="button" data-action="add-task" ${accounts.length && skills.length ? "" : "disabled"}>＋ 新增任务</button>`)}
-    ${!accounts.length ? `<div class="notice warning mb-sm"><span aria-hidden="true">!</span><span>请先添加 Telegram 账号，再创建签到任务。</span></div>` : ""}
+  view.innerHTML = `${pageHead("自动消息任务", "定时发送普通消息、机器人命令或签到指令；统一 Runner 负责重试、超时和日志", `<button class="button" type="button" data-action="import-tasks" ${accounts.length && skills.length ? "" : "disabled"}>导入</button><button class="button" type="button" data-action="export-tasks" ${tasks.length ? "" : "disabled"}>导出</button><button class="button primary" type="button" data-action="add-task" ${accounts.length && skills.length ? "" : "disabled"}>＋ 新增任务</button>`)}
+    ${!accounts.length ? `<div class="notice warning mb-sm"><span aria-hidden="true">!</span><span>请先添加 Telegram 账号，再创建自动消息任务。</span></div>` : ""}
     <input id="task-import-file" type="file" accept="application/json,.json" hidden>
     <section class="card"><div class="toolbar"><div class="field search"><label for="task-search">搜索</label><input id="task-search" type="search" data-filter="task-query" placeholder="任务、机器人或命令" value="${escapeHtml(store.get().filters.tasks?.query || "")}"></div><div class="field"><label for="task-account-filter">账号</label><select id="task-account-filter" data-filter="task-account"><option value="">全部账号</option>${accounts.map((account) => `<option value="${escapeHtml(account.id)}" ${store.get().filters.tasks?.accountId === String(account.id) ? "selected" : ""}>${escapeHtml(account.name)}</option>`).join("")}</select></div></div><div id="tasks-table">${renderTasksTable(rows, accounts)}</div></section>`;
 }
 
 function renderTasksTable(tasks, accounts) {
-  if (!tasks.length) return emptyState("✓", "还没有签到任务", "选择账号和 Skill，填写机器人、命令与 Cron 即可开始。", `<button class="button primary" type="button" data-action="add-task" ${accounts.length ? "" : "disabled"}>新增任务</button>`);
+  if (!tasks.length) return emptyState("✓", "还没有自动消息任务", "选择账号和 Skill，填写接收方、内容与时间即可开始。", `<button class="button primary" type="button" data-action="add-task" ${accounts.length ? "" : "disabled"}>新增任务</button>`);
   const names = new Map(accounts.map((account) => [String(account.id), account.name]));
-  return `<div class="table-wrap"><table><thead><tr><th>任务</th><th>账号 / Skill</th><th>机器人 / 命令</th><th>Cron</th><th>下次执行</th><th>启用</th><th><span class="sr-only">操作</span></th></tr></thead><tbody>
-    ${tasks.map((task) => `<tr><td><span class="cell-title">${escapeHtml(task.name)}</span><span class="cell-sub">重试 ${escapeHtml(task.retry ?? task.retry_count ?? 0)} 次 · 超时 ${escapeHtml(task.timeout_seconds ?? 120)} 秒</span></td><td><span class="cell-title">${escapeHtml(task.account_name || names.get(String(task.account_id)) || "未知账号")}</span><span class="cell-sub mono">${escapeHtml(task.skill_key || task.skill || "—")}</span></td><td><span class="cell-title mono">${escapeHtml(task.bot)}</span><span class="cell-sub">${escapeHtml(String(task.command || "").slice(0, 48))}${String(task.command || "").length > 48 ? "…" : ""}</span></td><td><span class="mono">${escapeHtml(task.cron || task.cron_expr)}</span><span class="cell-sub">${escapeHtml(task.timezone || "Asia/Shanghai")}</span></td><td>${formatDate(task.next_run_at)}</td><td><label class="switch"><input type="checkbox" data-action="toggle-task" data-id="${escapeHtml(task.id)}" ${task.enabled ? "checked" : ""} aria-label="${task.enabled ? "停用" : "启用"}${escapeHtml(task.name)}"><span></span></label></td><td><div class="actions"><button class="button small" type="button" data-action="run-task" data-id="${escapeHtml(task.id)}">执行</button><button class="button small ghost" type="button" data-action="copy-task" data-id="${escapeHtml(task.id)}">复制</button><button class="button small ghost" type="button" data-action="edit-task" data-id="${escapeHtml(task.id)}">编辑</button><button class="button small ghost danger" type="button" data-action="delete-task" data-id="${escapeHtml(task.id)}">删除</button></div></td></tr>`).join("")}
+  return `<div class="table-wrap"><table><thead><tr><th>任务</th><th>账号 / Skill</th><th>接收方 / 消息</th><th>Cron</th><th>下次执行</th><th>启用</th><th><span class="sr-only">操作</span></th></tr></thead><tbody>
+    ${tasks.map((task) => `<tr><td data-label="任务"><span class="cell-title">${escapeHtml(task.name)}</span><span class="cell-sub">重试 ${escapeHtml(task.retry ?? task.retry_count ?? 0)} 次 · 超时 ${escapeHtml(task.timeout_seconds ?? 120)} 秒</span></td><td data-label="账号 / Skill"><span class="cell-title">${escapeHtml(task.account_name || names.get(String(task.account_id)) || "未知账号")}</span><span class="cell-sub mono">${escapeHtml(task.skill_key || task.skill || "—")}</span></td><td data-label="接收方 / 消息"><span class="cell-title mono">${escapeHtml(task.bot)}</span><span class="cell-sub">${escapeHtml(String(task.command || "").slice(0, 48))}${String(task.command || "").length > 48 ? "…" : ""}</span></td><td data-label="Cron"><span class="mono">${escapeHtml(task.cron || task.cron_expr)}</span><span class="cell-sub">${escapeHtml(task.timezone || "Asia/Shanghai")}</span></td><td data-label="下次执行">${formatDate(task.next_run_at)}</td><td data-label="启用"><label class="switch"><input type="checkbox" data-action="toggle-task" data-id="${escapeHtml(task.id)}" ${task.enabled ? "checked" : ""} aria-label="${task.enabled ? "停用" : "启用"}${escapeHtml(task.name)}"><span></span></label></td><td data-label="操作"><div class="actions"><button class="button small" type="button" data-action="run-task" data-id="${escapeHtml(task.id)}">执行</button><button class="button small ghost" type="button" data-action="copy-task" data-id="${escapeHtml(task.id)}">复制</button><button class="button small ghost" type="button" data-action="edit-task" data-id="${escapeHtml(task.id)}">编辑</button><button class="button small ghost danger" type="button" data-action="delete-task" data-id="${escapeHtml(task.id)}">删除</button></div></td></tr>`).join("")}
   </tbody></table></div>`;
 }
 
@@ -987,7 +1029,7 @@ async function prepareTaskImport(file) {
 function showTaskImportConfirmation(parsed) {
   pendingTaskImport = parsed.tasks;
   openModal({
-    title: "导入签到任务",
+    title: "导入自动消息任务",
     description: `已读取 ${parsed.tasks.length} 个任务`,
     body: `<div class="notice warning mb-sm"><span aria-hidden="true">!</span><span>${parsed.warnings.map(escapeHtml).join("<br>")}</span></div><div class="list-stack">${parsed.tasks.slice(0, 12).map((task) => `<div class="summary-row"><span>${escapeHtml(task.name)}</span><strong>${escapeHtml(task.bot)}</strong></div>`).join("")}${parsed.tasks.length > 12 ? `<p class="field-help">以及另外 ${parsed.tasks.length - 12} 个任务</p>` : ""}</div>`,
     footer: `<button class="button" type="button" data-action="close-modal">取消</button><button class="button primary" type="button" data-action="confirm-import-tasks">确认导入</button>`,
@@ -1050,17 +1092,18 @@ async function importPendingTasks(button) {
 }
 
 function taskFormValues(task = {}) {
-  const cron = task.cron || task.cron_expr || "0 0 * * *";
+  const cron = task.cron || task.cron_expr || "0 0 0 * * *";
   const schedule = schedulePresetFromCron(cron);
   return {
     name: task.name || "",
     account_id: task.account_id || "",
     skill_key: task.skill_key || task.skill || "send_text",
     bot: task.bot || "",
-    command: task.command || "/checkin",
+    command: task.command || "",
     cron,
     schedule_mode: schedule.mode,
-    schedule_time: `${String(schedule.hour ?? 8).padStart(2, "0")}:${String(schedule.minute ?? 0).padStart(2, "0")}`,
+    schedule_time: `${String(schedule.hour ?? 8).padStart(2, "0")}:${String(schedule.minute ?? 0).padStart(2, "0")}:${String(schedule.second ?? 0).padStart(2, "0")}`,
+    schedule_second: schedule.second ?? 0,
     schedule_minute: schedule.minute ?? 0,
     schedule_weekday: schedule.weekday ?? 1,
     schedule_interval: schedule.interval ?? 15,
@@ -1079,11 +1122,11 @@ function taskFormHtml(values, errors = {}) {
   const scheduleMode = values.schedule_mode || "custom";
   const scheduleGroup = (mode) => scheduleMode === mode ? "" : "hidden";
   return `<form id="task-form" data-id="${escapeHtml(values.id || "")}" data-has-tg-signer-import="${values.has_tg_signer_import ? "true" : "false"}" novalidate><div class="form-grid">
-    <div class="field span-2"><label class="required" for="task-name">任务名称</label><input id="task-name" name="name" maxlength="100" value="${escapeHtml(values.name)}" placeholder="例如：每日签到" ${invalidAttr(errors,"name")}>${fieldError(errors,"name")}</div>
+    <div class="field span-2"><label class="required" for="task-name">任务名称</label><input id="task-name" name="name" maxlength="100" value="${escapeHtml(values.name)}" placeholder="例如：每日提醒 / 机器人签到" ${invalidAttr(errors,"name")}>${fieldError(errors,"name")}</div>
     <div class="field"><label class="required" for="task-account">账号</label><select id="task-account" name="account_id" ${invalidAttr(errors,"account_id")}><option value="">请选择</option>${accounts.map((account) => `<option value="${escapeHtml(account.id)}" ${String(values.account_id) === String(account.id) ? "selected" : ""}>${escapeHtml(account.name)}${account.status !== "connected" ? `（${statusText(account.status)}）` : ""}</option>`).join("")}</select>${fieldError(errors,"account_id")}</div>
     <div class="field"><label class="required" for="task-skill">Skill</label><select id="task-skill" name="skill_key" ${invalidAttr(errors,"skill_key")}>${skills.map((skill) => `<option value="${escapeHtml(skill.key)}" ${String(values.skill_key) === String(skill.key) ? "selected" : ""} ${skill.enabled === false ? "disabled" : ""}>${escapeHtml(skill.name || skill.key)}${skill.enabled === false ? "（已停用）" : ""}</option>`).join("")}</select>${fieldError(errors,"skill_key")}</div>
-    <div class="field span-2"><label class="required" for="task-bot">Bot / Chat</label><input id="task-bot" name="bot" maxlength="128" value="${escapeHtml(values.bot)}" placeholder="@example_bot 或 Chat ID" ${invalidAttr(errors,"bot")}>${fieldError(errors,"bot")}</div>
-    <div class="field span-2"><label class="required" for="task-command">Command</label><textarea id="task-command" name="command" maxlength="2000" ${invalidAttr(errors,"command")}>${escapeHtml(values.command)}</textarea>${fieldError(errors,"command")}</div>
+    <div class="field span-2"><label class="required" for="task-bot">接收方（Bot / Chat）</label><input id="task-bot" name="bot" maxlength="128" value="${escapeHtml(values.bot)}" placeholder="@example_bot、@username 或 Chat ID" ${invalidAttr(errors,"bot")}>${fieldError(errors,"bot")}</div>
+    <div class="field span-2"><label class="required" for="task-command">发送内容 / Command</label><textarea id="task-command" name="command" maxlength="2000" placeholder="普通消息、机器人命令或签到指令" ${invalidAttr(errors,"command")}>${escapeHtml(values.command)}</textarea>${fieldError(errors,"command")}</div>
     <div class="field span-2"><label for="task-signer-import">tg_signer 配置 <small>${values.has_tg_signer_import ? "已加密保存；留空保持不变" : "仅 tg_signer Skill 需要"}</small></label><textarea id="task-signer-import" name="tg_signer_import" maxlength="131072" autocomplete="off" data-sensitive placeholder="粘贴 tg-signer 导出 JSON 或 Base64；提交后立即清空" ${invalidAttr(errors,"tg_signer_import")}></textarea>${fieldError(errors,"tg_signer_import")}</div>
     <div class="field"><label class="required" for="task-schedule-mode">执行方式</label><select id="task-schedule-mode" name="schedule_mode" data-schedule-field>
       <option value="daily" ${scheduleMode === "daily" ? "selected" : ""}>每天固定时间</option>
@@ -1093,12 +1136,14 @@ function taskFormHtml(values, errors = {}) {
       <option value="custom" ${scheduleMode === "custom" ? "selected" : ""}>高级 Cron</option>
     </select><p class="field-help">常用时间无需手写 Cron；旧 Cron 配置继续兼容。</p></div>
     <div class="field"><label class="required" for="task-timezone">时区</label><select id="task-timezone" name="timezone" ${invalidAttr(errors,"timezone")}>${["Asia/Shanghai","Asia/Hong_Kong","Asia/Tokyo","UTC","America/Los_Angeles"].map((zone) => `<option value="${zone}" ${values.timezone === zone ? "selected" : ""}>${zone}</option>`).join("")}</select>${fieldError(errors,"timezone")}</div>
-    <div class="field span-2" data-schedule-group="daily" ${scheduleGroup("daily")}><label class="required" for="task-schedule-daily-time">每天执行时间</label><input id="task-schedule-daily-time" name="schedule_daily_time" type="time" value="${escapeHtml(values.schedule_time)}" data-schedule-field></div>
+    <div class="field span-2" data-schedule-group="daily" ${scheduleGroup("daily")}><label class="required" for="task-schedule-daily-time">每天执行时间（精确到秒）</label><input id="task-schedule-daily-time" name="schedule_daily_time" type="time" step="1" value="${escapeHtml(values.schedule_time)}" data-schedule-field></div>
     <div class="field" data-schedule-group="weekly" ${scheduleGroup("weekly")}><label class="required" for="task-schedule-weekday">星期</label><select id="task-schedule-weekday" name="schedule_weekday" data-schedule-field>${[[1,"星期一"],[2,"星期二"],[3,"星期三"],[4,"星期四"],[5,"星期五"],[6,"星期六"],[0,"星期日"]].map(([value,label]) => `<option value="${value}" ${Number(values.schedule_weekday) === value ? "selected" : ""}>${label}</option>`).join("")}</select></div>
-    <div class="field" data-schedule-group="weekly" ${scheduleGroup("weekly")}><label class="required" for="task-schedule-weekly-time">执行时间</label><input id="task-schedule-weekly-time" name="schedule_weekly_time" type="time" value="${escapeHtml(values.schedule_time)}" data-schedule-field></div>
-    <div class="field span-2" data-schedule-group="hourly" ${scheduleGroup("hourly")}><label class="required" for="task-schedule-minute">每小时的第几分钟</label><input id="task-schedule-minute" name="schedule_minute" type="number" min="0" max="59" value="${escapeHtml(values.schedule_minute)}" data-schedule-field><p class="field-help">例如填写 15，表示每小时的 15 分执行。</p></div>
-    <div class="field span-2" data-schedule-group="interval" ${scheduleGroup("interval")}><label class="required" for="task-schedule-interval">间隔分钟</label><input id="task-schedule-interval" name="schedule_interval" type="number" min="1" max="59" value="${escapeHtml(values.schedule_interval)}" data-schedule-field><p class="field-help">从整点开始按该间隔执行，例如 15 表示每小时 00、15、30、45 分。</p></div>
-    <div class="field span-2" data-schedule-group="custom" ${scheduleGroup("custom")}><label class="required" for="task-cron">高级 Cron</label><input id="task-cron" class="mono" name="cron" maxlength="96" value="${escapeHtml(values.cron)}" placeholder="0 0 * * *" ${invalidAttr(errors,"cron")}>${fieldError(errors,"cron")}<p class="field-help">标准 5 段：分 时 日 月 星期。已有复杂表达式会原样保留。</p></div>
+    <div class="field" data-schedule-group="weekly" ${scheduleGroup("weekly")}><label class="required" for="task-schedule-weekly-time">执行时间（精确到秒）</label><input id="task-schedule-weekly-time" name="schedule_weekly_time" type="time" step="1" value="${escapeHtml(values.schedule_time)}" data-schedule-field></div>
+    <div class="field" data-schedule-group="hourly" ${scheduleGroup("hourly")}><label class="required" for="task-schedule-minute">每小时的第几分钟</label><input id="task-schedule-minute" name="schedule_minute" type="number" min="0" max="59" value="${escapeHtml(values.schedule_minute)}" data-schedule-field></div>
+    <div class="field" data-schedule-group="hourly" ${scheduleGroup("hourly")}><label class="required" for="task-schedule-hourly-second">第几秒</label><input id="task-schedule-hourly-second" name="schedule_hourly_second" type="number" min="0" max="59" value="${escapeHtml(values.schedule_second)}" data-schedule-field></div>
+    <div class="field" data-schedule-group="interval" ${scheduleGroup("interval")}><label class="required" for="task-schedule-interval">间隔分钟</label><input id="task-schedule-interval" name="schedule_interval" type="number" min="1" max="59" value="${escapeHtml(values.schedule_interval)}" data-schedule-field></div>
+    <div class="field" data-schedule-group="interval" ${scheduleGroup("interval")}><label class="required" for="task-schedule-interval-second">每次的第几秒</label><input id="task-schedule-interval-second" name="schedule_interval_second" type="number" min="0" max="59" value="${escapeHtml(values.schedule_second)}" data-schedule-field><p class="field-help">例如间隔 15 分钟、第 8 秒：00:00:08、00:15:08…</p></div>
+    <div class="field span-2" data-schedule-group="custom" ${scheduleGroup("custom")}><label class="required" for="task-cron">高级 Cron</label><input id="task-cron" class="mono" name="cron" maxlength="96" value="${escapeHtml(values.cron)}" placeholder="5 0 8 * * *" ${invalidAttr(errors,"cron")}>${fieldError(errors,"cron")}<p class="field-help">推荐 6 段：秒 分 时 日 月 星期；秒必须是 0–59 的单个数字。旧 5 段继续兼容。</p></div>
     <div class="field"><label for="task-retry">Retry <small>额外重试</small></label><input id="task-retry" name="retry" type="number" min="0" max="5" value="${escapeHtml(values.retry)}" ${invalidAttr(errors,"retry")}>${fieldError(errors,"retry")}</div>
     <div class="field"><label for="task-timeout">Timeout <small>秒</small></label><input id="task-timeout" name="timeout_seconds" type="number" min="10" max="900" value="${escapeHtml(values.timeout_seconds)}" ${invalidAttr(errors,"timeout_seconds")}>${fieldError(errors,"timeout_seconds")}</div>
     <div class="field"><label for="task-thread">Thread ID <small>可选</small></label><input id="task-thread" name="thread_id" type="number" min="1" value="${escapeHtml(values.thread_id)}" ${invalidAttr(errors,"thread_id")}>${fieldError(errors,"thread_id")}</div>
@@ -1111,8 +1156,8 @@ function taskFormHtml(values, errors = {}) {
 function openTaskModal(task = null, errors = {}, attempted = null) {
   const values = { ...taskFormValues({ ...(task || {}), ...(attempted || {}) }), id: task?.id || "" };
   openModal({
-    title: task ? "编辑签到任务" : "新增签到任务",
-    description: "所有任务由统一 Runner 执行",
+    title: task ? "编辑自动消息任务" : "新增自动消息任务",
+    description: "普通消息、机器人命令与签到均由统一 Runner 执行",
     wide: true,
     body: taskFormHtml(values, errors),
     footer: `<span class="field-help">保存前请核对时区与执行预览</span><div><button class="button" type="button" data-action="close-modal">取消</button><button class="button primary" type="submit" form="task-form">保存任务</button></div>`,
@@ -1155,7 +1200,7 @@ function updateCronPreview() {
     return;
   }
   target.className = "notice";
-  target.innerHTML = `<span aria-hidden="true">✓</span><span>${occurrences.map((date) => escapeHtml(new Intl.DateTimeFormat("zh-CN", { timeZone: String(values.get("timezone")), month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(date))).join("　·　")}</span>`;
+  target.innerHTML = `<span aria-hidden="true">✓</span><span>${occurrences.map((date) => escapeHtml(new Intl.DateTimeFormat("zh-CN", { timeZone: String(values.get("timezone")), month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }).format(date))).join("　·　")}</span>`;
 }
 
 function updateScheduleEditor() {
@@ -1168,12 +1213,16 @@ function updateScheduleEditor() {
   }
   const cronInput = form.elements.namedItem("cron");
   if (mode !== "custom" && cronInput) {
-    const timeValue = String(data.get(mode === "weekly" ? "schedule_weekly_time" : "schedule_daily_time") || "08:00");
-    const [hour, minute] = timeValue.split(":").map(Number);
+    const timeValue = String(data.get(mode === "weekly" ? "schedule_weekly_time" : "schedule_daily_time") || "08:00:00");
+    const [hour, minute, timeSecond = 0] = timeValue.split(":").map(Number);
+    const second = mode === "hourly"
+      ? Number(data.get("schedule_hourly_second"))
+      : mode === "interval" ? Number(data.get("schedule_interval_second")) : timeSecond;
     try {
       cronInput.value = cronFromSchedulePreset({
         mode,
         hour,
+        second,
         minute: mode === "hourly" ? Number(data.get("schedule_minute")) : minute,
         weekday: Number(data.get("schedule_weekday")),
         interval: Number(data.get("schedule_interval")),
@@ -1269,7 +1318,9 @@ async function showRunDetail(id) {
       <div class="summary-item"><span>总耗时</span><strong>${formatDuration(run.duration_ms)}</strong></div>
       <div class="summary-item"><span>任务</span><strong>${escapeHtml(runName(run))}</strong></div>
       <div class="summary-item"><span>账号</span><strong>${escapeHtml(accountName(run))}</strong></div>
-      <div class="summary-item"><span>开始时间</span><strong>${formatDate(run.started_at || run.created_at)}</strong></div>
+      <div class="summary-item"><span>计划时间</span><strong>${formatDate(run.scheduled_for)}</strong></div>
+      <div class="summary-item"><span>实际开始</span><strong>${formatDate(run.started_at || run.created_at)}</strong></div>
+      <div class="summary-item"><span>调度偏差</span><strong>${escapeHtml(formatScheduleLag(run))}</strong></div>
     </div>
     ${run.error_code || run.error_message ? `<div class="notice danger"><span aria-hidden="true">!</span><span><strong>${escapeHtml(run.error_code || "TASK_FAILED")}</strong><br>${escapeHtml(run.error_message || "任务执行失败。")}</span></div>` : ""}
     ${rerunTaskId || githubUrl ? `<div class="actions mt-md">${rerunTaskId ? `<button class="button primary small" type="button" data-action="rerun-task" data-id="${escapeHtml(rerunTaskId)}">再次执行</button>` : ""}${githubUrl ? `<a class="button small" href="${escapeHtml(githubUrl)}" target="_blank" rel="noopener noreferrer">查看 GitHub Actions ↗</a>` : ""}</div>` : ""}
@@ -1294,7 +1345,7 @@ async function renderSessions(token) {
   if (token !== renderToken) return;
   setApiState("ok", "服务正常");
   const rowsHtml = sessions.length ? `<div class="table-wrap"><table><thead><tr><th>设备</th><th>登录方式</th><th>创建时间</th><th>到期时间</th><th><span class="sr-only">操作</span></th></tr></thead><tbody>
-    ${sessions.map((session) => `<tr><td><span class="cell-title">${escapeHtml(session.user_agent_label || "未知浏览器")}</span>${session.current ? '<span class="badge success">当前会话</span>' : ""}</td><td>${escapeHtml(session.provider === "email" ? "邮箱" : "GitHub")}</td><td>${formatDate(session.created_at)}</td><td>${formatDate(session.expires_at)}</td><td>${session.current ? "—" : `<button class="button small ghost danger" type="button" data-action="revoke-session" data-id="${escapeHtml(session.id)}">撤销</button>`}</td></tr>`).join("")}
+    ${sessions.map((session) => `<tr><td data-label="设备"><span class="cell-title">${escapeHtml(session.user_agent_label || "未知浏览器")}</span>${session.current ? '<span class="badge success">当前会话</span>' : ""}</td><td data-label="登录方式">${escapeHtml(session.provider === "email" ? "邮箱" : "GitHub")}</td><td data-label="创建时间">${formatDate(session.created_at)}</td><td data-label="到期时间">${formatDate(session.expires_at)}</td><td data-label="操作">${session.current ? "—" : `<button class="button small ghost danger" type="button" data-action="revoke-session" data-id="${escapeHtml(session.id)}">撤销</button>`}</td></tr>`).join("")}
   </tbody></table></div>` : emptyState("▣", "没有活动会话", "重新登录后会在这里显示当前浏览器。");
   view.innerHTML = `${pageHead("登录会话", "查看并撤销其他已登录的浏览器与设备", `<button class="button" type="button" data-action="refresh">↻ 刷新</button>`)}
     <section class="card">${rowsHtml}</section>`;
@@ -1323,7 +1374,7 @@ async function renderUsers(token) {
     ${users.map((user) => {
       const login = user.email || (user.github_login ? `@${user.github_login}` : "—");
       const nextStatus = user.status === "active" ? "disabled" : "active";
-      return `<tr><td><span class="cell-title">${escapeHtml(user.display_name || "未命名用户")}</span><span class="cell-sub">${user.role === "admin" ? "平台管理员" : "普通用户"}</span></td><td><span class="cell-title">${escapeHtml(login)}</span><span class="cell-sub">${user.email_verified_at ? "邮箱已验证" : user.github_login ? "GitHub" : ""}</span></td><td><span class="cell-title">${escapeHtml(user.accounts_count)} 个账号</span><span class="cell-sub">${escapeHtml(user.tasks_count)} 个任务 · ${escapeHtml(user.active_sessions_count)} 个会话</span></td><td>${formatDate(user.last_seen_at || user.created_at)}</td><td>${userStatusBadge(user.status)}</td><td>${user.role === "admin" ? '<span class="cell-sub">受保护</span>' : `<button class="button small ${nextStatus === "disabled" ? "ghost danger" : ""}" type="button" data-action="change-user-status" data-id="${escapeHtml(user.id)}" data-status="${nextStatus}">${nextStatus === "disabled" ? "停用" : "启用"}</button>`}</td></tr>`;
+      return `<tr><td data-label="用户"><span class="cell-title">${escapeHtml(user.display_name || "未命名用户")}</span><span class="cell-sub">${user.role === "admin" ? "平台管理员" : "普通用户"}</span></td><td data-label="登录账号"><span class="cell-title">${escapeHtml(login)}</span><span class="cell-sub">${user.email_verified_at ? "邮箱已验证" : user.github_login ? "GitHub" : ""}</span></td><td data-label="工作区"><span class="cell-title">${escapeHtml(user.accounts_count)} 个账号</span><span class="cell-sub">${escapeHtml(user.tasks_count)} 个任务 · ${escapeHtml(user.active_sessions_count)} 个会话</span></td><td data-label="最近活动">${formatDate(user.last_seen_at || user.created_at)}</td><td data-label="状态">${userStatusBadge(user.status)}</td><td data-label="操作">${user.role === "admin" ? '<span class="cell-sub">受保护</span>' : `<button class="button small ${nextStatus === "disabled" ? "ghost danger" : ""}" type="button" data-action="change-user-status" data-id="${escapeHtml(user.id)}" data-status="${nextStatus}">${nextStatus === "disabled" ? "停用" : "启用"}</button>`}</td></tr>`;
     }).join("")}
   </tbody></table></div>` : emptyState("♙", "还没有注册用户", "新用户注册后会出现在这里。");
   view.innerHTML = `${pageHead("用户管理", "用户之间的账号、任务、Session 与日志完全隔离", `<button class="button" type="button" data-action="refresh">↻ 刷新</button>`)}
@@ -1366,7 +1417,7 @@ async function renderSettings(token) {
     <div class="settings-layout"><section class="card"><form id="settings-form" novalidate>
       <div class="settings-section"><h2>时间与调度</h2><p>控制动态任务如何计算执行时间。</p><div class="form-grid">
         <div class="field"><label for="default-timezone">默认时区</label><select id="default-timezone" name="default_timezone">${["Asia/Shanghai","Asia/Hong_Kong","Asia/Tokyo","UTC","America/Los_Angeles"].map((zone) => `<option value="${zone}" ${(settings.default_timezone || "Asia/Shanghai") === zone ? "selected" : ""}>${zone}</option>`).join("")}</select></div>
-        <div class="field"><label for="scheduler-mode">Scheduler Mode</label><select id="scheduler-mode" name="scheduler_mode"><option value="legacy" ${settings.scheduler_mode !== "d1" ? "selected" : ""}>legacy — 保留旧 Cron</option><option value="d1" ${settings.scheduler_mode === "d1" ? "selected" : ""}>d1 — 动态任务调度</option></select><p class="field-help">切换到 d1 前应完成迁移和 canary 验证。可随时切回 legacy。</p></div>
+        <div class="field"><label>任务调度器</label><input name="scheduler_mode" type="hidden" value="d1"><div><span class="badge success">D1 动态调度已接管</span></div><p class="field-help">旧 GitHub Secrets 定时链路已退役；所有执行时间只在后台管理。</p></div>
       </div></div>
       <div class="settings-section"><h2>Telegram 应用</h2><p>所有账号共用一组 Telegram 应用凭据，不需要在新增账号时重复填写。当前：${telegramApplicationStatus}</p>
         <div class="form-grid">
@@ -1387,7 +1438,7 @@ async function renderSettings(token) {
       </div>
       <div class="settings-section"><button class="button primary" type="submit">保存设置</button></div>
     </form></section>
-    <aside class="stack"><section class="card"><div class="card-head"><h2>安全边界</h2></div><div class="card-body service-list">${serviceRow("管理员登录", "ok", "GitHub OAuth")}${serviceRow("凭据存储", "ok", "AES-256-GCM")}${serviceRow("Runner 鉴权", "ok", "GitHub OIDC")}</div></section><div class="notice warning"><span aria-hidden="true">!</span><span><strong>切换调度模式</strong><br>只有 legacy 或 d1 会运行，避免同一任务重复签到。</span></div></aside></div>`;
+    <aside class="stack"><section class="card"><div class="card-head"><h2>安全边界</h2></div><div class="card-body service-list">${serviceRow("管理员登录", "ok", "GitHub OAuth")}${serviceRow("凭据存储", "ok", "AES-256-GCM")}${serviceRow("Runner 鉴权", "ok", "GitHub OIDC")}${serviceRow("任务调度", "ok", "D1 + 秒级 Runner 对时")}</div></section><div class="notice"><span aria-hidden="true">i</span><span><strong>秒级说明</strong><br>Runner 会等待到目标秒；GitHub Actions 排队造成的延迟会显示在执行记录中。</span></div></aside></div>`;
 }
 
 function readSettingsForm(form) {
@@ -1463,9 +1514,14 @@ async function refreshRoute({ silent = false } = {}) {
   store.set({ route });
   const token = ++renderToken;
   const [title, description] = routeMeta[route];
-  document.title = `${title} · Telegram 自动签到`;
+  document.title = `${title} · Telegram 自动消息`;
   document.querySelector("#breadcrumb").textContent = title;
-  document.querySelectorAll("[data-route]").forEach((link) => link.classList.toggle("active", link.dataset.route === route));
+  document.querySelectorAll("[data-route]").forEach((link) => {
+    const active = link.dataset.route === route;
+    link.classList.toggle("active", active);
+    if (active) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  });
   if (!silent) {
     view.innerHTML = loadingPage(title, description);
     setApiState("loading", "连接中");
@@ -1509,7 +1565,7 @@ function confirmDeleteAccount(account) {
 
 function confirmDeleteTask(task) {
   openModal({
-    title: "删除签到任务？",
+    title: "删除自动消息任务？",
     description: task.name,
     body: `<p>任务将停止调度；已有运行会保留执行时的账号、Skill、Bot、Command、Cron 等上下文和脱敏日志，但不能一键恢复已删除任务。</p>`,
     footer: `<span></span><div><button class="button" type="button" data-action="close-modal">取消</button><button class="button danger" type="button" data-action="confirm-delete-task" data-id="${escapeHtml(task.id)}">删除任务</button></div>`,

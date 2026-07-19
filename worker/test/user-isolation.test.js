@@ -134,7 +134,7 @@ test("authenticated users can only read and mutate their own Telegram workspace"
   assert.deepEqual(dashboardA.data.health, {
     database: "ok",
     github: "ok",
-    scheduler: "legacy",
+    scheduler: "d1",
   });
 
   const dashboardB = await worker.fetch(request("/api/v1/dashboard?date=2026-07-18", "user-b"), env)

@@ -63,6 +63,15 @@ function harness({ dispatchStatus = 204, identity = { user_id: "legacy-admin", r
   };
 }
 
+test("retired legacy migration writes are not exposed to task runners", async () => {
+  const { worker, env } = harness();
+  const response = await worker.fetch(request("/api/runner/migrations/legacy", {
+    method: "POST",
+    body: { schema_version: 1, dry_run: false },
+  }), env);
+  assert.equal(response.status, 404);
+});
+
 test("platform administrators can inspect users and disable access without exposing credentials", async () => {
   const { worker, env, repository, sqlite } = harness();
   const timestamp = "2026-07-18T00:00:00.000Z";
@@ -790,138 +799,6 @@ test("deleting an account purges temporary secrets before login-flow cascade del
     WHERE owner_type = 'login_flow' AND owner_id = ?`).get(flow.id).count, 0);
   assert.equal(sqlite.prepare(`SELECT COUNT(*) AS count FROM secret_values
     WHERE owner_type = 'account' AND owner_id = ?`).get(flow.account_id).count, 0);
-});
-
-test("legacy migration is idempotent, imports validation credentials, and moves tg_signer import to its task", async () => {
-  const { sqlite, repository, worker, env } = harness();
-  const legacyNotificationToken = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd";
-  const migration = {
-    schema_version: 1,
-    dry_run: false,
-    activate_scheduler: false,
-    source: { repository: "owner/repo" },
-    accounts: [{
-      legacy_id: "legacy-primary",
-      name: "Legacy primary",
-      session_string: "legacy-session-string-that-must-stay-secret",
-      api_id: "123456",
-      api_hash: "0123456789abcdef0123456789abcdef",
-      account: "+8613812345678",
-      proxy: "socks5://user:password@example.test:1080",
-      enabled: true,
-    }],
-    tasks: [{
-      legacy_id: "legacy-primary-task",
-      account_legacy_id: "legacy-primary",
-      name: "Legacy signer",
-      skill: "task",
-      target: "tg_signer",
-      signer_task_name: "legacy_daily",
-      signer_import_base64: "eyJ0YXNrIjp7ImJvdCI6IkBwcml2YXRlIn19",
-      cron: "0 0 * * *",
-      timezone: "Asia/Shanghai",
-      retry: 1,
-      timeout_seconds: 120,
-      enabled: true,
-    }],
-    notification: {
-      enabled: true,
-      bot_token: legacyNotificationToken,
-      chat_id: "-1001234567890",
-    },
-  };
-
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const response = await worker.fetch(request("/api/runner/migrations/legacy", {
-      method: "POST",
-      body: migration,
-    }), env);
-    assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
-    const payload = await response.json();
-    assert.equal(JSON.stringify(payload).includes("legacy-session-string"), false);
-    assert.equal(JSON.stringify(payload).includes("0123456789abcdef0123456789abcdef"), false);
-    assert.equal(JSON.stringify(payload).includes(legacyNotificationToken), false);
-  }
-
-  assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM accounts WHERE id = 'legacy-primary'").get().count, 1);
-  assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM tasks WHERE id = 'legacy-primary-task'").get().count, 1);
-  assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM secret_values WHERE owner_type = 'account' AND owner_id = 'legacy-primary'").get().count, 4);
-  assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM secret_values WHERE owner_type = 'task' AND owner_id = 'legacy-primary-task'").get().count, 1);
-  assert.equal(sqlite.prepare(`SELECT COUNT(*) AS count FROM secret_values
-    WHERE owner_type = 'setting' AND owner_id = 'telegram_notification'`).get().count, 2);
-  const task = sqlite.prepare("SELECT tg_signer_import_secret_id FROM tasks WHERE id = 'legacy-primary-task'").get();
-  assert.ok(task.tg_signer_import_secret_id);
-  assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM secret_values WHERE purpose = 'tg_signer_import_base64'").get().count, 0);
-  const apiHashSecret = await repository.getSecretByOwnerPurpose("account", "legacy-primary", "api_hash");
-  assert.equal(apiHashSecret.ciphertext.includes("0123456789abcdef0123456789abcdef"), false);
-  assert.equal(
-    await decryptSecret(ROOT_KEY, apiHashSecret, { purpose: "api_hash", ownerId: "legacy-primary" }),
-    "0123456789abcdef0123456789abcdef",
-  );
-
-  let response = await worker.fetch(request("/api/v1/accounts/legacy-primary/validate", {
-    method: "POST",
-    body: {},
-  }), env);
-  assert.equal(response.status, 202, JSON.stringify(await response.clone().json()));
-  const flow = (await response.json()).data;
-  response = await worker.fetch(request(`/api/runner/login-flows/${flow.id}/claim`, {
-    method: "POST",
-    body: {},
-  }), env);
-  assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
-  const claim = await response.json();
-  assert.equal(claim.flow.mode, "session_validation");
-  assert.equal(claim.account.api_id, 123456);
-  assert.equal(claim.account.api_hash, "0123456789abcdef0123456789abcdef");
-  assert.equal(claim.account.session_string, "legacy-session-string-that-must-stay-secret");
-});
-
-test("legacy migration remains usable when old Secrets do not contain API credentials", async () => {
-  const { sqlite, worker, env } = harness();
-  const session = "legacy-session-only-string-that-must-stay-secret";
-  let response = await worker.fetch(request("/api/runner/migrations/legacy", {
-    method: "POST",
-    body: {
-      schema_version: 1,
-      dry_run: false,
-      activate_scheduler: false,
-      source: { repository: "owner/repo" },
-      accounts: [{
-        legacy_id: "legacy-primary",
-        name: "Legacy session only",
-        session_string: session,
-        enabled: true,
-      }],
-      tasks: [],
-    },
-  }), env);
-
-  assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
-  assert.equal(JSON.stringify(await response.json()).includes(session), false);
-  assert.deepEqual(
-    sqlite.prepare(`SELECT purpose FROM secret_values
-      WHERE owner_type = 'account' AND owner_id = 'legacy-primary'
-      ORDER BY purpose`).all().map((row) => row.purpose),
-    ["telegram_session"],
-  );
-
-  response = await worker.fetch(request("/api/v1/accounts/legacy-primary/validate", {
-    method: "POST",
-    body: {},
-  }), env);
-  assert.equal(response.status, 202, JSON.stringify(await response.clone().json()));
-  const flow = (await response.json()).data;
-  response = await worker.fetch(request(`/api/runner/login-flows/${flow.id}/claim`, {
-    method: "POST",
-    body: {},
-  }), env);
-  assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
-  const claim = await response.json();
-  assert.equal(claim.flow.mode, "session_validation");
-  assert.equal(claim.account.session_string, session);
-  assert.equal("api_id" in claim.account, false);
-  assert.equal("api_hash" in claim.account, false);
 });
 
 test("admin can import and validate an existing Session without API credentials", async () => {

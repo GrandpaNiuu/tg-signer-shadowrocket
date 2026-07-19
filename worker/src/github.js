@@ -3,7 +3,7 @@ import { HttpError } from "./http.js";
 export async function dispatchWorkflow(env, fetchImpl, { workflow, inputs = {} } = {}) {
   const owner = env.GITHUB_OWNER;
   const repo = env.GITHUB_REPO;
-  const workflowFile = workflow || env.GITHUB_WORKFLOW_FILE || "daily-checkin.yml";
+  const workflowFile = workflow || env.TASK_RUNNER_WORKFLOW_FILE || "task-runner.yml";
   const ref = env.GITHUB_REF || "main";
 
   if (!owner || !repo || !env.GITHUB_TOKEN) {

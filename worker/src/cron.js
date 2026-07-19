@@ -1,4 +1,5 @@
 const FIELDS = [
+  ["second", 0, 59],
   ["minute", 0, 59],
   ["hour", 0, 23],
   ["day-of-month", 1, 31],
@@ -68,16 +69,24 @@ function validateTimezone(timezone) {
 
 export function parseCron(expression, timezone = "UTC") {
   if (typeof expression !== "string") throw new Error("Cron expression must be a string.");
-  const sources = expression.trim().split(/\s+/);
-  if (sources.length !== 5) throw new Error("Cron expression must contain five fields.");
+  const originalSources = expression.trim().split(/\s+/);
+  if (![5, 6].includes(originalSources.length)) {
+    throw new Error("Cron expression must contain five or six fields.");
+  }
+  if (originalSources.length === 6 && !/^\d+$/.test(originalSources[0])) {
+    throw new Error("Cron expression must select a single second per minute.");
+  }
+  const sources = originalSources.length === 5 ? ["0", ...originalSources] : originalSources;
   validateTimezone(timezone);
   const parsed = sources.map((source, index) => parseField(source, ...FIELDS[index]));
   return {
-    minute: parsed[0],
-    hour: parsed[1],
-    dayOfMonth: parsed[2],
-    month: parsed[3],
-    dayOfWeek: parsed[4],
+    second: parsed[0],
+    minute: parsed[1],
+    hour: parsed[2],
+    dayOfMonth: parsed[3],
+    month: parsed[4],
+    dayOfWeek: parsed[5],
+    precision: originalSources.length === 6 ? "second" : "minute",
     timezone,
   };
 }
@@ -95,11 +104,13 @@ function localParts(date, timezone) {
     day: "numeric",
     hour: "numeric",
     minute: "numeric",
+    second: "numeric",
     hourCycle: "h23",
     weekday: "short",
   });
   const parts = Object.fromEntries(formatter.formatToParts(date).map((part) => [part.type, part.value]));
   return {
+    second: Number(parts.second),
     minute: Number(parts.minute),
     hour: Number(parts.hour),
     dayOfMonth: Number(parts.day),
@@ -110,7 +121,8 @@ function localParts(date, timezone) {
 
 function matchesParsed(parsed, date) {
   const local = localParts(date, parsed.timezone);
-  const simpleMatch = parsed.minute.values.has(local.minute)
+  const simpleMatch = parsed.second.values.has(local.second)
+    && parsed.minute.values.has(local.minute)
     && parsed.hour.values.has(local.hour)
     && parsed.month.values.has(local.month);
   if (!simpleMatch) return false;
@@ -129,10 +141,16 @@ export function nextCronDate(expression, timezone, after, maxMinutes = 527_040) 
   const parsed = parseCron(expression, timezone);
   const start = after instanceof Date ? after : new Date(after);
   if (Number.isNaN(start.getTime())) throw new Error("Invalid cron starting time.");
-  let timestamp = Math.floor(start.getTime() / 60_000) * 60_000 + 60_000;
-  for (let offset = 0; offset < maxMinutes; offset += 1, timestamp += 60_000) {
-    const candidate = new Date(timestamp);
-    if (matchesParsed(parsed, candidate)) return candidate;
+  const seconds = [...parsed.second.values].sort((left, right) => left - right);
+  const firstMinute = Math.floor(start.getTime() / 60_000) * 60_000;
+  for (let offset = 0; offset <= maxMinutes; offset += 1) {
+    const minute = firstMinute + offset * 60_000;
+    for (const second of seconds) {
+      const timestamp = minute + second * 1_000;
+      if (timestamp <= start.getTime()) continue;
+      const candidate = new Date(timestamp);
+      if (matchesParsed(parsed, candidate)) return candidate;
+    }
   }
   throw new Error("Cron expression has no occurrence within the search window.");
 }

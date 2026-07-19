@@ -3,6 +3,23 @@ import test from "node:test";
 
 import { encryptSecret } from "../src/crypto.js";
 import { createWorker } from "../src/app.js";
+import { executionLeaseSeconds } from "../src/runner-api.js";
+
+test("scheduled task leases include the exact-second Runner wait", () => {
+  const now = new Date("2026-07-18T00:00:00.000Z");
+  assert.equal(executionLeaseSeconds({
+    trigger_type: "schedule",
+    scheduled_for: "2026-07-18T00:02:00.000Z",
+    retry: 0,
+    timeout_seconds: 120,
+  }, now), 120 + 120 + 300);
+  assert.equal(executionLeaseSeconds({
+    trigger_type: "manual",
+    scheduled_for: "2026-07-18T00:02:00.000Z",
+    retry: 0,
+    timeout_seconds: 120,
+  }, now), 120 + 300);
+});
 
 test("OIDC-authenticated runner claims a one-time decrypted TaskSpec", async () => {
   const rootKey = Buffer.alloc(32, 4).toString("base64");

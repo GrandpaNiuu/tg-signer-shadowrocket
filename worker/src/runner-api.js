@@ -1,13 +1,12 @@
 import { createSecretRecord } from "./admin-api.js";
 import { decryptSecret, rootKeyForVersion } from "./crypto.js";
-import { nextCronDate } from "./cron.js";
 import { HttpError, json, methodNotAllowed, readJson } from "./http.js";
 import { TERMINAL_LOGIN_STATUSES } from "./login-states.js";
 import { sendRunNotification } from "./notifications.js";
 import { resolveTelegramApplicationCredentialRefs } from "./telegram-application.js";
 import { redact, sanitizeLogText } from "./redaction.js";
 import { dispatchNextForAccount } from "./scheduler.js";
-import { exactObject, maskPhone, validateTaskRuntime } from "./validation.js";
+import { exactObject } from "./validation.js";
 
 const TERMINAL_RUNS = new Set(["success", "failed", "cancelled", "ambiguous"]);
 const TERMINAL_LOGINS = new Set(TERMINAL_LOGIN_STATUSES);
@@ -63,12 +62,18 @@ function normalizedLogs(value, context, attemptId = null, dedupePrefix = null) {
   });
 }
 
-export function executionLeaseSeconds(execution) {
+export function executionLeaseSeconds(execution, now = new Date()) {
   const retries = Math.max(0, Math.min(10, Number(execution.retry || 0)));
   const timeout = Math.max(5, Math.min(900, Number(execution.timeout_seconds || 120)));
   let backoff = 0;
   for (let index = 0; index < retries; index += 1) backoff += Math.min(60, 2 * (2 ** index));
-  return timeout * (retries + 1) + backoff + 300;
+  const scheduledAt = (execution.trigger_type || execution.trigger) === "schedule"
+    ? Date.parse(execution.scheduled_for || "")
+    : Number.NaN;
+  const scheduleWait = Number.isFinite(scheduledAt)
+    ? Math.min(180, Math.max(0, Math.ceil((scheduledAt - now.getTime()) / 1_000)))
+    : 0;
+  return scheduleWait + timeout * (retries + 1) + backoff + 300;
 }
 
 async function plaintext(repository, env, secretId, purpose, ownerId, { required = false } = {}) {
@@ -90,7 +95,7 @@ async function claimTask(runId, env, repository, context, claims) {
   const now = context.now();
   const pending = await repository.getExecution(runId);
   if (!pending) throw new HttpError(409, "run_not_claimable", "Task run is expired, busy, or already claimed.");
-  const leaseUntil = new Date(now.getTime() + executionLeaseSeconds(pending) * 1_000).toISOString();
+  const leaseUntil = new Date(now.getTime() + executionLeaseSeconds(pending, now) * 1_000).toISOString();
   const execution = await repository.claimRun(runId, String(claims.run_id), now.toISOString(), leaseUntil);
   if (!execution) throw new HttpError(409, "run_not_claimable", "Task run is expired, busy, or already claimed.");
   const ownerId = execution.account_id;
@@ -182,7 +187,7 @@ async function attempt(runId, request, repository, context, claims) {
 
 async function completeTask(runId, request, env, repository, context, claims) {
   const body = await readJson(request, 256_000);
-  exactObject(body, ["run_id", "status", "started_at", "finished_at", "duration_ms", "attempts", "error", "result", "logs", "callback_pending"], ["status", "duration_ms"]);
+  exactObject(body, ["run_id", "status", "started_at", "finished_at", "duration_ms", "schedule_lag_ms", "schedule_wait_ms", "attempts", "error", "result", "logs", "callback_pending"], ["status", "duration_ms"]);
   if (body.run_id !== undefined && String(body.run_id) !== runId) {
     throw new HttpError(422, "validation_failed", "Request validation failed.", { fields: ["run_id"] });
   }
@@ -446,138 +451,10 @@ async function loginRoutes(request, env, repository, context, claims, parts) {
   return null;
 }
 
-async function migrateLegacy(request, env, repository, context, claims) {
-  const body = await readJson(request, 256_000);
-  exactObject(body, ["schema_version", "dry_run", "activate_scheduler", "source", "presence", "accounts", "tasks", "notification"], ["schema_version", "dry_run"]);
-  if (body.schema_version !== 1 || typeof body.dry_run !== "boolean") {
-    throw new HttpError(422, "validation_failed", "Request validation failed.", { fields: ["schema_version", "dry_run"] });
-  }
-  if (body.activate_scheduler !== undefined && body.activate_scheduler !== false) {
-    throw new HttpError(422, "validation_failed", "Request validation failed.", { fields: ["activate_scheduler"] });
-  }
-  if (body.source?.repository && body.source.repository !== claims.repository) {
-    throw new HttpError(403, "migration_source_mismatch", "Migration source does not match the authenticated workflow.");
-  }
-  if (body.dry_run) {
-    return json({
-      ok: true,
-      dry_run: true,
-      accounts_planned: Number(Boolean(body.presence?.primary_account)) + Number(Boolean(body.presence?.secondary_account)),
-      tasks_planned: Number(Boolean(body.presence?.primary_account)) + Number(Boolean(body.presence?.secondary_account)),
-      presence: redact(body.presence || {}),
-    });
-  }
-  if (!Array.isArray(body.accounts) || !Array.isArray(body.tasks) || body.accounts.length < 1 || body.accounts.length > 2 || body.tasks.length > 2) {
-    throw new HttpError(422, "validation_failed", "Request validation failed.", { fields: ["accounts", "tasks"] });
-  }
-  const now = context.now();
-  for (const source of body.accounts) {
-    exactObject(source, ["legacy_id", "name", "session_string", "api_id", "api_hash", "account", "proxy", "enabled"], ["legacy_id", "name", "session_string"]);
-    if (!/^(legacy-primary|legacy-secondary)$/.test(String(source.legacy_id)) || typeof source.session_string !== "string" || source.session_string.length < 20) {
-      throw new HttpError(422, "validation_failed", "Request validation failed.", { fields: ["accounts"] });
-    }
-    const apiId = source.api_id === undefined || source.api_id === null || source.api_id === ""
-      ? null
-      : String(source.api_id).trim();
-    const apiHash = source.api_hash === undefined || source.api_hash === null || source.api_hash === ""
-      ? null
-      : String(source.api_hash).trim();
-    if (Boolean(apiId) !== Boolean(apiHash)
-      || (apiId && !/^\d{4,12}$/.test(apiId))
-      || (apiHash && !/^[a-fA-F0-9]{32,64}$/.test(apiHash))) {
-      throw new HttpError(422, "validation_failed", "Request validation failed.", { fields: ["accounts"] });
-    }
-    const id = source.legacy_id;
-    const secretInputs = {
-      session: source.session_string,
-      ...(apiId ? { api_id: apiId, api_hash: apiHash } : {}),
-      ...(source.proxy ? { proxy: String(source.proxy) } : {}),
-    };
-    const secrets = [];
-    for (const [field, purpose] of [["session", "telegram_session"], ["api_id", "api_id"], ["api_hash", "api_hash"], ["proxy", "proxy"]]) {
-      if (secretInputs[field]) secrets.push(await createSecretRecord({ env, ...context, ownerType: "account", ownerId: id, purpose, value: secretInputs[field] }));
-    }
-    const existing = await repository.getAccount(id);
-    const account = String(source.account || "");
-    const masked = /^\+[1-9]\d{6,14}$/.test(account) ? maskPhone(account) : "legacy account";
-    if (existing) {
-      await repository.updateAccount(id, {
-        changes: { name: String(source.name).slice(0, 80), phone_masked: masked, status: "connected", enabled: source.enabled === false ? 0 : 1, last_connected_at: now.toISOString(), last_error: null, updated_at: now.toISOString() },
-        secrets,
-        clearSecrets: [],
-      });
-    } else {
-      await repository.createAccount({ account: {
-        id, name: String(source.name).slice(0, 80), phone_masked: masked, status: "connected",
-        enabled: source.enabled === false ? 0 : 1, last_connected_at: now.toISOString(), created_at: now.toISOString(), updated_at: now.toISOString(),
-      }, secrets });
-    }
-  }
-  for (const source of body.tasks) {
-    exactObject(source, ["legacy_id", "account_legacy_id", "name", "skill", "target", "command", "signer_task_name", "signer_import_base64", "cron", "timezone", "retry", "timeout_seconds", "thread", "delete_after", "enabled"], ["legacy_id", "account_legacy_id", "name", "skill", "cron", "timezone"]);
-    const skillKey = String(source.skill).replace("-", "_") === "task" ? "tg_signer" : String(source.skill).replace("-", "_");
-    if (!/^(send_text|tg_signer)$/.test(skillKey)
-      || !/^(legacy-primary|legacy-secondary)-task$/.test(String(source.legacy_id))
-      || !/^(legacy-primary|legacy-secondary)$/.test(String(source.account_legacy_id))) {
-      throw new HttpError(422, "validation_failed", "Request validation failed.", { fields: ["tasks"] });
-    }
-    const skill = await repository.getSkillByKey(skillKey);
-    const taskId = source.legacy_id;
-    const command = skillKey === "tg_signer" ? String(source.signer_task_name || source.command || "legacy_sign") : String(source.command || "/checkin");
-    const task = {
-      id: taskId, name: String(source.name).slice(0, 100), account_id: source.account_legacy_id, skill_id: skill.id,
-      bot: String(source.target || (skillKey === "tg_signer" ? "tg_signer" : "@legacy_bot")), command,
-      cron: String(source.cron), timezone: String(source.timezone), retry: integer(source.retry ?? 0, "retry", 0, 10),
-      timeout_seconds: Math.min(integer(source.timeout_seconds ?? 120, "timeout_seconds", 5, 900), 900),
-      thread_id: source.thread === undefined || source.thread === null ? null : integer(source.thread, "thread", 1, Number.MAX_SAFE_INTEGER),
-      delete_after_seconds: source.delete_after === undefined || source.delete_after === null
-        ? null
-        : integer(source.delete_after, "delete_after", 0, 86_400),
-      enabled: source.enabled === false ? 0 : 1,
-      next_run_at: source.enabled === false ? null : nextCronDate(String(source.cron), String(source.timezone), now).toISOString(),
-      created_at: now.toISOString(), updated_at: now.toISOString(),
-    };
-    validateTaskRuntime({ ...task, skill_key: skillKey });
-    const signerImportValue = source.signer_import_base64 === undefined || source.signer_import_base64 === null
-      ? null
-      : String(source.signer_import_base64);
-    if (signerImportValue && signerImportValue.length > 200_000) {
-      throw new HttpError(422, "validation_failed", "Request validation failed.", { fields: ["tasks.signer_import_base64"] });
-    }
-    const signerImportSecret = skillKey === "tg_signer" && signerImportValue
-      ? await createSecretRecord({
-        env, ...context, ownerType: "task", ownerId: taskId,
-        purpose: "tg_signer_import", value: signerImportValue,
-      })
-      : null;
-    if (await repository.getTask(taskId)) {
-      await repository.updateTask(taskId, task, {
-        signerImportSecret,
-        clearSignerImport: skillKey !== "tg_signer",
-      });
-    } else {
-      await repository.createTask(task, signerImportSecret);
-    }
-  }
-  if (body.notification?.enabled && body.notification.bot_token && body.notification.chat_id) {
-    for (const [purpose, value] of [["bot_token", body.notification.bot_token], ["chat_id", body.notification.chat_id]]) {
-      await repository.replaceOwnerSecret(await createSecretRecord({
-        env, ...context, ownerType: "setting", ownerId: "telegram_notification", purpose, value: String(value),
-      }));
-    }
-    await repository.updateSettings({ notifications_enabled: true }, now.toISOString());
-  }
-  return json({ ok: true, dry_run: false, accounts_planned: body.accounts.length, tasks_planned: body.tasks.length });
-}
-
 export async function handleRunnerApi(request, env, repository, context, claims) {
   const url = new URL(request.url);
   const prefix = "/api/runner/";
   if (!url.pathname.startsWith(prefix)) return null;
-  if (url.pathname === "/api/runner/migrations/legacy") {
-    if (request.method !== "POST") return methodNotAllowed(["POST"]);
-    return migrateLegacy(request, env, repository, context, claims);
-  }
   const parts = url.pathname.slice(prefix.length).split("/").filter(Boolean).map(decodeURIComponent);
   return await taskRoutes(request, env, repository, context, claims, parts)
     || await loginRoutes(request, env, repository, context, claims, parts)

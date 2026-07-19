@@ -54,7 +54,7 @@ export async function sendRunNotification(env, repository, fetchImpl, runId) {
   const taskName = redactKnownSecrets(run.task_name || run.task_id || "已删除任务", knownSecrets);
   const errorMessage = run.error_message ? redactKnownSecrets(run.error_message, knownSecrets) : null;
   const text = sanitizeLogText([
-    `${icon} Telegram 自动签到：${run.status}`,
+    `${icon} Telegram 自动消息：${run.status}`,
     `任务：${taskName}`,
     `耗时：${run.duration_ms ?? 0} ms`,
     ...(errorMessage ? [`错误：${errorMessage}`] : []),

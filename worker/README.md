@@ -1,7 +1,7 @@
 # Cloudflare Worker control plane
 
-This directory keeps the original `tg-signer-shadowrocket` Worker and `/run`
-trigger while adding the D1-backed personal control plane. It is a native ES
+This directory keeps the original `tg-signer-shadowrocket` Worker name while
+providing the D1-backed control plane. It is a native ES
 module Worker with no third-party runtime dependencies.
 
 ## Routes
@@ -43,7 +43,6 @@ opaque run or flow id:
 - `POST /api/runner/runs/:id/claim|attempts|complete`
 - `POST /api/runner/login-flows/:id/claim|events|complete`
 - `POST /api/runner/login-flows/:id/input/claim`
-- `POST /api/runner/migrations/legacy`
 
 Successful API responses use `{ "data": ... }`; list responses also
 include `pagination`. Errors always use
@@ -63,10 +62,6 @@ returned by an administrator endpoint; task responses expose only
 and `null` deletes it. The runner claim maps it to `task.params.import_blob` with
 `import_encoding: "auto"`.
 
-The compatibility `GET|POST /run` route still accepts `x-trigger-key`; the old
-query-string key remains supported for existing callers. Prefer the header so
-the key is not placed in URLs.
-
 ## Configuration
 
 Create the D1 database, Direct Upload Pages project, and one GitHub OAuth App.
@@ -78,7 +73,7 @@ secrets.
 
 Worker secrets:
 
-- `GITHUB_TOKEN` and `TRIGGER_KEY` (legacy compatibility)
+- `GITHUB_TOKEN` (dispatches the task and login workflows)
 - `SECRET_ROOT_KEY`: base64 for exactly 32 random bytes
 - optional `SECRET_ROOT_KEY_V1`, `SECRET_ROOT_KEY_V2`, ... during key rotation
 - `GITHUB_OAUTH_CLIENT_ID` and `GITHUB_OAUTH_CLIENT_SECRET`
@@ -88,7 +83,7 @@ Worker secrets:
 
 Variables:
 
-- GitHub owner, repository, branch, and three workflow filenames
+- GitHub owner, repository, branch, and the task/login workflow filenames
 - `RUNNER_OIDC_AUDIENCE`
 - `ADMIN_ORIGIN`, `ADMIN_GITHUB_LOGIN`, and immutable `ADMIN_GITHUB_USER_ID`
 - optional `ADMIN_SESSION_TTL_SECONDS` (5 minutes to 30 days; default 7 days)
@@ -96,16 +91,16 @@ Variables:
   email is only a login identifier and self-service password reset is disabled
 - for verified email registration: public `TURNSTILE_SITE_KEY`, verified sender
   `AUTH_EMAIL_FROM`, and optional `PASSWORD_HASH_ITERATIONS` (default 600000)
-- optional explicit `RUNNER_WORKFLOW_REF`, `LOGIN_WORKFLOW_REF`, and
-  `MIGRATION_WORKFLOW_REF`
+- optional explicit `RUNNER_WORKFLOW_REF` and `LOGIN_WORKFLOW_REF`
+- optional `SCHEDULE_DISPATCH_LEAD_SECONDS` (default 120, bounded to 120–180)
 
 The Cloudflare deployment token needs Workers Scripts Edit, D1 Edit, and
 Cloudflare Pages Edit for the target account. `GITHUB_TOKEN` needs Actions:
-write on this repository so the Worker can dispatch the three workflows.
+write on this repository so the Worker can dispatch both workflows.
 
-`scheduler_mode` starts as `legacy`. In that mode the minute tick dispatches the
-old workflow only when `LEGACY_CRON` matches. Change it to `d1` only after a
-successful dry-run and legacy import; switching it back is the rollback.
+D1 is the only scheduler. The Worker tick remains minute-based, but it dispatches
+upcoming work early and the Runner waits until the exact configured second.
+GitHub queue delay is visible as schedule lag and is not treated as hard real-time.
 
 ## Security invariants
 
@@ -128,7 +123,7 @@ successful dry-run and legacy import; switching it back is the rollback.
   matches; rejected values are deleted before replacement input is accepted.
 - Connected, failed, cancelled, and expired login flows clear both secret
   references and delete all `login_flow`-owned code/2FA ciphertext immediately;
-  the connected Session and any legacy account-owned API credentials are retained.
+  the connected Session and any migrated account-owned API credentials are retained.
   New accounts use one encrypted setting-owned Telegram application credential
   pair, with a deterministic complete legacy-account pair as a no-reconfiguration
   compatibility fallback.
@@ -146,9 +141,10 @@ successful dry-run and legacy import; switching it back is the rollback.
 - Runs are queued per account and only the account's head run is dispatched.
   Completion immediately wakes the next run; the minute reconciler also resets
   stale dispatches and terminates expired claimed/running work as ambiguous.
-- The account lease covers the validated worst-case attempt budget plus five
-  minutes. Task writes reject configurations whose timeout, retries, and backoff
-  exceed 900 execution seconds, preserving the workflow's 20-minute hard limit.
+- The account lease covers the validated worst-case attempt budget, up to three
+  minutes of exact-second pre-wait, plus five minutes. Task writes reject
+  configurations whose timeout, retries, and backoff exceed 900 execution
+  seconds; the task workflow has a 25-minute hard limit.
 - `send_text.delete_after_seconds` must leave at least ten seconds before the
   task timeout so post-send deletion cannot be predictably killed as ambiguous.
 

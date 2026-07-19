@@ -102,7 +102,7 @@ export function parseTaskImport(raw, { accounts = [], skills = [], accountMappin
   const document = parseDocument(raw);
   if (!document || typeof document !== "object" || Array.isArray(document)
     || document.format !== FORMAT || document.version !== VERSION) {
-    throw new TaskTransferError("这不是受支持的 Telegram 自动签到任务文件。");
+    throw new TaskTransferError("这不是受支持的 Telegram 自动消息任务文件。");
   }
   if (!Array.isArray(document.tasks) || document.tasks.length < 1) {
     throw new TaskTransferError("导入文件中没有任务。");

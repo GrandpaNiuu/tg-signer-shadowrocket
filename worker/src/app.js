@@ -1,8 +1,6 @@
 import { handleAdminApi } from "./admin-api.js";
 import { createAdminAuth } from "./admin-auth.js";
 import { verifyRunnerRequest } from "./auth.js";
-import { cronMatches } from "./cron.js";
-import { dispatchWorkflow } from "./github.js";
 import { errorResponse, json } from "./http.js";
 import { createD1Repository } from "./repository.js";
 import { handleRunnerApi } from "./runner-api.js";
@@ -59,26 +57,7 @@ export function createWorker(dependencies = {}) {
           const repository = repositoryFactory(env);
           return await handleRunnerApi(request, env, repository, { uuid, now, fetch: fetchImpl }, claims);
         }
-        if (url.pathname !== "/run") {
-          return json({ error: { code: "not_found", message: "Route not found." }, request_id: requestId }, 404);
-        }
-        if (request.method !== "GET" && request.method !== "POST") {
-          return json({ error: { code: "method_not_allowed", message: "Method not allowed." }, request_id: requestId }, 405, { allow: "GET, POST" });
-        }
-
-        const providedKey = request.headers.get("x-trigger-key") || url.searchParams.get("key") || "";
-        if (!env.TRIGGER_KEY || providedKey !== env.TRIGGER_KEY) {
-          return json({ error: { code: "unauthorized", message: "Unauthorized." }, request_id: requestId }, 401);
-        }
-
-        const result = await dispatchWorkflow(env, fetchImpl, { inputs: {} });
-        if (!result.ok) {
-          return json({
-            error: { code: "github_dispatch_failed", message: "GitHub Actions dispatch failed." },
-            request_id: requestId,
-          }, 502);
-        }
-        return json({ ok: true, message: "GitHub Actions workflow dispatched." });
+        return json({ error: { code: "not_found", message: "Route not found." }, request_id: requestId }, 404);
       } catch (error) {
         return errorResponse(error, requestId);
       }
@@ -87,10 +66,6 @@ export function createWorker(dependencies = {}) {
     async scheduled(event, env, ctx) {
       ctx.waitUntil((async () => {
         try {
-          // A legacy dispatch is allowed only after D1 explicitly reports that
-          // scheduler_mode is "legacy". Treat a missing/unreadable control
-          // plane as unavailable so a transient D1 failure cannot trigger the
-          // legacy workflow and then run the same task again after recovery.
           let scheduler = { mode: "unavailable", due: 0, queued: 0, dispatched: 0, failed: 0 };
           let schedulerError = null;
           if (env.DB) {
@@ -107,13 +82,8 @@ export function createWorker(dependencies = {}) {
           } else {
             schedulerError = "D1BindingMissing";
           }
-          let legacyDispatch = null;
-          const scheduledDate = new Date(event.scheduledTime);
-          if (scheduler.mode === "legacy" && cronMatches(env.LEGACY_CRON || "0 16 * * *", "UTC", scheduledDate)) {
-            legacyDispatch = await dispatchWorkflow(env, fetchImpl, { inputs: {} });
-          }
           console.log(JSON.stringify({
-            ok: !schedulerError && scheduler.failed === 0 && (!legacyDispatch || legacyDispatch.ok),
+            ok: !schedulerError && scheduler.failed === 0,
             cron: event.cron,
             scheduled_time: event.scheduledTime,
             mode: scheduler.mode,
@@ -122,7 +92,6 @@ export function createWorker(dependencies = {}) {
             dispatched: scheduler.dispatched,
             failed: scheduler.failed,
             scheduler_error: schedulerError,
-            legacy_dispatched: Boolean(legacyDispatch?.ok),
           }));
         } catch (error) {
           console.error(JSON.stringify({

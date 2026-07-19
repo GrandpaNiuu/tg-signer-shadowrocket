@@ -19,7 +19,7 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
       WORKER_URL: ${{ secrets.WORKER_URL || vars.WORKER_URL }}
       WORKER_OIDC_AUDIENCE: ${{ secrets.WORKER_OIDC_AUDIENCE || vars.WORKER_OIDC_AUDIENCE }}

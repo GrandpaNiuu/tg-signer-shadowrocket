@@ -87,3 +87,60 @@ test("scheduler reconciliation makes a stale dispatched run claimable again", as
   assert.equal(run.dispatch_attempt_count, 2);
   assert.equal(run.status, "queued");
 });
+
+test("scheduler dispatches second-precision work ahead of time and advances from the scheduled instant", async () => {
+  const { repository } = createTestRepository();
+  await seedAccount(repository);
+  await seedTask(repository, {
+    cron: "5 * * * * *",
+    timestamp: "2026-07-18T00:01:05.000Z",
+  });
+  await repository.updateSettings({ scheduler_mode: "d1" }, "2026-07-18T00:00:00.000Z");
+
+  const dispatched = [];
+  const dependencies = {
+    repository,
+    fetch: async (_url, init) => {
+      dispatched.push(JSON.parse(init.body).inputs.run_id);
+      return new Response(null, { status: 204 });
+    },
+    now: () => new Date("2026-07-18T00:00:00.000Z"),
+    uuid: () => "run-second-precision",
+  };
+
+  const summary = await runScheduler({ ...ENV, SCHEDULE_DISPATCH_LEAD_SECONDS: "90" }, dependencies);
+  assert.deepEqual(summary, { mode: "d1", due: 1, queued: 1, dispatched: 1, failed: 0 });
+  assert.deepEqual(dispatched, ["run-second-precision"]);
+  const run = await repository.getRun("run-second-precision");
+  assert.equal(run.scheduled_for, "2026-07-18T00:01:05.000Z");
+  const task = await repository.getTask("task-1");
+  assert.equal(task.next_run_at, "2026-07-18T00:02:05.000Z");
+});
+
+test("scheduler queues every once-per-minute occurrence inside the safe lead window", async () => {
+  const { repository } = createTestRepository();
+  await seedAccount(repository);
+  await seedTask(repository, {
+    cron: "5 * * * * *",
+    timestamp: "2026-07-18T00:00:05.000Z",
+  });
+
+  let sequence = 0;
+  const dependencies = {
+    repository,
+    fetch: async () => new Response(null, { status: 204 }),
+    now: () => new Date("2026-07-18T00:00:00.000Z"),
+    uuid: () => `lead-run-${++sequence}`,
+  };
+
+  const summary = await runScheduler({ ...ENV, SCHEDULE_DISPATCH_LEAD_SECONDS: "0" }, dependencies);
+  assert.equal(summary.queued, 2);
+  assert.equal(summary.dispatched, 1);
+  const runs = await repository.listRuns({ limit: 10, offset: 0 });
+  assert.deepEqual(
+    runs.map((run) => run.scheduled_for).sort(),
+    ["2026-07-18T00:00:05.000Z", "2026-07-18T00:01:05.000Z"],
+  );
+  const task = await repository.getTask("task-1");
+  assert.equal(task.next_run_at, "2026-07-18T00:02:05.000Z");
+});

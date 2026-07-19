@@ -441,7 +441,7 @@ async function dashboard(request, env, repository, context, parts) {
       health: {
         database: "ok",
         github: githubRunnerHealth(env),
-        scheduler: settings.scheduler_mode || "legacy",
+        scheduler: settings.scheduler_mode || "d1",
       },
     },
   });

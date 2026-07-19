@@ -1,9 +1,0 @@
-# Placeholder example.
-# The default workflow uses send-text mode: send one fixed text to a target chat.
-# For complex tasks, configure tg-signer in a safe environment, export the config,
-# write the base64 content into GitHub Secret TG_SIGNER_IMPORT_BASE64,
-# then set SIGN_MODE=task and TG_SIGNER_TASK_NAME to your task name.
-
-mode: send-text
-target_chat: "@example_bot"
-checkin_text: "/checkin"

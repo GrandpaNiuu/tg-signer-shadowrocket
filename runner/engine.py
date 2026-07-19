@@ -122,16 +122,31 @@ class Engine:
         execute_skill: Callable[[TaskSpec], dict[str, Any]] = execute_in_subprocess,
         sleep: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.monotonic,
+        wall_clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     ) -> None:
         self.worker_client = worker_client
         self.execute_skill = execute_skill
         self.sleep = sleep
         self.monotonic = monotonic
+        self.wall_clock = wall_clock
 
     def run(self, spec: TaskSpec) -> dict[str, Any]:
         redactor = Redactor.from_mapping(spec.child_payload())
         logger = StructuredLogger(redactor)
-        started_at = datetime.now(timezone.utc)
+        schedule_wait_ms = 0
+        scheduled_at = _scheduled_time(spec)
+        if scheduled_at is not None:
+            wait_seconds = max(0.0, (scheduled_at - self.wall_clock()).total_seconds())
+            if wait_seconds > 0:
+                schedule_wait_ms = round(wait_seconds * 1000)
+                logger.info("schedule_wait", wait_ms=schedule_wait_ms)
+                self.sleep(wait_seconds)
+        started_at = self.wall_clock()
+        schedule_lag_ms = (
+            max(0, round((started_at - scheduled_at).total_seconds() * 1000))
+            if scheduled_at is not None
+            else 0
+        )
         started_clock = self.monotonic()
         final_error: dict[str, Any] | None = None
         output: dict[str, Any] = {}
@@ -149,7 +164,7 @@ class Engine:
             attempt_clock = self.monotonic()
             self._report_attempt(
                 spec.run_id,
-                {"attempt": attempt, "status": "running", "started_at": _now()},
+                {"attempt": attempt, "status": "running", "started_at": self.wall_clock().isoformat()},
                 logger,
             )
             try:
@@ -162,7 +177,7 @@ class Engine:
                         "attempt": attempt,
                         "status": "success",
                         "duration_ms": duration_ms,
-                        "finished_at": _now(),
+                        "finished_at": self.wall_clock().isoformat(),
                     },
                     logger,
                 )
@@ -185,7 +200,7 @@ class Engine:
                         "attempt": attempt,
                         "status": "ambiguous" if exc.ambiguous else "failed",
                         "duration_ms": duration_ms,
-                        "finished_at": _now(),
+                        "finished_at": self.wall_clock().isoformat(),
                         "error": final_error,
                         "logs": redactor.redact(exc.logs),
                     },
@@ -219,7 +234,7 @@ class Engine:
                 logger.error("runner_internal_error", error=final_error)
                 break
 
-        finished_at = datetime.now(timezone.utc)
+        finished_at = self.wall_clock()
         result = {
             "run_id": spec.run_id,
             "status": (
@@ -232,6 +247,8 @@ class Engine:
             "started_at": started_at.isoformat(),
             "finished_at": finished_at.isoformat(),
             "duration_ms": round((self.monotonic() - started_clock) * 1000),
+            "schedule_lag_ms": schedule_lag_ms,
+            "schedule_wait_ms": schedule_wait_ms,
             "attempts": attempts,
             "error": final_error,
             "result": redactor.redact(output.get("data", {})),
@@ -255,9 +272,19 @@ class Engine:
             # Attempt telemetry is best effort. The final completion remains mandatory.
             logger.warning("attempt_callback_failed", message=str(exc))
 
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def _scheduled_time(spec: TaskSpec) -> datetime | None:
+    if str(spec.metadata.get("trigger", "")).lower() not in {"cron", "schedule"}:
+        return None
+    value = spec.metadata.get("scheduled_for")
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _bounded_retry_after(value: Any) -> int | None:

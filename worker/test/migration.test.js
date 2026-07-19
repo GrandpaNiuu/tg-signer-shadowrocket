@@ -185,3 +185,14 @@ test("deployment cleanup removes only synthetic users and resets temporary auth 
   assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM users WHERE id = 'real'").get().count, 1);
   assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM auth_rate_limits").get().count, 0);
 });
+
+test("scheduler retirement migration makes D1 authoritative", () => {
+  const sqlite = new DatabaseSync(":memory:");
+  sqlite.exec(readFileSync(new URL("../migrations/0001_initial.sql", import.meta.url), "utf8"));
+  assert.equal(JSON.parse(sqlite.prepare("SELECT value_json FROM settings WHERE setting_key = 'scheduler_mode'").get().value_json), "legacy");
+
+  sqlite.exec(readFileSync(new URL("../migrations/0010_retire_legacy_scheduler.sql", import.meta.url), "utf8"));
+
+  assert.equal(JSON.parse(sqlite.prepare("SELECT value_json FROM settings WHERE setting_key = 'scheduler_mode'").get().value_json), "d1");
+  assert.equal(sqlite.prepare("SELECT display_name FROM skills WHERE skill_key = 'send_text'").get().display_name, "Send Message");
+});

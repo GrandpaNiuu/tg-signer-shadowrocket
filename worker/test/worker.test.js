@@ -7,7 +7,7 @@ function responseJson(response) {
   return response.json();
 }
 
-test("legacy /run accepts x-trigger-key and dispatches daily-checkin", async () => {
+test("retired legacy /run endpoint is not exposed", async () => {
   const calls = [];
   const worker = createWorker({
     fetch: async (url, init) => {
@@ -16,49 +16,12 @@ test("legacy /run accepts x-trigger-key and dispatches daily-checkin", async () 
     },
   });
 
-  const response = await worker.fetch(
-    new Request("https://worker.example/run", {
-      headers: { "x-trigger-key": "legacy-key" },
-    }),
-    {
-      TRIGGER_KEY: "legacy-key",
-      GITHUB_TOKEN: "test-token",
-      GITHUB_OWNER: "owner",
-      GITHUB_REPO: "repo",
-      GITHUB_WORKFLOW_FILE: "daily-checkin.yml",
-      GITHUB_REF: "main",
-    },
-  );
-
-  assert.equal(response.status, 200);
-  assert.deepEqual(await responseJson(response), {
-    ok: true,
-    message: "GitHub Actions workflow dispatched.",
-  });
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].url, "https://api.github.com/repos/owner/repo/actions/workflows/daily-checkin.yml/dispatches");
-  assert.deepEqual(JSON.parse(calls[0].init.body), { ref: "main", inputs: {} });
+  const response = await worker.fetch(new Request("https://worker.example/run"), {});
+  assert.equal(response.status, 404);
+  assert.equal(calls.length, 0);
 });
 
-test("legacy /run still accepts the query key for backwards compatibility", async () => {
-  const worker = createWorker({
-    fetch: async () => new Response(null, { status: 204 }),
-  });
-
-  const response = await worker.fetch(
-    new Request("https://worker.example/run?key=legacy-key"),
-    {
-      TRIGGER_KEY: "legacy-key",
-      GITHUB_TOKEN: "test-token",
-      GITHUB_OWNER: "owner",
-      GITHUB_REPO: "repo",
-    },
-  );
-
-  assert.equal(response.status, 200);
-});
-
-test("scheduled legacy dispatch requires a successful D1 legacy-mode read", async () => {
+test("scheduled handler uses only the D1 scheduler", async () => {
   const calls = [];
   const worker = createWorker({
     fetch: async (url) => {
@@ -66,9 +29,9 @@ test("scheduled legacy dispatch requires a successful D1 legacy-mode read", asyn
       return new Response(null, { status: 204 });
     },
     repositoryFactory: () => ({
-      async getSettings() {
-        return { scheduler_mode: "legacy" };
-      },
+      async reconcileRuns() {},
+      async getDueTasks() { return []; },
+      async listDispatchableAccountIds() { return []; },
     }),
   });
   let pending;
@@ -77,18 +40,13 @@ test("scheduled legacy dispatch requires a successful D1 legacy-mode read", asyn
     { cron: "* * * * *", scheduledTime: Date.parse("2026-07-18T16:00:00.000Z") },
     {
       DB: {},
-      LEGACY_CRON: "0 16 * * *",
-      GITHUB_TOKEN: "test-token",
-      GITHUB_OWNER: "owner",
-      GITHUB_REPO: "repo",
-      GITHUB_WORKFLOW_FILE: "daily-checkin.yml",
-      GITHUB_REF: "main",
+      SCHEDULE_DISPATCH_LEAD_SECONDS: "90",
     },
     { waitUntil(value) { pending = value; } },
   );
   await pending;
 
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 0);
 });
 
 test("scheduled handler fails closed when D1 mode cannot be read", async () => {
@@ -99,7 +57,7 @@ test("scheduled handler fails closed when D1 mode cannot be read", async () => {
       return new Response(null, { status: 204 });
     },
     repositoryFactory: () => ({
-      async getSettings() {
+      async reconcileRuns() {
         throw new Error("temporary D1 failure");
       },
     }),
@@ -110,12 +68,7 @@ test("scheduled handler fails closed when D1 mode cannot be read", async () => {
     { cron: "* * * * *", scheduledTime: Date.parse("2026-07-18T16:00:00.000Z") },
     {
       DB: {},
-      LEGACY_CRON: "0 16 * * *",
-      GITHUB_TOKEN: "test-token",
-      GITHUB_OWNER: "owner",
-      GITHUB_REPO: "repo",
-      GITHUB_WORKFLOW_FILE: "daily-checkin.yml",
-      GITHUB_REF: "main",
+      SCHEDULE_DISPATCH_LEAD_SECONDS: "90",
     },
     { waitUntil(value) { pending = value; } },
   );

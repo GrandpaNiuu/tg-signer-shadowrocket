@@ -2,8 +2,8 @@ name = "tg-signer-shadowrocket"
 main = "cloudflare-worker.js"
 compatibility_date = "2025-01-01"
 
-# The scheduler ticks every minute. LEGACY_CRON gates the old daily workflow
-# while scheduler_mode remains "legacy", so the existing behavior is preserved.
+# The Worker tick is minute-based; tasks may be dispatched ahead so the Runner
+# can wait until the configured second.
 [triggers]
 crons = ["* * * * *"]
 
@@ -16,12 +16,9 @@ migrations_dir = "migrations"
 [vars]
 GITHUB_OWNER = "GrandpaNiuu"
 GITHUB_REPO = "Telegramautomaticcheck-in"
-GITHUB_WORKFLOW_FILE = "daily-checkin.yml"
 GITHUB_REF = "main"
 TASK_RUNNER_WORKFLOW_FILE = "task-runner.yml"
 LOGIN_WORKFLOW_FILE = "telegram-login.yml"
-MIGRATION_WORKFLOW_FILE = "migrate-legacy.yml"
-LEGACY_CRON = "0 16 * * *"
 RUNNER_OIDC_AUDIENCE = "https://tg-signer-shadowrocket.q3j1h8.workers.dev/api/runner"
 ADMIN_ORIGIN = "https://grandpaniu.ccwu.cc"
 ADMIN_GITHUB_LOGIN = "GrandpaNiuu"
@@ -29,3 +26,4 @@ ADMIN_GITHUB_USER_ID = "225517310"
 ADMIN_SESSION_TTL_SECONDS = "604800"
 PASSWORD_HASH_ITERATIONS = "100000"
 PUBLIC_PASSWORD_AUTH_MODE = "local"
+SCHEDULE_DISPATCH_LEAD_SECONDS = "120"

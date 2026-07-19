@@ -165,7 +165,7 @@ export function settingsInput(body) {
   if (Object.keys(body.values).length === 0) fail(["values"]);
   const values = {};
   if (body.values.scheduler_mode !== undefined) {
-    values.scheduler_mode = stringField(body.values.scheduler_mode, "values.scheduler_mode", { pattern: /^(legacy|d1)$/ });
+    values.scheduler_mode = stringField(body.values.scheduler_mode, "values.scheduler_mode", { pattern: /^d1$/ });
   }
   if (body.values.default_timezone !== undefined) {
     const timezone = stringField(body.values.default_timezone, "values.default_timezone", { max: 64 });

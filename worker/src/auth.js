@@ -113,14 +113,10 @@ export async function verifyRunnerRequest(request, env, dependencies = {}) {
       throw new Error("Runner claims do not match this repository.");
     }
     const path = new URL(request.url).pathname;
-    const workflowFile = path === "/api/runner/migrations/legacy"
-      ? (env.MIGRATION_WORKFLOW_FILE || "migrate-legacy.yml")
-      : path.startsWith("/api/runner/login-flows/")
+    const workflowFile = path.startsWith("/api/runner/login-flows/")
         ? (env.LOGIN_WORKFLOW_FILE || "telegram-login.yml")
         : (env.TASK_RUNNER_WORKFLOW_FILE || "task-runner.yml");
-    const explicitWorkflowRef = path === "/api/runner/migrations/legacy"
-      ? env.MIGRATION_WORKFLOW_REF
-      : path.startsWith("/api/runner/login-flows/")
+    const explicitWorkflowRef = path.startsWith("/api/runner/login-flows/")
         ? env.LOGIN_WORKFLOW_REF
         : env.RUNNER_WORKFLOW_REF;
     const expectedWorkflowRef = explicitWorkflowRef

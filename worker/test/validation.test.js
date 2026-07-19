@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { taskInput, validateTaskRuntime } from "../src/validation.js";
+import { settingsInput, taskInput, validateTaskRuntime } from "../src/validation.js";
 
 function task(overrides = {}) {
   return taskInput({
@@ -17,13 +17,21 @@ function task(overrides = {}) {
   });
 }
 
-test("task runtime budget fits the 20-minute workflow including five-minute overhead", () => {
+test("task runtime budget fits the 25-minute workflow including wait and callback overhead", () => {
   assert.doesNotThrow(() => validateTaskRuntime(task({ retry: 0, timeout_seconds: 900 })));
   assert.throws(
     () => validateTaskRuntime(task({ retry: 5, timeout_seconds: 900 })),
     (error) => error.status === 422
       && error.details.fields.includes("retry")
       && error.details.fields.includes("timeout_seconds"),
+  );
+});
+
+test("retired legacy scheduler mode cannot be written back", () => {
+  assert.deepEqual(settingsInput({ values: { scheduler_mode: "d1" } }), { scheduler_mode: "d1" });
+  assert.throws(
+    () => settingsInput({ values: { scheduler_mode: "legacy" } }),
+    (error) => error.status === 422 && error.details.fields.includes("values.scheduler_mode"),
   );
 });
 
