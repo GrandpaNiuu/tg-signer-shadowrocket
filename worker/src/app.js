@@ -151,6 +151,7 @@ export function createWorker(dependencies = {}) {
             queued: 0,
             dispatched: 0,
             failed: 0,
+            failures_by_code: {},
             reconciliation: {
               cancelled_unavailable: 0,
               reset_dispatches: 0,
@@ -182,6 +183,7 @@ export function createWorker(dependencies = {}) {
             queued: scheduler.queued,
             dispatched: scheduler.dispatched,
             failed: scheduler.failed,
+            failures_by_code: scheduler.failures_by_code,
             reconciliation: scheduler.reconciliation,
             scheduler_error: schedulerError,
           }));
