@@ -145,7 +145,19 @@ export function createWorker(dependencies = {}) {
     async scheduled(event, env, ctx) {
       ctx.waitUntil((async () => {
         try {
-          let scheduler = { mode: "unavailable", due: 0, queued: 0, dispatched: 0, failed: 0 };
+          let scheduler = {
+            mode: "unavailable",
+            due: 0,
+            queued: 0,
+            dispatched: 0,
+            failed: 0,
+            reconciliation: {
+              cancelled_unavailable: 0,
+              reset_dispatches: 0,
+              expired_runs: 0,
+              expired_queued: 0,
+            },
+          };
           let schedulerError = null;
           if (env.DB) {
             try {
@@ -170,6 +182,7 @@ export function createWorker(dependencies = {}) {
             queued: scheduler.queued,
             dispatched: scheduler.dispatched,
             failed: scheduler.failed,
+            reconciliation: scheduler.reconciliation,
             scheduler_error: schedulerError,
           }));
         } catch (error) {
