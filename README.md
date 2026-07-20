@@ -65,6 +65,7 @@ D1 是唯一配置与调度来源。Cloudflare 的分钟级 Cron 会提前派发
 - Retry 只用于明确未执行的失败（例如 Telegram FloodWait）；连接中断保持不确定状态。
 - Pages 与 Worker 使用 GitHub OAuth + S256 PKCE 或已验证邮箱登录；随机会话只以 SHA-256 摘要保存到 D1。只有配置的不可变 GitHub user id 会取得管理员角色，登录名相同不能冒充管理员。
 - 邮箱密码使用 PBKDF2-HMAC-SHA256、独立随机盐和 Worker Secret 中的 pepper；目标迭代数提高后，活跃用户会在下一次密码登录成功时使用新盐渐进 rehash，不要求统一重置密码。更新使用旧哈希条件保护，不会覆盖并发密码修改。
+- 邮箱注册、登录、找回密码和重置密码使用不同的 Turnstile action；Worker 同时校验验证结果、action 与生产域名，跨页面或跨域取得的挑战结果不会被接受。
 
 ## 首次部署
 
@@ -85,10 +86,10 @@ D1 是唯一配置与调度来源。Cloudflare 的分钟级 Cron 会提前派发
 6. 配置 Worker Secrets：
    - 保留 `GITHUB_TOKEN`；
    - 新增 `SECRET_ROOT_KEY`（恰好 32 个随机字节的 Base64）；
-   - 新增 `GITHUB_OAUTH_CLIENT_ID` 与 `GITHUB_OAUTH_CLIENT_SECRET`。
-   - 免费即时注册模式只需新增 `PASSWORD_PEPPER`；部署 workflow 会从同名 GitHub Secret 自动同步到 Worker。
-   - 需要邮箱验证和找回密码时，再新增 `TURNSTILE_SECRET_KEY` 与 `RESEND_API_KEY`。
-7. 免费即时注册模式在 Worker Variables 设置 `PUBLIC_PASSWORD_AUTH_MODE=local`，邮箱仅作为登录名，不发送邮件，也不提供自助找回密码。完整邮箱模式则移除该变量，并配置 Turnstile 的 `TURNSTILE_SITE_KEY`、已经过发件域名验证的 `AUTH_EMAIL_FROM` 以及上述邮件 Secrets。`PASSWORD_HASH_ITERATIONS` 支持 100000–1000000，当前免费 Worker 部署基线为 100000；提高前应先在实际 Worker 环境做 CPU 验证，提高后会在用户下一次密码登录成功时渐进升级。未完整配置时邮箱入口会安全地隐藏，GitHub 登录仍可用。
+   - 新增 `GITHUB_OAUTH_CLIENT_ID` 与 `GITHUB_OAUTH_CLIENT_SECRET`；
+   - 新增 `PASSWORD_PEPPER`；部署 workflow 会从同名 GitHub Secret 自动同步到 Worker；
+   - 新增 `TURNSTILE_SECRET_KEY` 与 `RESEND_API_KEY`，用于验证注册、登录保护和找回密码。
+7. 生产环境保持 `PUBLIC_PASSWORD_AUTH_MODE=secure`，并配置 Turnstile 的 `TURNSTILE_SITE_KEY`、已经过发件域名验证的 `AUTH_EMAIL_FROM` 以及上述邮件 Secrets。`local` 仅用于本地开发兼容测试，不用于公开部署。`PASSWORD_HASH_ITERATIONS` 支持 100000–1000000，当前免费 Worker 部署基线为 100000；提高前应先在实际 Worker 环境做 CPU 验证，提高后会在用户下一次密码登录成功时渐进升级。安全服务未完整配置时，已有邮箱用户仍可登录，但新邮箱注册和自助找回会保持关闭，GitHub 登录仍可用。
 8. 在 GitHub Repository Secrets 保留 `CLOUDFLARE_API_TOKEN` 与 `CLOUDFLARE_ACCOUNT_ID`。Token 至少需要目标账号的 Workers Scripts Edit、D1 Edit 与 Cloudflare Pages Edit。Worker 使用的 `GITHUB_TOKEN` 需对本仓库有 Actions: write 权限。
 9. 在 GitHub Repository Variables 配置：
    - `WORKER_URL`；

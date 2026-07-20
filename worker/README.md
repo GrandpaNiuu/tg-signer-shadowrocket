@@ -77,9 +77,9 @@ Worker secrets:
 - `SECRET_ROOT_KEY`: base64 for exactly 32 random bytes
 - optional `SECRET_ROOT_KEY_V1`, `SECRET_ROOT_KEY_V2`, ... during key rotation
 - `GITHUB_OAUTH_CLIENT_ID` and `GITHUB_OAUTH_CLIENT_SECRET`
-- for free immediate password registration: `PASSWORD_PEPPER`
-- for verified email registration and password reset: `PASSWORD_PEPPER`,
-  `TURNSTILE_SECRET_KEY`, and `RESEND_API_KEY`
+- `PASSWORD_PEPPER`
+- for verified email registration and password reset: `TURNSTILE_SECRET_KEY`
+  and `RESEND_API_KEY`
 
 Variables:
 
@@ -87,16 +87,22 @@ Variables:
 - `RUNNER_OIDC_AUDIENCE`
 - `ADMIN_ORIGIN`, `ADMIN_GITHUB_LOGIN`, and immutable `ADMIN_GITHUB_USER_ID`
 - optional `ADMIN_SESSION_TTL_SECONDS` (5 minutes to 30 days; default 7 days)
-- for free immediate password registration: `PUBLIC_PASSWORD_AUTH_MODE=local`;
-  email is only a login identifier and self-service password reset is disabled
+- production keeps `PUBLIC_PASSWORD_AUTH_MODE=secure`; `local` is only a
+  development compatibility mode and must not be used for a public deployment
 - for verified email registration: public `TURNSTILE_SITE_KEY` and verified sender
   `AUTH_EMAIL_FROM`
+- optional `TURNSTILE_VERIFY_TIMEOUT_MS` (1000-10000; default 5000)
 - optional `PASSWORD_HASH_ITERATIONS` (100000-1000000). The current Workers Free
   deployment baseline is 100000. Raising the configured target causes an active
   user's hash to be replaced after the next successful password login, using a
   new random salt and an optimistic D1 update; benchmark Worker CPU before raising it
 - optional explicit `RUNNER_WORKFLOW_REF` and `LOGIN_WORKFLOW_REF`
 - optional `SCHEDULE_DISPATCH_LEAD_SECONDS` (default 120, bounded to 120–180)
+
+If the mail and Turnstile configuration is incomplete, existing email users may
+still sign in, but new email registration and self-service password reset remain
+closed. GitHub login remains available. The system never falls back to immediate,
+unverified production registration.
 
 The Cloudflare deployment token needs Workers Scripts Edit, D1 Edit, and
 Cloudflare Pages Edit for the target account. `GITHUB_TOKEN` needs Actions:
@@ -121,9 +127,12 @@ GitHub queue delay is visible as schedule lag and is not treated as hard real-ti
   deployment pepper. A successful login may perform a best-effort gradual
   rehash only when the configured target iteration count is higher. The update
   compares the previous algorithm, hash, salt, and iteration count so a
-  concurrent password change cannot be overwritten. Turnstile is verified
-  server-side, and verification/reset tokens are one-time SHA-256 digests with
-  bounded expiry.
+  concurrent password change cannot be overwritten.
+- Turnstile is verified server-side. Registration, login, password recovery, and
+  password reset use distinct action names; the Worker requires the expected
+  action and the hostname derived from `ADMIN_ORIGIN`. Network errors, malformed
+  responses, cross-action tokens, and cross-host tokens fail closed.
+- Verification/reset tokens are one-time SHA-256 digests with bounded expiry.
 - Each ciphertext uses a random 96-bit nonce and AAD bound to purpose, owner,
   and key version.
 - Code and 2FA secrets have the login flow's short expiry and can only be
