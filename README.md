@@ -55,7 +55,7 @@ D1 是唯一配置与调度来源。Cloudflare 的分钟级 Cron 会提前派发
 
 ## 安全边界
 
-- Session、API_HASH、代理凭据、tg_signer 配置、验证码、2FA 和通知 Token 不会写入明文日志。
+- Session、API_HASH、代理凭据、tg-signer 配置、验证码、2FA 和通知 Token 不会写入明文日志。
 - D1 敏感值使用 AES-256-GCM 应用层加密；随机 nonce，AAD 绑定 owner、purpose 与 key version。
 - `SECRET_ROOT_KEY` 只存在于 Cloudflare Worker Secret，不进入 D1、Pages、workflow input 或仓库。
 - GitHub workflow input 只含不敏感 ID；Runner 用 GitHub OIDC 短期身份领取任务和回写结果。
@@ -93,8 +93,15 @@ D1 是唯一配置与调度来源。Cloudflare 的分钟级 Cron 会提前派发
 9. 在 GitHub Repository Variables 配置：
    - `WORKER_URL`；
    - `WORKER_OIDC_AUDIENCE`（必须与 Worker 的 `RUNNER_OIDC_AUDIENCE` 完全一致）。
-10. 运行 `Deploy Cloudflare Worker`；workflow 会先应用远程 D1 migration，再部署 Worker。
+10. 运行 `Deploy Cloudflare Worker`，保持默认 `fresh_install`。workflow 会先应用远程 D1 migration，再部署 Worker；空数据库允许首次部署。
 11. 运行 `Deploy Cloudflare Pages Admin`；`CONTROL_PLANE` Service Binding 指向 `tg-signer-shadowrocket`，生产环境保持 `CANONICAL_HOST=grandpaniu.ccwu.cc`。不创建 Cloudflare Access Application。
+
+### Worker 部署模式
+
+- `fresh_install`：默认模式。用于全新安装、普通升级和 `main` 推送触发的自动部署；允许空 D1，先应用 migration，再部署 Worker。
+- `legacy_takeover`：只在准备退役旧调度链路时手动选择。migration 完成后，workflow 会核对已连接账号、加密 Session、任务和成功 Runner canary；任一证据不足都会阻止部署继续。
+
+旧接管审计工具只输出资源计数，不输出手机号、Session、Secret、任务正文或用户数据。旧链路已经退役后，后续部署继续使用 `fresh_install`，不需要重复执行接管审计。
 
 本仓库沿用原 Worker 名称，通常可以直接保留已有 Worker Secrets。若确实是全新 Cloudflare 账号，先完成一次 Worker 部署以创建服务，再设置 Worker Secrets，并重新部署/验证；不要把真实 Secret 写入 TOML 或仓库。
 
@@ -131,6 +138,7 @@ Cloudflare Worker 无法保持 Telegram 长连接，因此登录由一个最长 
 python -m unittest discover -s runner/tests -p 'test_*.py' -v
 npm test --prefix worker
 npm test --prefix admin
+node --test tools/d1-takeover-audit.test.mjs
 ```
 
 CI 会在 `Quality Checks` workflow 中执行同一组测试。
