@@ -23,7 +23,7 @@ async function secret(purpose, plaintext) {
   };
 }
 
-test("run notification includes Actions URL and only a redacted log tail", async () => {
+test("run notification is concise, identifies the user, and uses a details button", async () => {
   const secrets = new Map([
     ["bot_token", await secret("bot_token", BOT_TOKEN)],
     ["chat_id", await secret("chat_id", CHAT_ID)],
@@ -31,21 +31,23 @@ test("run notification includes Actions URL and only a redacted log tail", async
   const repository = {
     async getSettings() { return { notifications_enabled: true }; },
     async getSecretByOwnerPurpose(_ownerType, _ownerId, purpose) { return secrets.get(purpose); },
+    async getUser() { return { display_name: "小明", email: "user@example.com" }; },
     async getRun() {
       return {
         id: "run-1",
-        task_name: "Daily check-in",
+        user_id: "user-1",
+        task_name: "音乐积分签到",
+        account_name: "主账号",
         status: "failed",
-        duration_ms: 1234,
+        trigger_type: "scheduled",
+        duration_ms: 8313,
+        attempt_count: 1,
         github_run_id: "987654321",
-        error_message: "API_HASH=top-secret",
+        error_message: "机器人暂时没有响应",
         logs: [
-          { level: "info", message: "old log outside tail" },
-          { level: "info", message: "tail one" },
-          { level: "warning", message: `accidental token ${BOT_TOKEN}` },
-          { level: "error", message: "API_HASH=another-secret" },
-          { level: "info", message: `chat target ${CHAT_ID}` },
-          { level: "info", message: "tail five" },
+          { level: "warning", message: "TgCrypto is missing! Pyrogram will work the same, but at a much slower speed." },
+          { level: "info", message: JSON.stringify({ event: "task_started" }) },
+          { level: "error", message: `accidental token ${BOT_TOKEN}` },
         ],
       };
     },
@@ -63,15 +65,61 @@ test("run notification includes Actions URL and only a redacted log tail", async
   assert.deepEqual(result, { sent: true, reason: null });
   assert.match(captured.url, /^https:\/\/api\.telegram\.org\/bot/);
   assert.equal(captured.body.chat_id, CHAT_ID);
+  assert.equal(captured.body.parse_mode, "HTML");
   assert.equal(captured.body.disable_web_page_preview, true);
-  assert.match(captured.body.text, /GitHub Actions：https:\/\/github\.com\/owner\/repo\/actions\/runs\/987654321/);
-  assert.match(captured.body.text, /日志尾部：/);
-  assert.match(captured.body.text, /tail one/);
-  assert.doesNotMatch(captured.body.text, /old log outside tail/);
-  assert.doesNotMatch(captured.body.text, /top-secret|another-secret/);
+  assert.match(captured.body.text, /任务执行失败/);
+  assert.match(captured.body.text, /任务：<\/b>音乐积分签到/);
+  assert.match(captured.body.text, /用户：<\/b>小明/);
+  assert.match(captured.body.text, /账号：<\/b>主账号/);
+  assert.match(captured.body.text, /耗时：<\/b>8\.3 秒/);
+  assert.match(captured.body.text, /原因：<\/b>机器人暂时没有响应/);
+  assert.doesNotMatch(captured.body.text, /GitHub Actions|TgCrypto|task_started|accidental token/);
   assert.equal(captured.body.text.includes(BOT_TOKEN), false);
   assert.equal(captured.body.text.includes(CHAT_ID), false);
-  assert.match(captured.body.text, /\[REDACTED\]/);
+  assert.deepEqual(captured.body.reply_markup, {
+    inline_keyboard: [[{
+      text: "查看执行详情",
+      url: "https://github.com/owner/repo/actions/runs/987654321",
+    }]],
+  });
+});
+
+test("successful task broadcasts omit log noise and raw action URLs", async () => {
+  const secrets = new Map([
+    ["bot_token", await secret("bot_token", BOT_TOKEN)],
+    ["chat_id", await secret("chat_id", CHAT_ID)],
+  ]);
+  const repository = {
+    async getSettings() { return { notifications_enabled: true }; },
+    async getSecretByOwnerPurpose(_ownerType, _ownerId, purpose) { return secrets.get(purpose); },
+    async getRun() {
+      return {
+        id: "run-2",
+        user_id: "user-2",
+        task_name: "开户积分签到",
+        account_name: "备用账号",
+        status: "success",
+        trigger_type: "manual",
+        duration_ms: 8373,
+        github_run_id: "123456789",
+        logs: [{ level: "info", message: "very long success log" }],
+      };
+    },
+  };
+  let message;
+  await sendRunNotification({
+    SECRET_ROOT_KEY: ROOT_KEY,
+    GITHUB_OWNER: "owner",
+    GITHUB_REPO: "repo",
+  }, repository, async (_url, init) => {
+    message = JSON.parse(init.body);
+    return new Response(null, { status: 200 });
+  }, "run-2");
+
+  assert.match(message.text, /任务执行成功/);
+  assert.match(message.text, /手动执行/);
+  assert.doesNotMatch(message.text, /very long success log|日志|https:\/\//);
+  assert.equal(message.reply_markup.inline_keyboard[0][0].text, "查看执行详情");
 });
 
 test("disabled notifications do not read secrets or call Telegram", async () => {
@@ -109,7 +157,7 @@ test("notification setup discovers deduplicated Telegram chats without exposing 
   ] });
 });
 
-test("test notification sends a harmless message only with configured credentials", async () => {
+test("test notification explains the platform-wide broadcast behavior", async () => {
   const secrets = new Map([
     ["bot_token", await secret("bot_token", BOT_TOKEN)],
     ["chat_id", await secret("chat_id", CHAT_ID)],
@@ -124,6 +172,7 @@ test("test notification sends a harmless message only with configured credential
   });
   assert.deepEqual(result, { sent: true, reason: null });
   assert.equal(message.chat_id, CHAT_ID);
-  assert.match(message.text, /测试通知/);
+  assert.equal(message.parse_mode, "HTML");
+  assert.match(message.text, /所有用户的任务结果/);
   assert.equal(message.text.includes(BOT_TOKEN), false);
 });
