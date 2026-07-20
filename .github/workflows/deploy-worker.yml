@@ -63,6 +63,16 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22"
+
       - name: Validate deployment mode
         run: |
           set -euo pipefail
@@ -99,6 +109,77 @@ jobs:
           else
             echo "Cloudflare deployment secrets are present."
           fi
+
+      - name: Prepare secure deployment configuration
+        id: email_auth
+        env:
+          PASSWORD_PEPPER: ${{ secrets.PASSWORD_PEPPER }}
+          TURNSTILE_SITE_KEY: ${{ vars.TURNSTILE_SITE_KEY }}
+          TURNSTILE_SECRET_KEY: ${{ secrets.TURNSTILE_SECRET_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          AUTH_EMAIL_FROM: ${{ vars.AUTH_EMAIL_FROM }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import pathlib
+          import sys
+
+          mode = os.environ["DEPLOYMENT_MODE"]
+          source = pathlib.Path("worker/wrangler.toml")
+          target = pathlib.Path("worker/wrangler.deploy.toml")
+          text = source.read_text(encoding="utf-8")
+          target.write_text(text, encoding="utf-8")
+
+          output = pathlib.Path(os.environ["GITHUB_OUTPUT"])
+          if mode == "bootstrap":
+              with output.open("a", encoding="utf-8") as stream:
+                  stream.write("configured=false\n")
+              sys.exit(0)
+
+          names = [
+              "TURNSTILE_SITE_KEY",
+              "TURNSTILE_SECRET_KEY",
+              "RESEND_API_KEY",
+              "AUTH_EMAIL_FROM",
+          ]
+          values = {name: os.environ.get(name, "").strip() for name in names}
+          present = [name for name, value in values.items() if value]
+          if present and len(present) != len(names):
+              missing = [name for name in names if not values[name]]
+              print("Verified email authentication is only partially configured.")
+              print("Missing GitHub Variables/Secrets: " + ", ".join(missing))
+              sys.exit(1)
+
+          secrets = {"PASSWORD_PEPPER": os.environ["PASSWORD_PEPPER"]}
+          configured = len(present) == len(names)
+          if configured:
+              for name in ("TURNSTILE_SITE_KEY", "AUTH_EMAIL_FROM"):
+                  value = values[name]
+                  if "\n" in value or "\r" in value or len(value) > 512:
+                      print(f"Invalid GitHub Variable: {name}")
+                      sys.exit(1)
+              if len(values["TURNSTILE_SECRET_KEY"]) < 8 or len(values["RESEND_API_KEY"]) < 8:
+                  print("TURNSTILE_SECRET_KEY and RESEND_API_KEY must be configured as non-empty GitHub Secrets.")
+                  sys.exit(1)
+              text += "\nTURNSTILE_SITE_KEY = " + json.dumps(values["TURNSTILE_SITE_KEY"], ensure_ascii=False) + "\n"
+              text += "AUTH_EMAIL_FROM = " + json.dumps(values["AUTH_EMAIL_FROM"], ensure_ascii=False) + "\n"
+              target.write_text(text, encoding="utf-8")
+              secrets.update({
+                  "TURNSTILE_SECRET_KEY": values["TURNSTILE_SECRET_KEY"],
+                  "RESEND_API_KEY": values["RESEND_API_KEY"],
+              })
+
+          secret_file = pathlib.Path("worker/.deploy-secrets.json")
+          secret_file.write_text(json.dumps(secrets, ensure_ascii=False), encoding="utf-8")
+          secret_file.chmod(0o600)
+          for value in secrets.values():
+              print(f"::add-mask::{value}")
+          with output.open("a", encoding="utf-8") as stream:
+              stream.write(f"configured={'true' if configured else 'false'}\n")
+          print("Verified email authentication: " + ("configured" if configured else "registration remains safely closed"))
+          PY
 
       - name: Normalize Cloudflare API token
         id: normalize_token
@@ -156,7 +237,7 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: worker
           wranglerVersion: "4.94.0"
-          command: deploy --config wrangler.toml
+          command: deploy --config wrangler.deploy.toml
 
       - name: Deploy Worker with configured secrets
         if: ${{ env.DEPLOYMENT_MODE != 'bootstrap' }}
@@ -166,15 +247,13 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: worker
           wranglerVersion: "4.94.0"
-          secrets: |
-            PASSWORD_PEPPER
-          command: deploy --config wrangler.toml
-        env:
-          PASSWORD_PEPPER: ${{ secrets.PASSWORD_PEPPER }}
+          command: deploy --config wrangler.deploy.toml --secrets-file .deploy-secrets.json
 
       - name: Smoke test deployed Worker
         env:
           WORKER_URL: ${{ vars.WORKER_URL }}
+          EMAIL_AUTH_CONFIGURED: ${{ steps.email_auth.outputs.configured }}
+          EXPECTED_TURNSTILE_SITE_KEY: ${{ vars.TURNSTILE_SITE_KEY }}
         run: |
           set -euo pipefail
           base_url="${WORKER_URL:-}"
@@ -217,6 +296,32 @@ jobs:
           check_endpoint health
           if [ "$DEPLOYMENT_MODE" != "bootstrap" ]; then
             check_endpoint ready
+            auth_body="$(curl --fail-with-body --silent --show-error --retry 6 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 20 "$base_url/api/auth/config")"
+            RESPONSE_BODY="$auth_body" node - <<'NODE'
+          const payload = JSON.parse(process.env.RESPONSE_BODY || "null")?.data;
+          if (!payload || payload.email_enabled !== true) {
+            throw new Error("Worker email login configuration is unavailable.");
+          }
+          const configured = process.env.EMAIL_AUTH_CONFIGURED === "true";
+          if (configured) {
+            if (payload.registration_enabled !== true
+              || payload.email_verification_required !== true
+              || payload.password_reset_enabled !== true
+              || payload.turnstile_site_key !== process.env.EXPECTED_TURNSTILE_SITE_KEY) {
+              throw new Error("Verified email authentication smoke check failed.");
+            }
+            console.log("Verified email registration, Turnstile, and password recovery are enabled.");
+          } else {
+            if (payload.registration_enabled !== false || payload.password_reset_enabled !== false) {
+              throw new Error("Unverified email registration was not safely closed.");
+            }
+            console.log("Email login remains available; unverified registration is safely closed.");
+          }
+          NODE
           else
             echo "Bootstrap deployment completed; configure Worker Secrets, then rerun fresh_install to require /ready."
           fi
+
+      - name: Remove temporary deployment secrets
+        if: always()
+        run: rm -f worker/.deploy-secrets.json worker/wrangler.deploy.toml
