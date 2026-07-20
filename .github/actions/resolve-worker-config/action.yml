@@ -1,0 +1,58 @@
+name: Resolve Worker configuration
+description: Derive and validate the Worker origin and GitHub OIDC audience without logging either value.
+
+inputs:
+  worker-url:
+    description: Cloudflare Worker HTTPS origin
+    required: false
+    default: ""
+  worker-oidc-audience:
+    description: Expected GitHub OIDC audience ending in /api/runner
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve and validate Worker endpoints
+      shell: bash
+      env:
+        RAW_WORKER_URL: ${{ inputs.worker-url }}
+        RAW_WORKER_OIDC_AUDIENCE: ${{ inputs.worker-oidc-audience }}
+      run: |
+        set -euo pipefail
+        python - <<'PY'
+        import os
+        from urllib.parse import urlsplit
+
+        worker_url = os.environ.get("RAW_WORKER_URL", "").strip().rstrip("/")
+        audience = os.environ.get("RAW_WORKER_OIDC_AUDIENCE", "").strip().rstrip("/")
+
+        if not worker_url and audience.endswith("/api/runner"):
+            worker_url = audience[: -len("/api/runner")]
+        if not audience and worker_url:
+            audience = f"{worker_url}/api/runner"
+        if not worker_url or not audience:
+            raise SystemExit("Configure WORKER_URL or WORKER_OIDC_AUDIENCE in GitHub Variables/Secrets.")
+
+        parsed = urlsplit(worker_url)
+        if (
+            parsed.scheme != "https"
+            or not parsed.netloc
+            or parsed.username
+            or parsed.password
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise SystemExit("WORKER_URL must be an HTTPS origin without credentials, path, query, or fragment.")
+
+        expected_audience = f"{worker_url}/api/runner"
+        if audience != expected_audience:
+            raise SystemExit("WORKER_OIDC_AUDIENCE must equal WORKER_URL plus /api/runner.")
+
+        with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
+            output.write(f"WORKER_URL={worker_url}\n")
+            output.write(f"WORKER_OIDC_AUDIENCE={audience}\n")
+        print("Worker endpoint configuration validated.")
+        PY
