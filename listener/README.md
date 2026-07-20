@@ -45,14 +45,17 @@ LISTENER_API_TOKEN
 }
 ```
 
-## 2. 部署到 VPS
+## 2. 准备 VPS
 
 要求：
 
 - Ubuntu 22.04/24.04 或其他可运行 Docker 的 Linux；
 - Docker Engine 与 Docker Compose 插件；
 - VPS 能访问 Telegram 和你的 Cloudflare Worker；
+- 部署用户可以直接执行 `docker`，不依赖交互式 `sudo`；
 - 建议至少 1 核 CPU、1 GB 内存；账号较多时需要增加资源。
+
+手工部署：
 
 ```bash
 git clone https://github.com/GrandpaNiuu/Telegramautomaticcheck-in.git
@@ -95,7 +98,60 @@ docker compose up -d --build
 docker compose down
 ```
 
-## 3. 后台使用
+## 3. 使用 GitHub Actions 一键部署
+
+仓库中的 `.github/workflows/deploy-listener.yml` 会先运行 Listener 测试，再通过 SSH 上传一个不可变发布目录并执行 Docker Compose。GitHub Actions 只负责部署，Telegram 长连接仍由 VPS 容器长期维持。
+
+在仓库 Settings → Secrets and variables → Actions 中配置：
+
+### Secrets
+
+```text
+LISTENER_API_TOKEN
+LISTENER_VPS_HOST
+LISTENER_VPS_USER
+LISTENER_VPS_SSH_KEY
+LISTENER_VPS_KNOWN_HOSTS
+```
+
+其中：
+
+- `LISTENER_VPS_SSH_KEY` 是仅用于部署的 SSH 私钥；对应公钥加入 VPS 用户的 `~/.ssh/authorized_keys`。
+- `LISTENER_VPS_KNOWN_HOSTS` 必须是经过核对的 VPS 主机公钥记录，工作流不会关闭主机密钥检查。
+- `LISTENER_API_TOKEN` 必须与 Cloudflare Worker 中的同名 Secret 完全一致。
+
+从可信终端生成 known_hosts 内容：
+
+```bash
+ssh-keyscan -H 你的VPS地址
+```
+
+首次使用前应通过 VPS 服务商控制台或其他可信渠道核对主机指纹，不能只依赖同一网络中的 `ssh-keyscan` 结果。
+
+### Variables
+
+```text
+WORKER_URL=https://你的-worker-域名
+LISTENER_VPS_PORT=22
+```
+
+`LISTENER_VPS_PORT` 可不填，默认使用 `22`。
+
+配置完成后打开 Actions → `Deploy Telegram Listener` → `Run workflow`。工作流会部署到 VPS 用户目录：
+
+```text
+~/telegramautomaticcheckin/releases/<commit-sha>
+```
+
+当前版本软链接：
+
+```text
+~/telegramautomaticcheckin/current
+```
+
+工作流保留最近五个发布目录。部署失败时会输出容器的最后 150 行日志，但不会输出 `.env`、Session 或 Token。
+
+## 4. 后台使用
 
 管理员登录后打开“设置”，查看“24 小时实时服务”。
 
