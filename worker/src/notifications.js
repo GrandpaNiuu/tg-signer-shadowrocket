@@ -144,7 +144,7 @@ export async function sendRunNotification(env, repository, fetchImpl, runId) {
     text: lines.join("\n"),
     parse_mode: "HTML",
     disable_web_page_preview: true,
-    ...(actionsUrl ? {
+    ...(!isSuccess && actionsUrl ? {
       reply_markup: {
         inline_keyboard: [[{ text: "查看执行详情", url: actionsUrl }]],
       },
