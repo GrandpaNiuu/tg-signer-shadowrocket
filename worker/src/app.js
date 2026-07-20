@@ -3,6 +3,7 @@ import { createAdminAuth } from "./admin-auth.js";
 import { verifyRunnerRequest } from "./auth.js";
 import { withDispatchErrorCodes } from "./dispatch-repository.js";
 import { errorResponse, json } from "./http.js";
+import { withPasswordRehash } from "./password-repository.js";
 import { createD1Repository } from "./repository.js";
 import { handleRunnerApi } from "./runner-api.js";
 import { withRunnerSessionState } from "./runner-repository.js";
@@ -131,7 +132,7 @@ export function createWorker(dependencies = {}) {
           return await withRequestId(json(readiness.payload, readiness.status), requestId);
         }
         if (url.pathname.startsWith("/api/auth/")) {
-          const repository = repositoryFactory(env);
+          const repository = withPasswordRehash(repositoryFactory(env), now);
           return await withRequestId(await adminAuth.handle(request, env, repository), requestId);
         }
         if (url.pathname.startsWith("/api/v1/")) {
