@@ -33,6 +33,7 @@ const ADMIN_HTML = `<!doctype html>
 <script type="module" src="/src/app.js?v=1"></script>
 <script type="module" src="/src/auth-security.js?v=1"></script>
 <script type="module" src="/src/notification-guidance.js?v=1"></script>
+<script type="module" src="/src/skill-guidance.js?v=2"></script>
 <div id="auth-content"></div>`;
 
 test("verified email registration requires the complete security contract", () => {
@@ -67,7 +68,7 @@ test("at least one public authentication provider is required", () => {
   }), /No public authentication provider/);
 });
 
-test("live audit verifies the production shell, critical assets, and safe auth booleans", async () => {
+test("live audit verifies the production shell, critical assets, guided sign-in marker, and safe auth booleans", async () => {
   const calls = [];
   const fetchImpl = async (url) => {
     const value = String(url);
@@ -80,6 +81,12 @@ test("live audit verifies the production shell, critical assets, and safe auth b
     }
     if (value.includes("/src/auth-security.js")) {
       return new Response("const applyScheduled = true; export default applyScheduled;", {
+        status: 200,
+        headers: { "content-type": "application/javascript" },
+      });
+    }
+    if (value.includes("/src/skill-guidance.js")) {
+      return new Response('export const marker = "不用填写 JSON";', {
         status: 200,
         headers: { "content-type": "application/javascript" },
       });
@@ -110,17 +117,18 @@ test("live audit verifies the production shell, critical assets, and safe auth b
     "https://grandpaniu.ccwu.cc/src/app.js?v=1",
     "https://grandpaniu.ccwu.cc/src/auth-security.js?v=1",
     "https://grandpaniu.ccwu.cc/src/notification-guidance.js?v=1",
+    "https://grandpaniu.ccwu.cc/src/skill-guidance.js?v=2",
     "https://grandpaniu.ccwu.cc/assets/styles.css?v=1",
     "https://grandpaniu.ccwu.cc/api/auth/config",
   ]);
   assert.equal(result.requested_origin, "https://grandpaniu.ccwu.cc");
   assert.equal(result.critical_assets_verified, true);
-  assert.equal(result.asset_count, 4);
+  assert.equal(result.asset_count, 5);
   assert.equal(result.registration_enabled, false);
   assert.equal(JSON.stringify(result).includes("site-key"), false);
 });
 
-test("live audit rejects a stale authentication renderer", async () => {
+test("live audit rejects a stale guided sign-in script", async () => {
   const fetchImpl = async (url) => {
     const value = String(url);
     if (value === "https://grandpaniu.ccwu.cc/") {
@@ -130,7 +138,13 @@ test("live audit rejects a stale authentication renderer", async () => {
       });
     }
     if (value.includes("/src/auth-security.js")) {
-      return new Response("export const oldRenderer = true;", {
+      return new Response("const applyScheduled = true;", {
+        status: 200,
+        headers: { "content-type": "application/javascript" },
+      });
+    }
+    if (value.includes("/src/skill-guidance.js")) {
+      return new Response("export const oldSkillUi = true;", {
         status: 200,
         headers: { "content-type": "application/javascript" },
       });
@@ -154,6 +168,6 @@ test("live audit rejects a stale authentication renderer", async () => {
   };
   await assert.rejects(
     () => runLiveAuthAudit({ adminUrl: "https://grandpaniu.ccwu.cc", fetchImpl }),
-    /stable authentication renderer/,
+    /skill_guidance marker/,
   );
 });
