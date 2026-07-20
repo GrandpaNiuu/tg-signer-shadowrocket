@@ -4,6 +4,7 @@ const CRITICAL_ASSET_PATTERNS = Object.freeze([
   { name: "app", pattern: /src="([^"]*\/src\/app\.js[^\"]*)"/, contentType: "javascript" },
   { name: "auth_security", pattern: /src="([^"]*\/src\/auth-security\.js[^\"]*)"/, contentType: "javascript", marker: "applyScheduled" },
   { name: "notification_guidance", pattern: /src="([^"]*\/src\/notification-guidance\.js[^\"]*)"/, contentType: "javascript" },
+  { name: "skill_guidance", pattern: /src="([^"]*\/src\/skill-guidance\.js[^\"]*)"/, contentType: "javascript", marker: "不用填写 JSON" },
   { name: "styles", pattern: /href="([^"]*\/assets\/styles\.css[^\"]*)"/, contentType: "text/css" },
 ]);
 
@@ -52,7 +53,7 @@ async function requestJson(url, fetchImpl = globalThis.fetch) {
     redirect: "follow",
     headers: {
       accept: "application/json",
-      "user-agent": "telegram-checkin-live-auth-audit/1.1",
+      "user-agent": "telegram-checkin-live-auth-audit/1.2",
     },
     signal: AbortSignal.timeout(20_000),
   });
@@ -70,7 +71,7 @@ async function requestJson(url, fetchImpl = globalThis.fetch) {
 async function requestPage(url, fetchImpl = globalThis.fetch) {
   const response = await fetchImpl(url, {
     redirect: "follow",
-    headers: { "user-agent": "telegram-checkin-live-auth-audit/1.1" },
+    headers: { "user-agent": "telegram-checkin-live-auth-audit/1.2" },
     signal: AbortSignal.timeout(20_000),
   });
   if (!response.ok) throw new Error(`${url} returned HTTP ${response.status}.`);
@@ -101,7 +102,7 @@ function assetUrlsFromHtml(html, origin) {
 async function requestAsset(asset, fetchImpl = globalThis.fetch) {
   const response = await fetchImpl(asset.url, {
     redirect: "follow",
-    headers: { "user-agent": "telegram-checkin-live-auth-audit/1.1" },
+    headers: { "user-agent": "telegram-checkin-live-auth-audit/1.2" },
     signal: AbortSignal.timeout(20_000),
   });
   const body = await response.text();
@@ -112,7 +113,7 @@ async function requestAsset(asset, fetchImpl = globalThis.fetch) {
   }
   if (body.trim().length < 20) throw new Error(`${asset.url} returned an empty asset.`);
   if (asset.marker && !body.includes(asset.marker)) {
-    throw new Error(`${asset.url} does not contain the expected stable authentication renderer.`);
+    throw new Error(`${asset.url} does not contain the expected ${asset.name} marker.`);
   }
   return response.url;
 }
