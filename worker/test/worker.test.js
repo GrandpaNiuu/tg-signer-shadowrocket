@@ -7,6 +7,15 @@ function responseJson(response) {
   return response.json();
 }
 
+function userScoped(repository) {
+  return {
+    ...repository,
+    forUser() {
+      return repository;
+    },
+  };
+}
+
 test("retired legacy /run endpoint is not exposed", async () => {
   const calls = [];
   const worker = createWorker({
@@ -79,7 +88,7 @@ test("scheduled handler fails closed when D1 mode cannot be read", async () => {
 
 test("admin can create an account without secrets appearing in the response", async () => {
   const created = [];
-  const repository = {
+  const repository = userScoped({
     async createAccount(value) {
       created.push(value);
       return {
@@ -93,7 +102,7 @@ test("admin can create an account without secrets appearing in the response", as
         last_connected_at: null,
       };
     },
-  };
+  });
   const worker = createWorker({
     repositoryFactory: () => repository,
     verifyAdmin: async () => ({ email: "admin@example.com" }),
@@ -127,8 +136,11 @@ test("admin can create an account without secrets appearing in the response", as
 });
 
 test("admin API rejects unknown and invalid account fields with a uniform error", async () => {
+  const repository = userScoped({
+    createAccount: async () => assert.fail("repository must not be called"),
+  });
   const worker = createWorker({
-    repositoryFactory: () => ({ createAccount: async () => assert.fail("repository must not be called") }),
+    repositoryFactory: () => repository,
     verifyAdmin: async () => ({ email: "admin@example.com" }),
     uuid: () => "request-id",
   });
