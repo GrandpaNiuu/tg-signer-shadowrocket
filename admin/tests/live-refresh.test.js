@@ -4,13 +4,14 @@ import { readFile } from "node:fs/promises";
 
 import { refreshDelayForRoute } from "../src/live-refresh.js";
 
-test("account health refreshes periodically while active runs refresh quickly", () => {
+test("dashboard and execution records continue polling for scheduled runs", () => {
   assert.equal(refreshDelayForRoute("accounts", []), 60_000);
   assert.equal(refreshDelayForRoute("runs", [{ status: "running" }]), 3_000);
-  assert.equal(refreshDelayForRoute("runs", [{ status: "success" }]), 30_000);
-  assert.equal(refreshDelayForRoute("runs", []), 30_000);
-  assert.equal(refreshDelayForRoute("dashboard", []), 0);
+  assert.equal(refreshDelayForRoute("runs", [{ status: "success" }]), 20_000);
+  assert.equal(refreshDelayForRoute("runs", []), 20_000);
+  assert.equal(refreshDelayForRoute("dashboard", []), 20_000);
   assert.equal(refreshDelayForRoute("accounts", [], { blocked: true }), 0);
+  assert.equal(refreshDelayForRoute("dashboard", [], { blocked: true }), 0);
 });
 
 test("unchanged Telegram login polling preserves the open modal DOM", async () => {
