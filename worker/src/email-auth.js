@@ -1,3 +1,4 @@
+import { sendTransactionalEmail } from "./email-delivery.js";
 import { HttpError, json, readJson } from "./http.js";
 import { hashPassword, verifyPassword } from "./password.js";
 import { publicPasswordAuthConfiguration } from "./public-auth-configuration.js";
@@ -89,16 +90,22 @@ async function verifyAuthChallenge(request, env, config, responseToken, action, 
   });
 }
 
-async function sendEmail(fetchImpl, config, message) {
-  const response = await fetchImpl("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${config.apiKey}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({ from: config.from, ...message }),
+async function sendEmail(fetchImpl, env, config, message) {
+  return sendTransactionalEmail({
+    fetchImpl,
+    env,
+    apiKey: config.apiKey,
+    from: config.from,
+    message,
   });
-  if (!response.ok) throw new HttpError(502, "email_delivery_failed", "验证邮件暂时无法发送，请稍后重试。");
+}
+
+function logPasswordRecoveryDeliveryFailure(error) {
+  console.warn(JSON.stringify({
+    level: "warning",
+    event: "password_recovery_delivery_failed",
+    error: error instanceof Error ? error.name : "UnknownError",
+  }));
 }
 
 async function createVerificationToken(repository, randomToken, userId, timestamp) {
@@ -114,9 +121,9 @@ async function createVerificationToken(repository, randomToken, userId, timestam
   return token;
 }
 
-async function sendVerificationEmail(fetchImpl, config, email, token) {
+async function sendVerificationEmail(fetchImpl, env, config, email, token) {
   const verificationUrl = `${config.origin}/#/verify-email?token=${token}`;
-  await sendEmail(fetchImpl, config, {
+  await sendEmail(fetchImpl, env, config, {
     to: [email],
     subject: "验证 Telegram 自动消息平台邮箱",
     html: `<p>请点击下面的链接完成邮箱验证：</p><p><a href="${verificationUrl}">验证邮箱</a></p><p>链接将在 24 小时后失效。</p>`,
@@ -230,7 +237,7 @@ export function createEmailAuth(dependencies = {}) {
           throw new HttpError(409, "account_exists", "该邮箱已注册，请直接登录或找回密码。");
         }
         const token = await createVerificationToken(repository, randomToken, result.user.id, timestamp);
-        await sendVerificationEmail(fetchImpl, config, email.original, token);
+        await sendVerificationEmail(fetchImpl, env, config, email.original, token);
         return json({ data: { status: "verification_required" } }, 202);
       }
 
@@ -268,7 +275,7 @@ export function createEmailAuth(dependencies = {}) {
           if (config.registrationEnabled && !user.email_verified_at && ["pending", "active"].includes(user.status)) {
             await enforceRateLimit(repository, request, "verification_resend", email.normalized, timestamp, 3, 3600);
             const token = await createVerificationToken(repository, randomToken, user.id, timestamp);
-            await sendVerificationEmail(fetchImpl, config, user.email || email.original, token);
+            await sendVerificationEmail(fetchImpl, env, config, user.email || email.original, token);
             throw new HttpError(403, "email_verification_required", "请先完成邮箱验证。新的验证邮件已经发送。");
           }
           throw new HttpError(403, "email_verification_required", "请先完成邮箱验证。");
@@ -292,22 +299,26 @@ export function createEmailAuth(dependencies = {}) {
         await enforceRateLimit(repository, request, "forgot_password", email.normalized, timestamp, 5, 3600);
         const user = await repository.getUserByEmail(email.normalized);
         if (user?.status === "active" && user.email_verified_at) {
-          const token = randomToken();
-          const createdAt = timestamp.toISOString();
-          await repository.createAuthToken({
-            id: `auth-${randomToken(18)}`,
-            token_hash: await sha256(token),
-            user_id: user.id,
-            token_type: "password_reset",
-            expires_at: new Date(timestamp.getTime() + 30 * 60 * 1000).toISOString(),
-            created_at: createdAt,
-          });
-          const resetUrl = `${config.origin}/#/reset-password?token=${token}`;
-          await sendEmail(fetchImpl, config, {
-            to: [user.email],
-            subject: "重置 Telegram 自动消息平台密码",
-            html: `<p>请点击下面的链接重置密码：</p><p><a href="${resetUrl}">重置密码</a></p><p>链接将在 30 分钟后失效。</p>`,
-          });
+          try {
+            const token = randomToken();
+            const createdAt = timestamp.toISOString();
+            await repository.createAuthToken({
+              id: `auth-${randomToken(18)}`,
+              token_hash: await sha256(token),
+              user_id: user.id,
+              token_type: "password_reset",
+              expires_at: new Date(timestamp.getTime() + 30 * 60 * 1000).toISOString(),
+              created_at: createdAt,
+            });
+            const resetUrl = `${config.origin}/#/reset-password?token=${token}`;
+            await sendEmail(fetchImpl, env, config, {
+              to: [user.email],
+              subject: "重置 Telegram 自动消息平台密码",
+              html: `<p>请点击下面的链接重置密码：</p><p><a href="${resetUrl}">重置密码</a></p><p>链接将在 30 分钟后失效。</p>`,
+            });
+          } catch (error) {
+            logPasswordRecoveryDeliveryFailure(error);
+          }
         }
         return json({ data: { status: "accepted" } }, 202);
       }
