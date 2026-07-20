@@ -9,14 +9,20 @@ function dispatchErrorCode(message) {
   return DISPATCH_ERROR_PREFIX.exec(String(message || ""))?.[1] || null;
 }
 
-async function persistStableErrorCode(repository, runId, message) {
-  const code = dispatchErrorCode(message);
-  if (!code || !repository.db?.prepare) return;
-
+async function persistDispatchFailure(repository, runId, timestamp, code, message) {
+  const nextDispatchAt = new Date(Date.parse(timestamp) + 60_000).toISOString();
   const scoped = Boolean(repository.userId);
-  const statement = repository.db.prepare(`UPDATE task_runs SET error_code = ?
-    WHERE id = ? AND error_message = ?${scoped ? " AND user_id = ?" : ""}`)
-    .bind(code, runId, message, ...(scoped ? [repository.userId] : []));
+  const statement = repository.db.prepare(`UPDATE task_runs SET dispatch_status = 'pending', dispatch_reserved_at = NULL,
+    next_dispatch_at = ?, error_code = ?, error_message = ?, updated_at = ?
+    WHERE id = ? AND status = 'queued' AND dispatch_status = 'dispatching'${scoped ? " AND user_id = ?" : ""}`)
+    .bind(
+      nextDispatchAt,
+      code,
+      message,
+      timestamp,
+      runId,
+      ...(scoped ? [repository.userId] : []),
+    );
   await statement.run();
 }
 
@@ -28,9 +34,14 @@ export function withDispatchErrorCodes(repository) {
       if (property !== "markRunDispatchFailed") return bindRepositoryMember(target, property);
 
       return async (runId, timestamp, message) => {
-        const result = await target.markRunDispatchFailed(runId, timestamp, message);
-        await persistStableErrorCode(target, runId, message);
-        return result;
+        const code = dispatchErrorCode(message);
+        if (!code || !target.db?.prepare) {
+          return target.markRunDispatchFailed(runId, timestamp, message);
+        }
+        // Persist the retry schedule and stable error code atomically. Calling the
+        // legacy method first would create a second D1 write and an avoidable
+        // intermediate `dispatch_retry` state.
+        return persistDispatchFailure(target, runId, timestamp, code, message);
       };
     },
   });
@@ -38,5 +49,5 @@ export function withDispatchErrorCodes(repository) {
 
 export const __test = {
   dispatchErrorCode,
-  persistStableErrorCode,
+  persistDispatchFailure,
 };
