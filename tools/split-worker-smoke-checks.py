@@ -1,0 +1,103 @@
+from pathlib import Path
+
+path = Path(".github/workflows/deploy-worker.yml")
+text = path.read_text(encoding="utf-8")
+start_marker = "      - name: Smoke test deployed Worker\n"
+end_marker = "      - name: Remove temporary deployment secrets\n"
+start = text.index(start_marker)
+end = text.index(end_marker, start)
+replacement = '''      - name: Resolve deployed Worker URL
+        id: worker_url
+        env:
+          WORKER_URL: ${{ vars.WORKER_URL }}
+        run: |
+          set -euo pipefail
+          base_url="${WORKER_URL:-}"
+          if [ -z "$base_url" ]; then
+            audience="$(sed -n 's/^RUNNER_OIDC_AUDIENCE = "\\(.*\\)"$/\\1/p' worker/wrangler.toml | head -n 1)"
+            case "$audience" in
+              https://*/api/runner) base_url="${audience%/api/runner}" ;;
+              *)
+                echo "WORKER_URL is missing and RUNNER_OIDC_AUDIENCE cannot be used as a fallback."
+                exit 1
+                ;;
+            esac
+            echo "WORKER_URL is not configured; using the Worker origin derived from RUNNER_OIDC_AUDIENCE."
+          fi
+          base_url="${base_url%/}"
+          case "$base_url" in
+            https://*) ;;
+            *)
+              echo "Worker smoke-test URL must use HTTPS."
+              exit 1
+              ;;
+          esac
+          echo "base_url=$base_url" >> "$GITHUB_OUTPUT"
+
+      - name: Verify deployed Worker health
+        env:
+          BASE_URL: ${{ steps.worker_url.outputs.base_url }}
+        run: |
+          set -euo pipefail
+          response_file="${RUNNER_TEMP}/worker-health.json"
+          status="$(curl --silent --show-error --retry 6 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 20 --output "$response_file" --write-out '%{http_code}' "$BASE_URL/health")"
+          cat "$response_file"
+          [ "$status" = "200" ] || { echo "Worker /health returned HTTP $status"; exit 1; }
+          RESPONSE_FILE="$response_file" node - <<'NODE'
+          const payload = JSON.parse(require("node:fs").readFileSync(process.env.RESPONSE_FILE, "utf8"));
+          if (payload?.ok !== true) throw new Error("Worker /health is not healthy.");
+          console.log("Worker /health verified.");
+          NODE
+
+      - name: Verify deployed Worker readiness
+        if: ${{ env.DEPLOYMENT_MODE != 'bootstrap' }}
+        env:
+          BASE_URL: ${{ steps.worker_url.outputs.base_url }}
+        run: |
+          set -euo pipefail
+          response_file="${RUNNER_TEMP}/worker-ready.json"
+          status="$(curl --silent --show-error --retry 6 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 20 --output "$response_file" --write-out '%{http_code}' "$BASE_URL/ready")"
+          cat "$response_file"
+          [ "$status" = "200" ] || { echo "Worker /ready returned HTTP $status"; exit 1; }
+          RESPONSE_FILE="$response_file" node - <<'NODE'
+          const payload = JSON.parse(require("node:fs").readFileSync(process.env.RESPONSE_FILE, "utf8"));
+          if (payload?.ok !== true) throw new Error("Worker /ready is not ready.");
+          console.log("Worker /ready verified.");
+          NODE
+
+      - name: Verify deployed email authentication state
+        if: ${{ env.DEPLOYMENT_MODE != 'bootstrap' }}
+        env:
+          BASE_URL: ${{ steps.worker_url.outputs.base_url }}
+          EMAIL_AUTH_CONFIGURED: ${{ steps.email_auth.outputs.configured }}
+          EXPECTED_TURNSTILE_SITE_KEY: ${{ vars.TURNSTILE_SITE_KEY }}
+        run: |
+          set -euo pipefail
+          response_file="${RUNNER_TEMP}/worker-auth-config.json"
+          status="$(curl --silent --show-error --retry 6 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 20 --output "$response_file" --write-out '%{http_code}' "$BASE_URL/api/auth/config")"
+          cat "$response_file"
+          [ "$status" = "200" ] || { echo "Worker /api/auth/config returned HTTP $status"; exit 1; }
+          RESPONSE_FILE="$response_file" node - <<'NODE'
+          const payload = JSON.parse(require("node:fs").readFileSync(process.env.RESPONSE_FILE, "utf8"))?.data;
+          if (!payload || payload.email_enabled !== true) {
+            throw new Error("Worker email login configuration is unavailable.");
+          }
+          const configured = process.env.EMAIL_AUTH_CONFIGURED === "true";
+          if (configured) {
+            if (payload.registration_enabled !== true
+              || payload.email_verification_required !== true
+              || payload.password_reset_enabled !== true
+              || payload.turnstile_site_key !== process.env.EXPECTED_TURNSTILE_SITE_KEY) {
+              throw new Error("Verified email authentication smoke check failed.");
+            }
+            console.log("Verified email registration, Turnstile, and password recovery are enabled.");
+          } else {
+            if (payload.registration_enabled !== false || payload.password_reset_enabled !== false) {
+              throw new Error("Unverified email registration was not safely closed.");
+            }
+            console.log("Email login remains available; unverified registration is safely closed.");
+          }
+          NODE
+
+'''
+path.write_text(text[:start] + replacement + text[end:], encoding="utf-8")
