@@ -21,7 +21,8 @@ export async function electListenerLeader(db, id, timestamp) {
     (id, label, version, status, active_accounts, active_rules, started_at, last_heartbeat_at, updated_at)
     VALUES (?, ?, 'unknown', 'starting', 0, 0, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
-      status = 'starting', last_heartbeat_at = excluded.last_heartbeat_at, updated_at = excluded.updated_at
+      status = 'starting', started_at = excluded.started_at,
+      last_heartbeat_at = excluded.last_heartbeat_at, updated_at = excluded.updated_at
     WHERE listener_instances.status IN ('offline', 'stopping')
       OR listener_instances.last_heartbeat_at < ?`)
     .bind(id, id, timestamp, timestamp, timestamp, staleBefore).run();
@@ -44,7 +45,7 @@ export async function enforceListenerLeader(request, env, response, now = () => 
     }, 400, { "x-request-id": response.headers.get("x-request-id") || "" });
   }
   const leader = await electListenerLeader(env.DB, id, now().toISOString());
-  const payload = await response.json();
+  const payload = await response.clone().json();
   if (!payload?.data || typeof payload.data !== "object") return response;
   payload.data.leader = leader;
   payload.data.instance_id = id;
