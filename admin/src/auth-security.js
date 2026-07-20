@@ -8,7 +8,8 @@ import {
 const authContent = document.querySelector("#auth-content");
 const authMessage = document.querySelector("#auth-message");
 let authConfiguration = null;
-let applying = false;
+let observer = null;
+let applyScheduled = false;
 
 function authMode() {
   return String(location.hash || "#/login").replace(/^#\/?/, "").split("?", 1)[0] || "login";
@@ -39,21 +40,21 @@ function watchTurnstileLoader() {
   if (wrapTurnstileRender()) return;
   const head = document.head;
   if (!head) return;
-  const observer = new MutationObserver((records) => {
+  const scriptObserver = new MutationObserver((records) => {
     for (const record of records) {
       for (const node of record.addedNodes) {
         if (!(node instanceof HTMLScriptElement)
           || !node.src.startsWith("https://challenges.cloudflare.com/turnstile/v0/api.js")) continue;
         node.addEventListener("load", () => {
           wrapTurnstileRender();
-          observer.disconnect();
+          scriptObserver.disconnect();
         }, { once: true });
       }
     }
   });
-  observer.observe(head, { childList: true });
+  scriptObserver.observe(head, { childList: true });
   window.addEventListener("load", () => {
-    if (wrapTurnstileRender()) observer.disconnect();
+    if (wrapTurnstileRender()) scriptObserver.disconnect();
   }, { once: true });
 }
 
@@ -78,8 +79,8 @@ function appendNoticeOnce(form, key, kind, title, text) {
 }
 
 function registrationReplacementTarget() {
-  return authContent.querySelector("#email-register-form")
-    || [...authContent.querySelectorAll(".notice.warning")]
+  return authContent?.querySelector("#email-register-form")
+    || [...(authContent?.querySelectorAll(".notice.warning") || [])]
       .find((notice) => !notice.dataset.authSecurityNotice)
     || null;
 }
@@ -100,28 +101,37 @@ function applyRegistrationState() {
     return;
   }
 
+  if (authContent.querySelector("[data-auth-registration-summary]")) return;
   const target = registrationReplacementTarget();
   if (!target) return;
+
+  const summary = document.createElement("div");
+  summary.dataset.authRegistrationSummary = presentation.state;
   const primary = securityNotice(
     presentation.state === "github-only" ? "success" : "warning",
     presentation.title,
     presentation.message,
     "registration-primary",
   );
-  const details = presentation.state === "github-only" && authConfiguration.email_enabled
-    ? securityNotice(
+  summary.append(primary);
+
+  if (presentation.state === "github-only" && authConfiguration.email_enabled) {
+    summary.append(securityNotice(
       "warning",
       "邮箱注册尚未开放",
       "管理员需要完成邮箱验证、发件服务和人机验证配置后才能开放。",
       "registration-email-closed",
-    )
-    : null;
+    ));
+  }
+
   const back = document.createElement("button");
   back.className = "auth-link";
   back.type = "button";
   back.dataset.authMode = "login";
   back.textContent = "已有邮箱账号？返回登录";
-  target.replaceWith(primary, ...(details ? [details] : []), back);
+  summary.append(back);
+  target.replaceWith(summary);
+
   if (authMessage) {
     authMessage.textContent = presentation.state === "github-only"
       ? "使用 GitHub 创建独立工作区；邮箱新注册暂未开放。"
@@ -129,9 +139,14 @@ function applyRegistrationState() {
   }
 }
 
+function observeAuthenticationContent() {
+  if (!observer || !authContent) return;
+  observer.observe(authContent, { childList: true });
+}
+
 function applyAuthenticationState() {
-  if (applying || !authConfiguration || !authContent) return;
-  applying = true;
+  if (!authConfiguration || !authContent) return;
+  observer?.disconnect();
   try {
     const mode = authMode();
     const githubButton = authContent.querySelector(".github-button");
@@ -164,8 +179,17 @@ function applyAuthenticationState() {
       }
     }
   } finally {
-    applying = false;
+    observeAuthenticationContent();
   }
+}
+
+function scheduleAuthenticationState() {
+  if (applyScheduled) return;
+  applyScheduled = true;
+  queueMicrotask(() => {
+    applyScheduled = false;
+    applyAuthenticationState();
+  });
 }
 
 async function loadAuthenticationConfiguration() {
@@ -177,7 +201,7 @@ async function loadAuthenticationConfiguration() {
     });
     const payload = response.ok ? await response.json() : null;
     authConfiguration = payload?.data || null;
-    applyAuthenticationState();
+    scheduleAuthenticationState();
   } catch {
     // The main application already renders connection errors.
   }
@@ -186,7 +210,8 @@ async function loadAuthenticationConfiguration() {
 watchTurnstileLoader();
 
 if (authContent) {
-  new MutationObserver(applyAuthenticationState).observe(authContent, { childList: true, subtree: true });
-  window.addEventListener("hashchange", () => queueMicrotask(applyAuthenticationState));
+  observer = new MutationObserver(scheduleAuthenticationState);
+  observeAuthenticationContent();
+  window.addEventListener("hashchange", scheduleAuthenticationState);
   loadAuthenticationConfiguration();
 }
