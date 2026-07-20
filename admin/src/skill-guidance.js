@@ -1,25 +1,28 @@
 export const SKILL_PRESENTATIONS = Object.freeze({
   send_text: Object.freeze({
-    name: "发送消息或机器人命令",
+    name: "发送一次消息或命令",
     shortName: "发送消息/命令",
-    badge: "推荐",
+    badge: "最简单",
     icon: "发",
-    description: "向机器人、用户、群组或频道发送一段文字或命令。适合 /checkin 签到、每日提醒和普通消息。",
-    suitableFor: "大多数普通任务；第一次创建任务建议选择这个。",
-    formHelp: "用于发送普通文字或 /checkin 等机器人命令。大多数用户选择这个任务类型。",
+    description: "到达设定时间后，向机器人、用户、群组或频道发送一段文字或命令，然后结束。",
+    suitableFor: "普通消息、每日提醒，以及发送 /checkin 就能完成的签到。",
+    formHelp: "只发送一次内容，不等待机器人回复，也不会点击按钮。",
     requiredFields: "接收方、消息、执行时间",
   }),
   tg_signer: Object.freeze({
-    name: "高级自动签到流程",
-    shortName: "高级自动签到",
-    badge: "高级功能",
+    name: "机器人按钮签到",
+    shortName: "按钮签到",
+    badge: "自动等待",
     icon: "签",
-    description: "按照已有的 tg-signer 配置执行多步骤签到，例如发送命令、等待机器人回复或点击按钮。",
-    suitableFor: "已经从 tg-signer 导出配置、并且理解多步骤签到规则的高级用户。",
-    formHelp: "只有已经准备好 tg-signer 导出配置时才选择。普通签到和发送消息请使用“发送消息或机器人命令”。",
-    requiredFields: "接收方、消息、高级签到配置",
+    description: "先向机器人发送命令，再自动等待回复、寻找指定按钮并点击，还可以根据回复关键词确认签到成功。",
+    suitableFor: "发送命令后还需要点击“签到”“领取”等按钮的机器人。",
+    formHelp: "只需填写按钮文字和成功关键词，平台会自动生成并加密保存执行流程。",
+    requiredFields: "接收方、消息、按钮文字、执行时间",
   }),
 });
+
+const GUIDED_FLOW_KIND = "telegram_guided_signin";
+const GUIDED_FLOW_VERSION = 1;
 
 export function skillPresentation(key) {
   const normalized = String(key || "").trim();
@@ -32,6 +35,33 @@ export function skillPresentation(key) {
     suitableFor: "仅在管理员明确说明用途后使用。",
     formHelp: "这是平台预先部署的任务类型；不清楚用途时请不要选择。",
     requiredFields: "请按管理员说明填写",
+  };
+}
+
+export function guidedFlowConfiguration({
+  target,
+  text,
+  buttonText = "",
+  successKeywords = "",
+  waitSeconds = 30,
+  messageThreadId = "",
+} = {}) {
+  const keywords = String(successKeywords || "")
+    .split(/[，,\n]/)
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .slice(0, 10);
+  const wait = Math.min(120, Math.max(5, Number(waitSeconds) || 30));
+  const thread = String(messageThreadId || "").trim();
+  return {
+    kind: GUIDED_FLOW_KIND,
+    version: GUIDED_FLOW_VERSION,
+    target: String(target || "").trim(),
+    text: String(text || ""),
+    button_text: String(buttonText || "").trim(),
+    success_keywords: keywords,
+    wait_seconds: wait,
+    ...(thread ? { message_thread_id: Number(thread) } : {}),
   };
 }
 
@@ -62,9 +92,71 @@ function ensureSkillHelp(select) {
   return help;
 }
 
+function guidedBuilderMarkup(existing) {
+  return `<div class="notice mb-sm"><span aria-hidden="true">✓</span><span><strong>不用填写 JSON</strong><br>平台会根据下面几项自动生成签到流程，并加密保存在服务端。</span></div>
+    ${existing ? '<div class="notice warning mb-sm"><span aria-hidden="true">!</span><span>此任务已有加密配置。只修改时间等普通选项会保留原配置；填写下面的签到步骤后会替换原配置。</span></div>' : ""}
+    <div class="form-grid">
+      <div class="field"><label for="guided-button-text">需要点击的按钮文字</label><input id="guided-button-text" data-guided-field="buttonText" maxlength="128" autocomplete="off" placeholder="例如：签到、领取、打卡"><p class="field-help">机器人回复中只要按钮包含这些文字，平台就会点击。没有按钮可留空。</p></div>
+      <div class="field"><label for="guided-success-keywords">成功回复包含</label><input id="guided-success-keywords" data-guided-field="successKeywords" maxlength="500" autocomplete="off" placeholder="例如：签到成功, 已签到, 获得积分"><p class="field-help">多个关键词用逗号分开。任意一个出现在回复中就判定成功；不需要确认可留空。</p></div>
+      <div class="field"><label for="guided-wait-seconds">最长等待时间</label><input id="guided-wait-seconds" data-guided-field="waitSeconds" type="number" min="5" max="120" value="30"><p class="field-help">发送命令后等待机器人回复的秒数，建议保持 30 秒。</p></div>
+    </div>`;
+}
+
+function ensureGuidedBuilder(form, legacyField) {
+  let builder = form.querySelector("[data-guided-signin-builder]");
+  let legacyDetails = form.querySelector("[data-legacy-signer-details]");
+  if (!builder) {
+    builder = document.createElement("section");
+    builder.className = "field span-2";
+    builder.dataset.guidedSigninBuilder = "true";
+    builder.innerHTML = guidedBuilderMarkup(form.dataset.hasTgSignerImport === "true");
+
+    legacyDetails = document.createElement("details");
+    legacyDetails.className = "span-2";
+    legacyDetails.dataset.legacySignerDetails = "true";
+    const summary = document.createElement("summary");
+    summary.className = "field-label";
+    summary.textContent = "已有旧版 tg-signer 配置（仅高级用户）";
+    const note = document.createElement("p");
+    note.className = "field-help";
+    note.textContent = "只有已经从 tg-signer 导出 JSON 或 Base64 的用户才需要展开。普通用户不要填写。";
+    legacyField.parentElement?.insertBefore(builder, legacyField);
+    legacyField.parentElement?.insertBefore(legacyDetails, legacyField);
+    legacyDetails.append(summary, note, legacyField);
+  }
+  return { builder, legacyDetails };
+}
+
+function markGuidedTouched(form) {
+  form.dataset.guidedSigninTouched = "true";
+  delete form.dataset.legacySignerEdited;
+}
+
+function syncGuidedConfiguration(form, { force = false } = {}) {
+  const select = form?.querySelector("#task-skill");
+  const legacy = form?.querySelector("#task-signer-import");
+  if (!form || select?.value !== "tg_signer" || !legacy) return;
+  if (form.dataset.legacySignerEdited === "true") return;
+  const existing = form.dataset.hasTgSignerImport === "true";
+  const touched = form.dataset.guidedSigninTouched === "true";
+  if (existing && !touched && !force) return;
+
+  const values = Object.fromEntries([...form.querySelectorAll("[data-guided-field]")]
+    .map((field) => [field.dataset.guidedField, field.value]));
+  const config = guidedFlowConfiguration({
+    target: form.elements.namedItem("bot")?.value,
+    text: form.elements.namedItem("command")?.value,
+    messageThreadId: form.elements.namedItem("thread_id")?.value,
+    ...values,
+  });
+  legacy.value = JSON.stringify(config);
+}
+
 function updateTaskForm() {
   const select = document.querySelector("#task-skill");
   if (!select) return;
+  const form = select.closest("form");
+  if (!form) return;
 
   for (const option of select.options) {
     const presentation = skillPresentation(option.value);
@@ -85,16 +177,23 @@ function updateTaskForm() {
   if (targetInput) targetInput.placeholder = "例如：@example_bot、@username 或 Chat ID";
 
   const commandLabel = document.querySelector('label[for="task-command"]');
-  if (commandLabel) commandLabel.textContent = "要发送的消息或命令";
+  if (commandLabel) commandLabel.textContent = "先发送的消息或命令";
   const commandInput = document.querySelector("#task-command");
-  if (commandInput) commandInput.placeholder = "例如：/checkin、签到、每日提醒内容";
+  if (commandInput) commandInput.placeholder = "例如：/checkin、/start、签到";
 
   const signerLabel = document.querySelector('label[for="task-signer-import"]');
-  const signerField = signerLabel?.closest(".field");
-  if (signerLabel) signerLabel.innerHTML = "高级签到配置 <small>只有“高级自动签到流程”需要</small>";
-  if (signerField) signerField.hidden = select.value !== "tg_signer";
-  const signerInput = document.querySelector("#task-signer-import");
-  if (signerInput) signerInput.placeholder = "粘贴 tg-signer 导出的 JSON 或 Base64 配置；普通用户不需要填写";
+  const legacyField = signerLabel?.closest(".field");
+  if (signerLabel) signerLabel.innerHTML = "旧版配置 <small>留空保持现有配置</small>";
+  if (legacyField) {
+    legacyField.hidden = false;
+    const { builder, legacyDetails } = ensureGuidedBuilder(form, legacyField);
+    const visible = select.value === "tg_signer";
+    builder.hidden = !visible;
+    legacyDetails.hidden = !visible;
+    const signerInput = document.querySelector("#task-signer-import");
+    if (signerInput) signerInput.placeholder = "粘贴已有 tg-signer JSON 或 Base64；普通用户不需要填写";
+    if (visible && form.dataset.hasTgSignerImport !== "true") syncGuidedConfiguration(form, { force: true });
+  }
 }
 
 function updateTaskTable() {
@@ -167,12 +266,12 @@ function updatePageCopy() {
   if (heading?.textContent.trim() === "Skills") heading.textContent = "任务类型";
   const pageDescription = view.querySelector(".page-head p");
   if (heading?.textContent.trim() === "任务类型" && pageDescription) {
-    pageDescription.textContent = "选择任务实际要做的事情；普通用户通常只需要“发送消息或机器人命令”。";
+    pageDescription.textContent = "选择任务实际要做的事情；普通消息选第一项，需要点击机器人按钮时选第二项。";
   }
 
   const registryNotice = view.querySelector(".notice.mb-md span:last-child");
   if (heading?.textContent.trim() === "任务类型" && registryNotice) {
-    registryNotice.textContent = "任务类型是平台预先审核并部署的执行方式，用户不能上传代码。看不懂内部标识时，直接按照中文用途选择即可。";
+    registryNotice.textContent = "任务类型是平台预先审核并部署的执行方式，用户不能上传代码。按照中文用途选择即可。";
   }
 
   for (const paragraph of view.querySelectorAll(".empty-state p")) {
@@ -213,8 +312,33 @@ export function applySkillGuidance() {
 
 if (typeof document !== "undefined") {
   document.addEventListener("change", (event) => {
-    if (event.target?.matches?.("#task-skill")) applySkillGuidance();
+    const form = event.target?.closest?.("#task-form");
+    if (event.target?.matches?.("#task-skill")) {
+      if (form) markGuidedTouched(form);
+      applySkillGuidance();
+      if (form) syncGuidedConfiguration(form);
+    }
   });
+  document.addEventListener("input", (event) => {
+    const form = event.target?.closest?.("#task-form");
+    if (!form) return;
+    if (event.target?.matches?.("#task-signer-import")) {
+      form.dataset.legacySignerEdited = "true";
+      delete form.dataset.guidedSigninTouched;
+      return;
+    }
+    if (event.target?.matches?.("[data-guided-field], #task-bot, #task-command, #task-thread")) {
+      markGuidedTouched(form);
+      syncGuidedConfiguration(form);
+    }
+  });
+  document.addEventListener("submit", (event) => {
+    if (!event.target?.matches?.("#task-form")) return;
+    const form = event.target;
+    syncGuidedConfiguration(form, {
+      force: form.dataset.hasTgSignerImport !== "true" || form.dataset.guidedSigninTouched === "true",
+    });
+  }, true);
   window.addEventListener("hashchange", applySkillGuidance);
   applySkillGuidance();
 }
