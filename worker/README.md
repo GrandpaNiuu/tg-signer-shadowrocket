@@ -89,8 +89,12 @@ Variables:
 - optional `ADMIN_SESSION_TTL_SECONDS` (5 minutes to 30 days; default 7 days)
 - for free immediate password registration: `PUBLIC_PASSWORD_AUTH_MODE=local`;
   email is only a login identifier and self-service password reset is disabled
-- for verified email registration: public `TURNSTILE_SITE_KEY`, verified sender
-  `AUTH_EMAIL_FROM`, and optional `PASSWORD_HASH_ITERATIONS` (default 600000)
+- for verified email registration: public `TURNSTILE_SITE_KEY` and verified sender
+  `AUTH_EMAIL_FROM`
+- optional `PASSWORD_HASH_ITERATIONS` (100000-1000000). The current Workers Free
+  deployment baseline is 100000. Raising the configured target causes an active
+  user's hash to be replaced after the next successful password login, using a
+  new random salt and an optimistic D1 update; benchmark Worker CPU before raising it
 - optional explicit `RUNNER_WORKFLOW_REF` and `LOGIN_WORKFLOW_REF`
 - optional `SCHEDULE_DISPATCH_LEAD_SECONDS` (default 120, bounded to 120–180)
 
@@ -114,8 +118,12 @@ GitHub queue delay is visible as schedule lag and is not treated as hard real-ti
   configured immutable numeric GitHub user id can claim `legacy-admin`; a
   matching mutable login name alone never grants administrator privileges.
 - Email passwords use PBKDF2-HMAC-SHA256 with a random per-user salt and a
-  deployment pepper. Turnstile is verified server-side, and verification/reset
-  tokens are one-time SHA-256 digests with bounded expiry.
+  deployment pepper. A successful login may perform a best-effort gradual
+  rehash only when the configured target iteration count is higher. The update
+  compares the previous algorithm, hash, salt, and iteration count so a
+  concurrent password change cannot be overwritten. Turnstile is verified
+  server-side, and verification/reset tokens are one-time SHA-256 digests with
+  bounded expiry.
 - Each ciphertext uses a random 96-bit nonce and AAD bound to purpose, owner,
   and key version.
 - Code and 2FA secrets have the login flow's short expiry and can only be
