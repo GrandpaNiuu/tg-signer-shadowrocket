@@ -36,4 +36,15 @@ jobs:
       - name: Test audit contract
         run: node --test tools/live-auth-audit.test.mjs
       - name: Inspect production authentication state
-        run: node tools/live-auth-audit.mjs
+        shell: bash
+        run: |
+          set -o pipefail
+          node tools/live-auth-audit.mjs | tee "${RUNNER_TEMP}/live-auth-audit.log"
+      - name: Upload sanitized audit result
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: live-auth-audit-${{ github.run_id }}
+          path: ${{ runner.temp }}/live-auth-audit.log
+          if-no-files-found: error
+          retention-days: 7
