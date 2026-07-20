@@ -6,19 +6,23 @@ function authMode() {
   return String(location.hash || "#/login").replace(/^#\/?/, "").split("?", 1)[0] || "login";
 }
 
-function securityNotice(kind, text) {
+function securityNotice(kind, text, key) {
   const notice = document.createElement("div");
   notice.className = `notice ${kind}`;
-  notice.dataset.authSecurityNotice = "true";
+  notice.dataset.authSecurityNotice = key;
   notice.innerHTML = `<span aria-hidden="true">${kind === "warning" ? "!" : "✓"}</span><span>${text}</span>`;
   return notice;
+}
+
+function appendNoticeOnce(form, key, kind, text) {
+  if (!form || form.querySelector(`[data-auth-security-notice="${key}"]`)) return;
+  form.append(securityNotice(kind, text, key));
 }
 
 function applyAuthenticationState() {
   if (applying || !authConfiguration || !authContent) return;
   applying = true;
   try {
-    authContent.querySelectorAll("[data-auth-security-notice]").forEach((element) => element.remove());
     const mode = authMode();
     const registerTab = authContent.querySelector('[data-auth-mode="register"]');
     if (registerTab && !authConfiguration.registration_enabled) {
@@ -32,6 +36,7 @@ function applyAuthenticationState() {
         const notice = securityNotice(
           "warning",
           "邮箱新注册暂时关闭。平台管理员完成邮件验证和人机验证配置后才会开放；目前可以使用 GitHub 注册，已有邮箱用户仍可返回登录。",
+          "registration-closed",
         );
         const back = document.createElement("button");
         back.className = "auth-link";
@@ -44,13 +49,12 @@ function applyAuthenticationState() {
     }
 
     if (mode === "login" && authConfiguration.security_setup_required) {
-      const form = authContent.querySelector("#email-login-form");
-      if (form) {
-        form.append(securityNotice(
-          "warning",
-          "已有邮箱账号可以继续登录；为防止未验证账号和机器人注册，新的邮箱注册已暂时关闭。",
-        ));
-      }
+      appendNoticeOnce(
+        authContent.querySelector("#email-login-form"),
+        "security-setup",
+        "warning",
+        "已有邮箱账号可以继续登录；为防止未验证账号和机器人注册，新的邮箱注册已暂时关闭。",
+      );
       return;
     }
 
@@ -58,13 +62,12 @@ function applyAuthenticationState() {
       && authConfiguration.registration_enabled
       && authConfiguration.email_verification_required
       && authConfiguration.turnstile_site_key) {
-      const form = authContent.querySelector(mode === "register" ? "#email-register-form" : "#email-login-form");
-      if (form) {
-        form.append(securityNotice(
-          "success",
-          "邮箱注册需要人机验证和邮件确认；验证完成后可以使用找回密码功能。",
-        ));
-      }
+      appendNoticeOnce(
+        authContent.querySelector(mode === "register" ? "#email-register-form" : "#email-login-form"),
+        "secure-email-ready",
+        "success",
+        "邮箱注册需要人机验证和邮件确认；验证完成后可以使用找回密码功能。",
+      );
     }
   } finally {
     applying = false;
