@@ -24,6 +24,9 @@ ADMIN_ORIGIN = "https://grandpaniu.ccwu.cc"
 ADMIN_GITHUB_LOGIN = "GrandpaNiuu"
 ADMIN_GITHUB_USER_ID = "225517310"
 ADMIN_SESSION_TTL_SECONDS = "604800"
+# Compatibility baseline for the current Workers Free deployment. Raising this
+# value automatically rehashes active users after their next successful login;
+# benchmark Worker CPU first because password hashing is CPU-bound.
 PASSWORD_HASH_ITERATIONS = "100000"
 PUBLIC_PASSWORD_AUTH_MODE = "local"
 SCHEDULE_DISPATCH_LEAD_SECONDS = "120"
