@@ -11,10 +11,10 @@ function readyEnv(overrides = {}) {
   return {
     DB: {
       prepare(sql) {
-        assert.equal(sql, "SELECT 1 AS ready");
+        assert.match(sql, /sqlite_master/);
         return {
           async first() {
-            return { ready: 1 };
+            return { ready: 4 };
           },
         };
       },
@@ -22,6 +22,7 @@ function readyEnv(overrides = {}) {
     GITHUB_OWNER: "owner",
     GITHUB_REPO: "repo",
     GITHUB_TOKEN: "configured",
+    SECRET_ROOT_KEY: Buffer.alloc(32, 1).toString("base64"),
     RUNNER_OIDC_AUDIENCE: "https://worker.example/api/runner",
     TASK_RUNNER_WORKFLOW_FILE: "task-runner.yml",
     LOGIN_WORKFLOW_FILE: "telegram-login.yml",
@@ -41,7 +42,7 @@ test("health remains a liveness check without dependencies", async () => {
   });
 });
 
-test("ready returns 200 when database and required configuration are available", async () => {
+test("ready returns 200 when schema, configuration, and secrets are available", async () => {
   const worker = createWorker({ uuid: fixedUuid });
   const response = await worker.fetch(new Request("https://example.test/ready"), readyEnv());
 
@@ -54,6 +55,8 @@ test("ready returns 200 when database and required configuration are available",
       database: "ok",
       configuration: "ok",
       credentials: "ok",
+      github_token: "ok",
+      secret_root_key: "ok",
     },
   });
 });
@@ -70,6 +73,8 @@ test("ready returns 503 and safe diagnostics when dependencies are missing", asy
       database: "missing",
       configuration: "missing",
       credentials: "missing",
+      github_token: "missing",
+      secret_root_key: "missing",
     },
     missing_configuration: [
       "GITHUB_OWNER",
@@ -80,6 +85,40 @@ test("ready returns 503 and safe diagnostics when dependencies are missing", asy
       "ADMIN_ORIGIN",
     ],
   });
+});
+
+test("ready detects a database without the required application schema", async () => {
+  const worker = createWorker({ uuid: fixedUuid });
+  const env = readyEnv({
+    DB: {
+      prepare() {
+        return {
+          async first() {
+            return { ready: 2 };
+          },
+        };
+      },
+    },
+  });
+
+  const response = await worker.fetch(new Request("https://example.test/ready"), env);
+  const body = await response.json();
+
+  assert.equal(response.status, 503);
+  assert.equal(body.checks.database, "schema_missing");
+});
+
+test("ready rejects an invalid encryption root key", async () => {
+  const worker = createWorker({ uuid: fixedUuid });
+  const response = await worker.fetch(
+    new Request("https://example.test/ready"),
+    readyEnv({ SECRET_ROOT_KEY: "not-base64" }),
+  );
+  const body = await response.json();
+
+  assert.equal(response.status, 503);
+  assert.equal(body.checks.credentials, "invalid");
+  assert.equal(body.checks.secret_root_key, "invalid");
 });
 
 test("ready hides database error details", async () => {

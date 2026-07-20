@@ -2,8 +2,10 @@ const STATUS_TEXT = {
   connected: "已连接",
   disconnected: "未连接",
   login_pending: "登录中",
-  pending: "待连接",
+  reconnect_required: "需要重新登录",
+  // Compatibility for early builds that exposed the pre-audit name.
   needs_reauth: "需要重新登录",
+  pending: "待连接",
   error: "异常",
   deleted: "已删除",
   queued: "排队中",

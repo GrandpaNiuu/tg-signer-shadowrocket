@@ -1,9 +1,11 @@
 import { handleAdminApi } from "./admin-api.js";
 import { createAdminAuth } from "./admin-auth.js";
 import { verifyRunnerRequest } from "./auth.js";
+import { withDispatchErrorCodes } from "./dispatch-repository.js";
 import { errorResponse, json } from "./http.js";
 import { createD1Repository } from "./repository.js";
 import { handleRunnerApi } from "./runner-api.js";
+import { withRunnerSessionState } from "./runner-repository.js";
 import { runScheduler } from "./scheduler.js";
 
 const REQUIRED_READY_CONFIG = Object.freeze([
@@ -14,6 +16,9 @@ const REQUIRED_READY_CONFIG = Object.freeze([
   "LOGIN_WORKFLOW_FILE",
   "ADMIN_ORIGIN",
 ]);
+
+const READY_SCHEMA_SQL = `SELECT COUNT(*) AS ready FROM sqlite_master
+  WHERE type = 'table' AND name IN ('accounts', 'tasks', 'task_runs', 'secret_values')`;
 
 function defaultUuid() {
   return crypto.randomUUID();
@@ -46,23 +51,39 @@ async function withRequestId(response, requestId) {
   });
 }
 
+function rootKeyStatus(value) {
+  const encoded = String(value || "").trim();
+  if (!encoded) return "missing";
+  try {
+    return atob(encoded).length === 32 ? "ok" : "invalid";
+  } catch {
+    return "invalid";
+  }
+}
+
 async function checkReadiness(env) {
   const missingConfiguration = REQUIRED_READY_CONFIG.filter(
     (name) => !String(env[name] || "").trim(),
   );
-  const credentials = String(env.GITHUB_TOKEN || "").trim() ? "ok" : "missing";
+  const githubToken = String(env.GITHUB_TOKEN || "").trim() ? "ok" : "missing";
+  const secretRootKey = rootKeyStatus(env.SECRET_ROOT_KEY);
 
   let database = "missing";
   if (env.DB) {
     try {
-      const result = await env.DB.prepare("SELECT 1 AS ready").first();
-      database = Number(result?.ready) === 1 ? "ok" : "error";
+      const result = await env.DB.prepare(READY_SCHEMA_SQL).first();
+      database = Number(result?.ready) === 4 ? "ok" : "schema_missing";
     } catch {
       database = "error";
     }
   }
 
   const configuration = missingConfiguration.length === 0 ? "ok" : "missing";
+  const credentials = githubToken === "ok" && secretRootKey === "ok"
+    ? "ok"
+    : secretRootKey === "invalid"
+      ? "invalid"
+      : "missing";
   const ok = database === "ok" && configuration === "ok" && credentials === "ok";
   return {
     status: ok ? 200 : 503,
@@ -73,10 +94,16 @@ async function checkReadiness(env) {
         database,
         configuration,
         credentials,
+        github_token: githubToken,
+        secret_root_key: secretRootKey,
       },
       ...(missingConfiguration.length ? { missing_configuration: missingConfiguration } : {}),
     },
   };
+}
+
+function hasNonZeroValues(value) {
+  return value && Object.values(value).some((entry) => Number(entry || 0) !== 0);
 }
 
 export function createWorker(dependencies = {}) {
@@ -115,9 +142,10 @@ export function createWorker(dependencies = {}) {
             user_id: verified?.user_id || "legacy-admin",
             role: verified?.role || "admin",
           };
-          const userRepository = typeof repository.forUser === "function"
+          const scopedRepository = typeof repository.forUser === "function"
             ? repository.forUser(identity)
             : repository;
+          const userRepository = withDispatchErrorCodes(scopedRepository);
           return await withRequestId(await handleAdminApi(request, env, userRepository, {
             uuid,
             now,
@@ -127,7 +155,10 @@ export function createWorker(dependencies = {}) {
         }
         if (url.pathname.startsWith("/api/runner/")) {
           const claims = await verifyRunner(request, env);
-          const repository = repositoryFactory(env);
+          const repository = withRunnerSessionState(
+            withDispatchErrorCodes(repositoryFactory(env)),
+            now,
+          );
           return await withRequestId(
             await handleRunnerApi(request, env, repository, { uuid, now, fetch: fetchImpl }, claims),
             requestId,
@@ -150,7 +181,7 @@ export function createWorker(dependencies = {}) {
           if (env.DB) {
             try {
               scheduler = await runScheduler(env, {
-                repository: repositoryFactory(env),
+                repository: withDispatchErrorCodes(repositoryFactory(env)),
                 fetch: fetchImpl,
                 now,
                 uuid,
@@ -161,7 +192,7 @@ export function createWorker(dependencies = {}) {
           } else {
             schedulerError = "D1BindingMissing";
           }
-          console.log(JSON.stringify({
+          const log = {
             ok: !schedulerError && scheduler.failed === 0,
             cron: event.cron,
             scheduled_time: event.scheduledTime,
@@ -171,7 +202,17 @@ export function createWorker(dependencies = {}) {
             dispatched: scheduler.dispatched,
             failed: scheduler.failed,
             scheduler_error: schedulerError,
-          }));
+          };
+          if (scheduler.failures_by_code && Object.keys(scheduler.failures_by_code).length) {
+            log.failures_by_code = scheduler.failures_by_code;
+          }
+          if (scheduler.warnings_by_code && Object.keys(scheduler.warnings_by_code).length) {
+            log.warnings_by_code = scheduler.warnings_by_code;
+          }
+          if (hasNonZeroValues(scheduler.reconciliation)) {
+            log.reconciliation = scheduler.reconciliation;
+          }
+          console.log(JSON.stringify(log));
         } catch (error) {
           console.error(JSON.stringify({
             ok: false,

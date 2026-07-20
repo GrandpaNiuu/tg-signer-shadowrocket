@@ -2,8 +2,57 @@ import { nextCronDate } from "./cron.js";
 import { dispatchWorkflow } from "./github.js";
 import { sanitizedError } from "./redaction.js";
 
+export const DISPATCH_ERROR_CODES = Object.freeze({
+  HTTP: "github_dispatch_http_error",
+  NETWORK: "github_dispatch_network_error",
+  TIMEOUT: "github_dispatch_timeout",
+  CONFIG: "github_dispatch_config_error",
+  STATE_UPDATE: "github_dispatch_state_update_failed",
+});
+
 function plusSeconds(date, seconds) {
   return new Date(date.getTime() + seconds * 1_000).toISOString();
+}
+
+function emptyReconciliation() {
+  return {
+    cancelled_unavailable: 0,
+    reset_dispatches: 0,
+    expired_runs: 0,
+    expired_queued: 0,
+  };
+}
+
+function dispatchFailureMessage(code, message) {
+  return `[${code}] ${message}`;
+}
+
+function classifyDispatchException(error) {
+  if (error?.name === "AbortError") return DISPATCH_ERROR_CODES.TIMEOUT;
+  if (error?.code === "github_config_missing") return DISPATCH_ERROR_CODES.CONFIG;
+  return DISPATCH_ERROR_CODES.NETWORK;
+}
+
+function withHiddenProperty(object, name, value) {
+  Object.defineProperty(object, name, {
+    value,
+    enumerable: false,
+    configurable: false,
+    writable: true,
+  });
+  return object;
+}
+
+function dispatchFailureResult(reason, errorCode, run) {
+  return withHiddenProperty({ dispatched: false, reason, run }, "error_code", errorCode);
+}
+
+function acceptedDispatchResult(run, reason = undefined) {
+  return {
+    dispatched: true,
+    run,
+    ...(reason ? { reason } : {}),
+  };
 }
 
 export function makeRun(task, { id, triggerType, scheduledFor, now, dedupeKey = null }) {
@@ -30,41 +79,89 @@ async function dispatchRun(env, fetchImpl, runId) {
   });
 }
 
+async function persistDispatchFailure(repository, run, now, errorCode, message) {
+  await repository.markRunDispatchFailed(
+    run.id,
+    now().toISOString(),
+    dispatchFailureMessage(errorCode, message),
+  );
+}
+
 export async function dispatchNextForAccount(accountId, env, dependencies) {
   if (!accountId) return { dispatched: false, reason: "account_missing" };
   const reservedAt = dependencies.now().toISOString();
   const run = await dependencies.repository.reserveNextDispatch(accountId, reservedAt);
   if (!run) return { dispatched: false, reason: "busy_or_empty" };
+
+  let response;
   try {
-    const response = await dispatchRun(env, dependencies.fetch, run.id);
-    if (!response.ok) {
-      await dependencies.repository.markRunDispatchFailed(
-        run.id,
-        dependencies.now().toISOString(),
-        `GitHub workflow dispatch returned HTTP ${response.status}.`,
-      );
-      return { dispatched: false, reason: "github_error", run };
-    }
-    await dependencies.repository.markRunDispatched(run.id, dependencies.now().toISOString());
-    return { dispatched: true, run };
+    response = await dispatchRun(env, dependencies.fetch, run.id);
   } catch (error) {
-    await dependencies.repository.markRunDispatchFailed(
-      run.id,
-      dependencies.now().toISOString(),
+    const errorCode = classifyDispatchException(error);
+    await persistDispatchFailure(
+      dependencies.repository,
+      run,
+      dependencies.now,
+      errorCode,
       sanitizedError(error, 500),
     );
-    return { dispatched: false, reason: "github_error", run };
+    return dispatchFailureResult("github_error", errorCode, run);
+  }
+
+  if (!response.ok) {
+    const errorCode = DISPATCH_ERROR_CODES.HTTP;
+    await persistDispatchFailure(
+      dependencies.repository,
+      run,
+      dependencies.now,
+      errorCode,
+      `GitHub workflow dispatch returned HTTP ${response.status}.`,
+    );
+    return dispatchFailureResult("github_error", errorCode, run);
+  }
+
+  try {
+    const updated = await dependencies.repository.markRunDispatched(
+      run.id,
+      dependencies.now().toISOString(),
+    );
+    // The Runner can claim the run before the scheduler records the 204 response.
+    // In that race, the dispatch is accepted and the state has already advanced.
+    return acceptedDispatchResult(run, updated === false ? "state_already_advanced" : undefined);
+  } catch (error) {
+    // GitHub has already accepted the workflow. Never reset the run to pending here,
+    // because doing so can dispatch the same Telegram action a second time.
+    const result = acceptedDispatchResult(run, "state_update_failed");
+    withHiddenProperty(result, "warning_code", DISPATCH_ERROR_CODES.STATE_UPDATE);
+    withHiddenProperty(result, "warning", sanitizedError(error, 500));
+    return result;
   }
 }
 
 export async function dispatchPendingRuns(env, dependencies, limit = 20) {
   const timestamp = dependencies.now().toISOString();
   const accountIds = await dependencies.repository.listDispatchableAccountIds(timestamp, limit);
-  const summary = { candidates: accountIds.length, dispatched: 0, failed: 0 };
+  const failuresByCode = {};
+  const warningsByCode = {};
+  const summary = withHiddenProperty(
+    { candidates: accountIds.length, dispatched: 0, failed: 0 },
+    "failures_by_code",
+    failuresByCode,
+  );
+  withHiddenProperty(summary, "warnings_by_code", warningsByCode);
+
   for (const accountId of accountIds) {
     const result = await dispatchNextForAccount(accountId, env, dependencies);
-    if (result.dispatched) summary.dispatched += 1;
-    else if (result.reason === "github_error") summary.failed += 1;
+    if (result.dispatched) {
+      summary.dispatched += 1;
+      if (result.warning_code) {
+        warningsByCode[result.warning_code] = (warningsByCode[result.warning_code] || 0) + 1;
+      }
+    } else if (result.reason === "github_error") {
+      summary.failed += 1;
+      const code = result.error_code || "github_dispatch_error";
+      failuresByCode[code] = (failuresByCode[code] || 0) + 1;
+    }
   }
   return summary;
 }
@@ -107,11 +204,21 @@ export async function runScheduler(env, dependencies) {
     : 120;
   const dueThrough = new Date(current.getTime() + leadSeconds * 1_000);
   const staleDispatchBefore = new Date(current.getTime() - 10 * 60_000).toISOString();
+  let reconciliation = emptyReconciliation();
   if (dependencies.repository.reconcileRuns) {
-    await dependencies.repository.reconcileRuns(current.toISOString(), staleDispatchBefore);
+    reconciliation = {
+      ...reconciliation,
+      ...await dependencies.repository.reconcileRuns(current.toISOString(), staleDispatchBefore),
+    };
   }
   const dueTasks = await dependencies.repository.getDueTasks(dueThrough.toISOString(), 100);
-  const summary = { mode: "d1", due: dueTasks.length, queued: 0, dispatched: 0, failed: 0 };
+  const summary = withHiddenProperty({
+    mode: "d1",
+    due: dueTasks.length,
+    queued: 0,
+    dispatched: 0,
+    failed: 0,
+  }, "reconciliation", reconciliation);
   for (const task of dueTasks) {
     let scheduledFor = task.next_run_at;
     // A lead window can contain more than one once-per-minute occurrence. Advance
@@ -135,5 +242,6 @@ export async function runScheduler(env, dependencies) {
   const dispatch = await dispatchPendingRuns(env, dependencies, 100);
   summary.dispatched = dispatch.dispatched;
   summary.failed = dispatch.failed;
-  return summary;
+  withHiddenProperty(summary, "warnings_by_code", dispatch.warnings_by_code);
+  return withHiddenProperty(summary, "failures_by_code", dispatch.failures_by_code);
 }
