@@ -29,7 +29,7 @@ async def run() -> None:
     instance_id = os.environ.get("LISTENER_INSTANCE_ID", socket.gethostname()).strip()
     label = os.environ.get("LISTENER_LABEL", instance_id).strip()
     service = ListenerService(
-        ListenerWorkerClient(worker_url, token),
+        ListenerWorkerClient(worker_url, token, instance_id=instance_id),
         instance_id=instance_id,
         label=label,
         sync_interval=max(10, int(os.environ.get("LISTENER_SYNC_SECONDS", "30"))),
