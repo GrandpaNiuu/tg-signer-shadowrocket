@@ -1,4 +1,7 @@
 const encoder = new TextEncoder();
+const PASSWORD_ALGORITHM = "PBKDF2-HMAC-SHA256";
+
+export const PASSWORD_REHASH_CALLBACK = Symbol("password_rehash_callback");
 
 function bytesToBase64Url(bytes) {
   let binary = "";
@@ -46,13 +49,21 @@ function constantTimeEqual(left, right) {
   return difference === 0;
 }
 
+export function passwordNeedsRehash(record, env) {
+  const current = Number(record?.password_iterations);
+  return record?.password_algorithm === PASSWORD_ALGORITHM
+    && Number.isInteger(current)
+    && current >= 100000
+    && current < iterationsFromEnv(env);
+}
+
 export async function hashPassword(password, env) {
   const salt = new Uint8Array(16);
   crypto.getRandomValues(salt);
   const iterations = iterationsFromEnv(env);
   const hash = await derive(password, salt, iterations, env);
   return {
-    password_algorithm: "PBKDF2-HMAC-SHA256",
+    password_algorithm: PASSWORD_ALGORITHM,
     password_hash: bytesToBase64Url(hash),
     password_salt: bytesToBase64Url(salt),
     password_iterations: iterations,
@@ -60,7 +71,7 @@ export async function hashPassword(password, env) {
 }
 
 export async function verifyPassword(password, record, env) {
-  if (record?.password_algorithm !== "PBKDF2-HMAC-SHA256"
+  if (record?.password_algorithm !== PASSWORD_ALGORITHM
     || !record.password_hash || !record.password_salt
     || !Number.isInteger(Number(record.password_iterations))) return false;
   const actual = await derive(
@@ -69,7 +80,17 @@ export async function verifyPassword(password, record, env) {
     Number(record.password_iterations),
     env,
   );
-  return constantTimeEqual(actual, base64UrlToBytes(record.password_hash));
+  const valid = constantTimeEqual(actual, base64UrlToBytes(record.password_hash));
+  if (valid && passwordNeedsRehash(record, env)
+    && typeof record[PASSWORD_REHASH_CALLBACK] === "function") {
+    try {
+      await record[PASSWORD_REHASH_CALLBACK](await hashPassword(password, env));
+    } catch {
+      // Rehash is best-effort. The verified existing hash remains valid if the
+      // optimistic update loses a race or D1 is temporarily unavailable.
+    }
+  }
+  return valid;
 }
 
 export const __test = { constantTimeEqual, iterationsFromEnv };
