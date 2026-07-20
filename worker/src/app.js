@@ -72,6 +72,10 @@ function rootKeyStatus(value) {
   }
 }
 
+function listenerConfigured(env) {
+  return String(env.LISTENER_API_TOKEN || "").trim().length >= 32;
+}
+
 async function checkReadiness(env) {
   const missingConfiguration = REQUIRED_READY_CONFIG.filter(
     (name) => !String(env[name] || "").trim(),
@@ -107,7 +111,7 @@ async function checkReadiness(env) {
         credentials,
         github_token: githubToken,
         secret_root_key: secretRootKey,
-        realtime_listener: String(env.LISTENER_API_TOKEN || "").trim().length >= 32 ? "configured" : "disabled",
+        realtime_listener: listenerConfigured(env) ? "configured" : "disabled",
       },
       ...(missingConfiguration.length ? { missing_configuration: missingConfiguration } : {}),
     },
@@ -158,6 +162,16 @@ export function createWorker(dependencies = {}) {
             user_id: verified?.user_id || "legacy-admin",
             role: verified?.role || "admin",
           };
+          if (url.pathname === "/api/v1/bot-inspections"
+            && request.method === "POST"
+            && !listenerConfigured(env)) {
+            return await withRequestId(json({
+              error: {
+                code: "listener_not_configured",
+                message: "机器人操作识别尚未启用。请联系管理员部署常驻 Listener。",
+              },
+            }, 503), requestId);
+          }
           const userRepository = adminWorkspaceRepository(repository, identity);
           const context = {
             uuid,
