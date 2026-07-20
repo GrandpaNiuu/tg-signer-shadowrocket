@@ -1,6 +1,7 @@
 import { HttpError, json, readJson } from "./http.js";
 import { hashPassword, verifyPassword } from "./password.js";
 import { publicPasswordAuthConfiguration } from "./public-auth-configuration.js";
+import { verifyTurnstileToken } from "./turnstile.js";
 
 const encoder = new TextEncoder();
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -76,26 +77,16 @@ function authConfiguration(env, { requireRegistration = false, emailDelivery = f
   };
 }
 
-async function verifyTurnstile(request, responseToken, config, fetchImpl) {
-  if (!config.turnstileSecret) return;
-  const body = new URLSearchParams({
+async function verifyAuthChallenge(request, env, config, responseToken, action, fetchImpl) {
+  return verifyTurnstileToken({
+    request,
+    responseToken,
     secret: config.turnstileSecret,
-    response: responseToken,
+    origin: config.origin,
+    action,
+    env,
+    fetchImpl,
   });
-  const remoteIp = String(request.headers.get("cf-connecting-ip") || "").trim();
-  if (remoteIp) body.set("remoteip", remoteIp);
-  let result;
-  try {
-    const response = await fetchImpl("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body,
-    });
-    result = response.ok ? await response.json() : null;
-  } catch {
-    result = null;
-  }
-  if (!result?.success) throw new HttpError(400, "turnstile_failed", "人机验证失败，请重新尝试。");
 }
 
 async function sendEmail(fetchImpl, config, message) {
@@ -204,9 +195,9 @@ export function createEmailAuth(dependencies = {}) {
           throw new HttpError(422, "validation_failed", "请输入显示名称。", { fields: ["display_name"] });
         }
         const password = passwordInput(body.password);
-        await verifyTurnstile(request, turnstileInput(body.turnstile_token, {
+        await verifyAuthChallenge(request, env, config, turnstileInput(body.turnstile_token, {
           required: Boolean(config.turnstileSecret),
-        }), config, fetchImpl);
+        }), "email_register", fetchImpl);
         await enforceRateLimit(repository, request, "register_ip", "*", timestamp, 5, 3600);
         await enforceRateLimit(repository, request, "register", email.normalized, timestamp, 5, 3600);
         const passwordRecord = await hashPassword(password, env);
@@ -259,9 +250,9 @@ export function createEmailAuth(dependencies = {}) {
         exactInput(body, ["email", "password", "turnstile_token"]);
         const email = emailInput(body.email);
         const password = passwordInput(body.password);
-        await verifyTurnstile(request, turnstileInput(body.turnstile_token, {
+        await verifyAuthChallenge(request, env, config, turnstileInput(body.turnstile_token, {
           required: Boolean(config.turnstileSecret),
-        }), config, fetchImpl);
+        }), "email_login", fetchImpl);
         if (config.localMode) {
           await enforceRateLimit(repository, request, "login_ip", "*", timestamp, 30, 900);
         }
@@ -290,7 +281,14 @@ export function createEmailAuth(dependencies = {}) {
         const body = await readJson(request, 4_096);
         exactInput(body, ["email", "turnstile_token"]);
         const email = emailInput(body.email);
-        await verifyTurnstile(request, turnstileInput(body.turnstile_token), config, fetchImpl);
+        await verifyAuthChallenge(
+          request,
+          env,
+          config,
+          turnstileInput(body.turnstile_token),
+          "forgot_password",
+          fetchImpl,
+        );
         await enforceRateLimit(repository, request, "forgot_password", email.normalized, timestamp, 5, 3600);
         const user = await repository.getUserByEmail(email.normalized);
         if (user?.status === "active" && user.email_verified_at) {
@@ -321,7 +319,14 @@ export function createEmailAuth(dependencies = {}) {
         const token = String(body.token || "").trim();
         if (!TOKEN_PATTERN.test(token)) throw new HttpError(400, "invalid_or_expired_token", "重置链接无效或已过期。");
         const password = passwordInput(body.password);
-        await verifyTurnstile(request, turnstileInput(body.turnstile_token), config, fetchImpl);
+        await verifyAuthChallenge(
+          request,
+          env,
+          config,
+          turnstileInput(body.turnstile_token),
+          "reset_password",
+          fetchImpl,
+        );
         await enforceRateLimit(repository, request, "reset_password", await sha256(token), timestamp, 10, 3600);
         const passwordRecord = await hashPassword(password, env);
         const user = await repository.consumePasswordReset(await sha256(token), passwordRecord, timestamp.toISOString());
