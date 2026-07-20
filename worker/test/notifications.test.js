@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { encryptSecret } from "../src/crypto.js";
-import { discoverNotificationChats, sendRunNotification, sendTestNotification } from "../src/notifications.js";
+import { discoverNotificationChats, sendRunNotification, sendTestNotification, __test } from "../src/notifications.js";
 
 const ROOT_KEY = Buffer.alloc(32, 23).toString("base64");
 const BOT_TOKEN = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd";
@@ -23,7 +23,7 @@ async function secret(purpose, plaintext) {
   };
 }
 
-test("failed run notification identifies the user, explains the problem, and links details", async () => {
+test("failed run notification identifies user, content, execution id, and problem", async () => {
   const secrets = new Map([
     ["bot_token", await secret("bot_token", BOT_TOKEN)],
     ["chat_id", await secret("chat_id", CHAT_ID)],
@@ -34,10 +34,12 @@ test("failed run notification identifies the user, explains the problem, and lin
     async getUser() { return { display_name: "小明", email: "user@example.com" }; },
     async getRun() {
       return {
-        id: "run-1",
+        id: "run-1-audit-20260721",
         user_id: "user-1",
         task_name: "音乐积分签到",
         account_name: "主账号",
+        bot: "@music_points_bot",
+        command: "/checkin",
         status: "failed",
         trigger_type: "scheduled",
         duration_ms: 8313,
@@ -60,7 +62,7 @@ test("failed run notification identifies the user, explains the problem, and lin
   }, repository, async (url, init) => {
     captured = { url, init, body: JSON.parse(init.body) };
     return new Response(null, { status: 200 });
-  }, "run-1");
+  }, "run-1-audit-20260721");
 
   assert.deepEqual(result, { sent: true, reason: null });
   assert.match(captured.url, /^https:\/\/api\.telegram\.org\/bot/);
@@ -70,6 +72,9 @@ test("failed run notification identifies the user, explains the problem, and lin
   assert.match(captured.body.text, /任务执行失败/);
   assert.match(captured.body.text, /任务：<\/b>音乐积分签到/);
   assert.match(captured.body.text, /用户：<\/b>小明/);
+  assert.match(captured.body.text, /执行编号：<\/b><code>run-1-audit-20260721<\/code>/);
+  assert.match(captured.body.text, /目标：<\/b>@music_points_bot/);
+  assert.match(captured.body.text, /任务消息：<\/b><code>\/checkin<\/code>/);
   assert.match(captured.body.text, /账号：<\/b>主账号/);
   assert.match(captured.body.text, /耗时：<\/b>8\.3 秒/);
   assert.match(captured.body.text, /原因：<\/b>机器人暂时没有响应/);
@@ -84,7 +89,7 @@ test("failed run notification identifies the user, explains the problem, and lin
   });
 });
 
-test("successful task broadcasts keep a short body and one details button", async () => {
+test("successful task broadcasts include the auditable task snapshot", async () => {
   const secrets = new Map([
     ["bot_token", await secret("bot_token", BOT_TOKEN)],
     ["chat_id", await secret("chat_id", CHAT_ID)],
@@ -95,10 +100,12 @@ test("successful task broadcasts keep a short body and one details button", asyn
     async getUser() { return { display_name: "小红", email: "red@example.com" }; },
     async getRun() {
       return {
-        id: "run-2",
+        id: "run-2-audit-20260721",
         user_id: "user-2",
         task_name: "开户积分签到",
         account_name: "备用账号",
+        bot: "@points_bot",
+        command: "领取今日积分",
         status: "success",
         trigger_type: "manual",
         duration_ms: 8373,
@@ -115,11 +122,14 @@ test("successful task broadcasts keep a short body and one details button", asyn
   }, repository, async (_url, init) => {
     message = JSON.parse(init.body);
     return new Response(null, { status: 200 });
-  }, "run-2");
+  }, "run-2-audit-20260721");
 
   assert.match(message.text, /任务执行成功/);
   assert.match(message.text, /任务：<\/b>开户积分签到/);
   assert.match(message.text, /用户：<\/b>小红/);
+  assert.match(message.text, /执行编号：<\/b><code>run-2-audit-20260721<\/code>/);
+  assert.match(message.text, /目标：<\/b>@points_bot/);
+  assert.match(message.text, /任务消息：<\/b><code>领取今日积分<\/code>/);
   assert.match(message.text, /耗时：<\/b>8\.4 秒/);
   assert.doesNotMatch(message.text, /备用账号|手动执行|very long success log|日志|https:\/\/|查看执行详情/);
   assert.deepEqual(message.reply_markup, {
@@ -128,6 +138,19 @@ test("successful task broadcasts keep a short body and one details button", asyn
       url: "https://github.com/owner/repo/actions/runs/123456789",
     }]],
   });
+});
+
+test("long task messages show both ends, length, and redacted sensitive values", () => {
+  const advertisingTail = "立即联系 @spam_shop 购买推广服务";
+  const input = `正常开头 ${"A".repeat(700)} password=private-value ${advertisingTail}`;
+  const preview = __test.taskMessageAudit(input, []);
+  assert.equal(preview.truncated, true);
+  assert.ok(preview.length > 700);
+  assert.match(preview.text, /^正常开头/);
+  assert.match(preview.text, /省略 \d+ 字/);
+  assert.match(preview.text, /\[REDACTED\]/);
+  assert.match(preview.text, /立即联系 @spam_shop 购买推广服务$/);
+  assert.equal(preview.text.includes("private-value"), false);
 });
 
 test("disabled notifications do not read secrets or call Telegram", async () => {
@@ -165,7 +188,7 @@ test("notification setup discovers deduplicated Telegram chats without exposing 
   ] });
 });
 
-test("test notification explains the platform-wide broadcast behavior", async () => {
+test("test notification explains platform-wide audit fields", async () => {
   const secrets = new Map([
     ["bot_token", await secret("bot_token", BOT_TOKEN)],
     ["chat_id", await secret("chat_id", CHAT_ID)],
@@ -182,5 +205,8 @@ test("test notification explains the platform-wide broadcast behavior", async ()
   assert.equal(message.chat_id, CHAT_ID);
   assert.equal(message.parse_mode, "HTML");
   assert.match(message.text, /所有用户的任务结果/);
+  assert.match(message.text, /任务消息摘要/);
+  assert.match(message.text, /执行编号/);
+  assert.match(message.text, /脱敏/);
   assert.equal(message.text.includes(BOT_TOKEN), false);
 });
