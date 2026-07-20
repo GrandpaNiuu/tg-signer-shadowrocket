@@ -50,17 +50,17 @@ def _message_text(message: Any) -> str:
     return str(getattr(message, "text", None) or getattr(message, "caption", None) or "")
 
 
-def _button_texts(message: Any) -> list[tuple[str, Any]]:
+def _button_texts(message: Any) -> list[str]:
     markup = getattr(message, "reply_markup", None)
     rows = getattr(markup, "inline_keyboard", None)
     if not rows:
         return []
-    values: list[tuple[str, Any]] = []
+    values: list[str] = []
     for row in rows:
         for button in row:
             text = str(getattr(button, "text", "") or "").strip()
             if text:
-                values.append((text, button))
+                values.append(text)
     return values
 
 
@@ -82,13 +82,6 @@ class TgSignerSkill(Skill):
                 "num_of_dialogs",
                 minimum=1,
                 maximum=500,
-            ),
-            "target": params.get("target"),
-            "text": params.get("text"),
-            "message_thread_id": optional_int(
-                params.get("message_thread_id"),
-                "message_thread_id",
-                minimum=1,
             ),
         }
 
@@ -116,6 +109,9 @@ class TgSignerSkill(Skill):
             return None
         if value.get("version") != _GUIDED_FLOW_VERSION:
             raise SkillValidationError("guided sign-in configuration version is unsupported")
+
+        target = required_text(value.get("target"), "target", maximum=128)
+        text = required_text(value.get("text"), "text", maximum=4000)
         button_text = str(value.get("button_text") or "").strip()
         if len(button_text) > 128:
             raise SkillValidationError("button_text is too long")
@@ -133,10 +129,18 @@ class TgSignerSkill(Skill):
             minimum=5,
             maximum=120,
         )
+        thread_id = optional_int(
+            value.get("message_thread_id"),
+            "message_thread_id",
+            minimum=1,
+        )
         return {
+            "target": target,
+            "text": text,
             "button_text": button_text,
             "success_keywords": keywords,
             "wait_seconds": wait_seconds,
+            "message_thread_id": thread_id,
         }
 
     @staticmethod
@@ -150,20 +154,19 @@ class TgSignerSkill(Skill):
         messages.reverse()
         return messages
 
-    async def _execute_guided(self, signer, values: dict[str, Any], flow: dict[str, Any]) -> dict[str, Any]:
+    async def _execute_guided(self, signer, flow: dict[str, Any]) -> dict[str, Any]:
         await signer.login(num_of_dialogs=1, print_chat=False)
-        target = _target(values["target"])
-        text = required_text(values["text"], "text", maximum=4000)
+        target = _target(flow["target"])
+        text = flow["text"]
         button_text = flow["button_text"]
         success_keywords = flow["success_keywords"]
         wait_seconds = flow["wait_seconds"]
-        thread_id = values["message_thread_id"]
 
         async with signer.app:
             sent = await signer.send_message(
                 target,
                 text,
-                message_thread_id=thread_id,
+                message_thread_id=flow["message_thread_id"],
             )
             sent_id = int(getattr(sent, "id", 0) or 0)
             if not button_text and not success_keywords:
@@ -186,7 +189,7 @@ class TgSignerSkill(Skill):
                             "matched_reply": message_text[:240],
                         }
                     if button_text and not clicked:
-                        for actual_text, _button in _button_texts(message):
+                        for actual_text in _button_texts(message):
                             if button_text.casefold() in actual_text.casefold():
                                 await message.click(actual_text)
                                 clicked = True
@@ -229,7 +232,7 @@ class TgSignerSkill(Skill):
                     )
                     if guided_flow is not None:
                         result = signer.loop.run_until_complete(
-                            self._execute_guided(signer, values, guided_flow)
+                            self._execute_guided(signer, guided_flow)
                         )
                         return SkillResult(data={"task_name": values["task_name"], **result})
                     if import_text is not None:
