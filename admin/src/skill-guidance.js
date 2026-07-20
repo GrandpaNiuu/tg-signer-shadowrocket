@@ -191,7 +191,7 @@ function updatePageCopy() {
 }
 
 let scheduled = false;
-const observer = new MutationObserver(() => {
+const observer = typeof MutationObserver === "undefined" ? null : new MutationObserver(() => {
   if (scheduled) return;
   scheduled = true;
   queueMicrotask(() => {
@@ -201,6 +201,7 @@ const observer = new MutationObserver(() => {
 });
 
 export function applySkillGuidance() {
+  if (!observer || typeof document === "undefined") return;
   observer.disconnect();
   try {
     updateNavigation();
