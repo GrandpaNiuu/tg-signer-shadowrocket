@@ -1,3 +1,6 @@
+// Shared runtime state contract. Updating this module intentionally participates
+// in Worker deployment because Scheduler, Runner callbacks, and Admin status
+// presentation must stay on the same deployed version.
 export const ACCOUNT_STATUSES = Object.freeze({
   DISCONNECTED: "disconnected",
   LOGIN_PENDING: "login_pending",
