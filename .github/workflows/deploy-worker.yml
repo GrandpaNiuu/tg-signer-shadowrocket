@@ -47,6 +47,7 @@ jobs:
         with:
           node-version: "22"
       - run: python -m unittest discover -s runner/tests -p 'test_*.py' -v
+      - run: python -m compileall -q listener
       - run: npm test --prefix worker
       - run: node --test tools/*.test.mjs
 
@@ -104,6 +105,7 @@ jobs:
           TURNSTILE_SECRET_KEY: ${{ secrets.TURNSTILE_SECRET_KEY }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           AUTH_EMAIL_FROM: ${{ vars.AUTH_EMAIL_FROM }}
+          LISTENER_API_TOKEN: ${{ secrets.LISTENER_API_TOKEN }}
         run: |
           set -euo pipefail
           python - <<'PY'
@@ -119,7 +121,7 @@ jobs:
           output = pathlib.Path(os.environ["GITHUB_OUTPUT"])
 
           if os.environ["DEPLOYMENT_MODE"] == "bootstrap":
-              output.write_text("configured=false\n", encoding="utf-8")
+              output.write_text("configured=false\nlistener_configured=false\n", encoding="utf-8")
               sys.exit(0)
 
           names = ["TURNSTILE_SITE_KEY", "TURNSTILE_SECRET_KEY", "RESEND_API_KEY", "AUTH_EMAIL_FROM"]
@@ -150,6 +152,14 @@ jobs:
                   "RESEND_API_KEY": values["RESEND_API_KEY"],
               })
 
+          listener_token = os.environ.get("LISTENER_API_TOKEN", "").strip()
+          if listener_token:
+              if len(listener_token) < 32 or len(listener_token) > 512 or any(character.isspace() for character in listener_token):
+                  print("LISTENER_API_TOKEN must be 32-512 non-whitespace characters.")
+                  sys.exit(1)
+              secrets["LISTENER_API_TOKEN"] = listener_token
+          listener_configured = bool(listener_token)
+
           secret_file = pathlib.Path("worker/.deploy-secrets.json")
           secret_file.write_text(json.dumps(secrets, ensure_ascii=False), encoding="utf-8")
           secret_file.chmod(0o600)
@@ -157,7 +167,9 @@ jobs:
               print(f"::add-mask::{value}")
           with output.open("a", encoding="utf-8") as stream:
               stream.write(f"configured={'true' if configured else 'false'}\n")
+              stream.write(f"listener_configured={'true' if listener_configured else 'false'}\n")
           print("Verified email authentication: " + ("configured" if configured else "registration remains safely closed"))
+          print("Realtime Telegram Listener: " + ("Worker token configured" if listener_configured else "disabled until LISTENER_API_TOKEN is added"))
           PY
 
       - name: Normalize Cloudflare API token
@@ -253,13 +265,19 @@ jobs:
         if: ${{ env.DEPLOYMENT_MODE != 'bootstrap' }}
         env:
           BASE_URL: ${{ steps.worker_url.outputs.base_url }}
+          LISTENER_CONFIGURED: ${{ steps.email_auth.outputs.listener_configured }}
         run: |
           set -euo pipefail
           file="${RUNNER_TEMP}/worker-ready.json"
           status="$(curl --silent --show-error --retry 6 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 20 --output "$file" --write-out '%{http_code}' "$BASE_URL/ready")"
           cat "$file"
           [ "$status" = "200" ] || { echo "Worker /ready returned HTTP $status"; exit 1; }
-          RESPONSE_FILE="$file" node -e 'const p=JSON.parse(require("node:fs").readFileSync(process.env.RESPONSE_FILE,"utf8")); if(p?.ok!==true) throw new Error("Worker /ready is not ready")'
+          RESPONSE_FILE="$file" node - <<'NODE'
+          const payload = JSON.parse(require("node:fs").readFileSync(process.env.RESPONSE_FILE, "utf8"));
+          if (payload?.ok !== true) throw new Error("Worker /ready is not ready");
+          const expected = process.env.LISTENER_CONFIGURED === "true" ? "configured" : "disabled";
+          if (payload?.checks?.realtime_listener !== expected) throw new Error("Realtime listener readiness state does not match deployment inputs.");
+          NODE
 
       - name: Verify deployed email authentication state
         if: ${{ env.DEPLOYMENT_MODE != 'bootstrap' }}
