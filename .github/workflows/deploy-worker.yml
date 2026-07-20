@@ -19,6 +19,8 @@ on:
       - ".github/workflows/deploy-worker.yml"
       - "worker/**"
       - "tools/d1-takeover-audit.mjs"
+      - "tools/d1-takeover-audit.test.mjs"
+      - "tools/deploy-workflow.test.mjs"
 
 permissions:
   contents: read
@@ -85,11 +87,15 @@ jobs:
             echo "Missing GitHub Secret: CLOUDFLARE_ACCOUNT_ID"
             exit 1
           fi
-          if [ "${#PASSWORD_PEPPER}" -lt 16 ]; then
+          if [ "$DEPLOYMENT_MODE" != "bootstrap" ] && [ "${#PASSWORD_PEPPER}" -lt 16 ]; then
             echo "Missing or invalid GitHub Secret: PASSWORD_PEPPER"
             exit 1
           fi
-          echo "Cloudflare deployment secrets are present."
+          if [ "$DEPLOYMENT_MODE" = "bootstrap" ]; then
+            echo "Bootstrap mode: application Worker secrets may be configured after the first deployment."
+          else
+            echo "Cloudflare deployment secrets are present."
+          fi
 
       - name: Normalize Cloudflare API token
         id: normalize_token
@@ -139,7 +145,18 @@ jobs:
           audit_json="$(npx --yes wrangler@4.94.0 d1 execute DB --remote --config worker/wrangler.toml --json --command "SELECT (SELECT COUNT(*) FROM accounts) AS account_count, (SELECT COUNT(*) FROM accounts WHERE status = 'connected') AS connected_account_count, (SELECT COUNT(*) FROM accounts a WHERE a.status = 'connected' AND EXISTS (SELECT 1 FROM secret_values s WHERE s.owner_type = 'account' AND s.owner_id = a.id AND s.purpose = 'telegram_session')) AS connected_session_account_count, (SELECT COUNT(*) FROM tasks) AS task_count, (SELECT COUNT(*) FROM task_runs WHERE status = 'success') AS successful_run_count;")"
           printf '%s' "$audit_json" | node tools/d1-takeover-audit.mjs
 
-      - name: Deploy Worker
+      - name: Deploy Worker bootstrap
+        if: ${{ env.DEPLOYMENT_MODE == 'bootstrap' }}
+        uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3.15.0
+        with:
+          apiToken: ${{ steps.normalize_token.outputs.token }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: worker
+          wranglerVersion: "4.94.0"
+          command: deploy --config wrangler.toml
+
+      - name: Deploy Worker with configured secrets
+        if: ${{ env.DEPLOYMENT_MODE != 'bootstrap' }}
         uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3.15.0
         with:
           apiToken: ${{ steps.normalize_token.outputs.token }}
@@ -157,22 +174,30 @@ jobs:
           WORKER_URL: ${{ vars.WORKER_URL }}
         run: |
           set -euo pipefail
-          if [ -z "${WORKER_URL:-}" ]; then
-            echo "Missing GitHub Repository Variable: WORKER_URL"
-            exit 1
+          base_url="${WORKER_URL:-}"
+          if [ -z "$base_url" ]; then
+            audience="$(sed -n 's/^RUNNER_OIDC_AUDIENCE = "\(.*\)"$/\1/p' worker/wrangler.toml | head -n 1)"
+            case "$audience" in
+              https://*/api/runner) base_url="${audience%/api/runner}" ;;
+              *)
+                echo "WORKER_URL is missing and RUNNER_OIDC_AUDIENCE cannot be used as a fallback."
+                exit 1
+                ;;
+            esac
+            echo "WORKER_URL is not configured; using the Worker origin derived from RUNNER_OIDC_AUDIENCE."
           fi
-          base_url="${WORKER_URL%/}"
+          base_url="${base_url%/}"
           case "$base_url" in
             https://*) ;;
             *)
-              echo "WORKER_URL must use HTTPS."
+              echo "Worker smoke-test URL must use HTTPS."
               exit 1
               ;;
           esac
 
           check_endpoint() {
             endpoint="$1"
-            body="$(curl --fail --silent --show-error --retry 6 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 20 "$base_url/$endpoint")"
+            body="$(curl --fail-with-body --silent --show-error --retry 6 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 20 "$base_url/$endpoint")"
             ENDPOINT="$endpoint" RESPONSE_BODY="$body" node - <<'NODE'
           const endpoint = process.env.ENDPOINT;
           let payload;
