@@ -121,19 +121,22 @@ export async function sendRunNotification(env, repository, fetchImpl, runId) {
   const logTail = run.status === "success" ? null : sanitizedLogTail(run.logs, knownSecrets);
   const attempts = Number(run.attempt_count || 0);
   const trigger = run.trigger_type === "manual" ? "手动执行" : "定时执行";
+  const isSuccess = run.status === "success";
 
   const lines = [
     `${presentation.icon} <b>${presentation.title}</b>`,
     "",
     `<b>任务：</b>${escapeHtml(taskName)}`,
     `<b>用户：</b>${escapeHtml(userLabel(user, run))}`,
-    `<b>账号：</b>${escapeHtml(accountName)}`,
-    `<b>方式：</b>${trigger}`,
     `<b>耗时：</b>${durationLabel(run.duration_ms)}`,
-    ...(attempts > 1 ? [`<b>尝试：</b>${attempts} 次`] : []),
-    ...(errorMessage ? ["", `<b>原因：</b>${escapeHtml(sanitizeLogText(errorMessage, { maxLines: 1, maxLength: 240 }))}`] : []),
-    ...(logTail && !errorMessage ? ["", `<b>诊断：</b>${escapeHtml(logTail)}`] : []),
-    ...(run.status !== "success" && actionsUrl ? ["", "可点击下方按钮查看完整执行详情。"] : []),
+    ...(!isSuccess ? [
+      `<b>账号：</b>${escapeHtml(accountName)}`,
+      `<b>方式：</b>${trigger}`,
+      ...(attempts > 1 ? [`<b>尝试：</b>${attempts} 次`] : []),
+      ...(errorMessage ? ["", `<b>原因：</b>${escapeHtml(sanitizeLogText(errorMessage, { maxLines: 1, maxLength: 240 }))}`] : []),
+      ...(logTail && !errorMessage ? ["", `<b>诊断：</b>${escapeHtml(logTail)}`] : []),
+      ...(actionsUrl ? ["", "可点击下方按钮查看完整执行详情。"] : []),
+    ] : []),
   ];
 
   const body = {
@@ -141,7 +144,7 @@ export async function sendRunNotification(env, repository, fetchImpl, runId) {
     text: lines.join("\n"),
     parse_mode: "HTML",
     disable_web_page_preview: true,
-    ...(actionsUrl ? {
+    ...(!isSuccess && actionsUrl ? {
       reply_markup: {
         inline_keyboard: [[{ text: "查看执行详情", url: actionsUrl }]],
       },
