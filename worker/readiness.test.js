@@ -65,15 +65,17 @@ test("ready returns 200 when core and realtime schema, configuration, and secret
 
 test("ready reports the optional realtime listener token without making it a core dependency", async () => {
   const worker = createWorker({ uuid: fixedUuid });
+  const listenerToken = "listener-secret-" + "x".repeat(48);
   const response = await worker.fetch(
     new Request("https://example.test/ready"),
-    readyEnv({ LISTENER_API_TOKEN: "x".repeat(48) }),
+    readyEnv({ LISTENER_API_TOKEN: listenerToken }),
   );
   const body = await response.json();
 
   assert.equal(response.status, 200);
   assert.equal(body.ok, true);
   assert.equal(body.checks.realtime_listener, "configured");
+  assert.equal(JSON.stringify(body).includes(listenerToken), false);
 });
 
 test("ready returns 503 and safe diagnostics when dependencies are missing", async () => {
