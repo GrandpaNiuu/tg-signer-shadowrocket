@@ -31,7 +31,7 @@ test("non-administrators cannot see account connection detection controls", asyn
   assert.match(source, /button\.hidden = true/);
 });
 
-test("production page loads the realtime automation module", async () => {
+test("production page loads the current realtime automation module", async () => {
   const index = await readFile(indexUrl, "utf8");
-  assert.match(index, /\/src\/realtime-automation\.js\?v=20260721-1/);
+  assert.match(index, /\/src\/realtime-automation\.js\?v=20260721-2/);
 });
