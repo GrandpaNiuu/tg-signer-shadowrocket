@@ -9,6 +9,7 @@ on:
         default: fresh_install
         type: choice
         options:
+          - bootstrap
           - fresh_install
           - legacy_takeover
   push:
@@ -61,7 +62,7 @@ jobs:
         run: |
           set -euo pipefail
           case "$DEPLOYMENT_MODE" in
-            fresh_install|legacy_takeover) ;;
+            bootstrap|fresh_install|legacy_takeover) ;;
             *)
               echo "Unsupported deployment mode: $DEPLOYMENT_MODE"
               exit 1
@@ -150,3 +151,44 @@ jobs:
           command: deploy --config wrangler.toml
         env:
           PASSWORD_PEPPER: ${{ secrets.PASSWORD_PEPPER }}
+
+      - name: Smoke test deployed Worker
+        env:
+          WORKER_URL: ${{ vars.WORKER_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${WORKER_URL:-}" ]; then
+            echo "Missing GitHub Repository Variable: WORKER_URL"
+            exit 1
+          fi
+          base_url="${WORKER_URL%/}"
+          case "$base_url" in
+            https://*) ;;
+            *)
+              echo "WORKER_URL must use HTTPS."
+              exit 1
+              ;;
+          esac
+
+          check_endpoint() {
+            endpoint="$1"
+            body="$(curl --fail --silent --show-error --retry 6 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 20 "$base_url/$endpoint")"
+            ENDPOINT="$endpoint" RESPONSE_BODY="$body" node - <<'NODE'
+          const endpoint = process.env.ENDPOINT;
+          let payload;
+          try {
+            payload = JSON.parse(process.env.RESPONSE_BODY || "null");
+          } catch {
+            throw new Error(`Worker /${endpoint} returned invalid JSON.`);
+          }
+          if (payload?.ok !== true) throw new Error(`Worker /${endpoint} is not healthy.`);
+          console.log(`Worker /${endpoint} verified.`);
+          NODE
+          }
+
+          check_endpoint health
+          if [ "$DEPLOYMENT_MODE" != "bootstrap" ]; then
+            check_endpoint ready
+          else
+            echo "Bootstrap deployment completed; configure Worker Secrets, then rerun fresh_install to require /ready."
+          fi
