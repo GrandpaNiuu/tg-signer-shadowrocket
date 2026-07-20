@@ -1120,7 +1120,12 @@ test("configured notification secrets are decrypted only to send a completed run
   assert.match(telegramMessages[0].body.text, /用户：<\/b>GrandpaNiuu/);
   assert.match(telegramMessages[0].body.text, /耗时：<\/b>/);
   assert.doesNotMatch(telegramMessages[0].body.text, /账号：|方式：|GitHub Actions|check-in done|查看执行详情/);
-  assert.equal(telegramMessages[0].body.reply_markup, undefined);
+  assert.deepEqual(telegramMessages[0].body.reply_markup, {
+    inline_keyboard: [[{
+      text: "查看执行详情",
+      url: "https://github.com/owner/repo/actions/runs/9001",
+    }]],
+  });
   assert.equal(telegramMessages[0].body.text.includes("must-not-leak"), false);
   assert.equal(telegramMessages[0].body.text.includes(token), false);
 });
