@@ -14,25 +14,60 @@ function bindRepositoryMember(target, property) {
   return typeof value === "function" ? value.bind(target) : value;
 }
 
-function withLegacyEmailVerification(repository) {
-  if (typeof repository.consumeEmailVerification !== "function") return repository;
+async function createVerificationToken(repository, token) {
+  if (!repository.db?.prepare || typeof repository.db.batch !== "function") {
+    return repository.createAuthToken(token);
+  }
+  await repository.db.batch([
+    repository.db.prepare(`DELETE FROM auth_tokens
+      WHERE user_id = ? AND token_type = 'verify_email'
+      AND (consumed_at IS NOT NULL OR expires_at <= ?)`)
+      .bind(token.user_id, token.created_at),
+    repository.db.prepare(`INSERT INTO auth_tokens
+      (id, token_hash, user_id, token_type, expires_at, created_at)
+      VALUES (?, ?, ?, 'verify_email', ?, ?)`)
+      .bind(token.id, token.token_hash, token.user_id, token.expires_at, token.created_at),
+  ]);
+}
+
+async function consumeVerificationToken(repository, tokenHash, timestamp) {
+  let user = await repository.consumeEmailVerification(tokenHash, timestamp);
+  if (!user || !repository.db?.prepare) return user;
+
+  if (!user.email_verified_at && user.status === "active") {
+    await repository.db.prepare(`UPDATE users SET email_verified_at = ?, updated_at = ?
+      WHERE id = ? AND status = 'active' AND email_verified_at IS NULL`)
+      .bind(timestamp, timestamp, user.id).run();
+    user = typeof repository.getUser === "function"
+      ? await repository.getUser(user.id)
+      : { ...user, email_verified_at: timestamp };
+  }
+
+  await repository.db.prepare(`DELETE FROM auth_tokens
+    WHERE user_id = ? AND token_type = 'verify_email'`).bind(user.id).run();
+  return user;
+}
+
+function withEmailVerificationLifecycle(repository) {
+  if (typeof repository.consumeEmailVerification !== "function"
+    || typeof repository.createAuthToken !== "function") return repository;
   return new Proxy(repository, {
     get(target, property) {
-      if (property !== "consumeEmailVerification") return bindRepositoryMember(target, property);
-      return async (tokenHash, timestamp) => {
-        const user = await target.consumeEmailVerification(tokenHash, timestamp);
-        if (!user || user.email_verified_at || user.status !== "active" || !target.db?.prepare) return user;
-        await target.db.prepare(`UPDATE users SET email_verified_at = ?, updated_at = ?
-          WHERE id = ? AND status = 'active' AND email_verified_at IS NULL`)
-          .bind(timestamp, timestamp, user.id).run();
-        return typeof target.getUser === "function" ? target.getUser(user.id) : { ...user, email_verified_at: timestamp };
-      };
+      if (property === "createAuthToken") {
+        return async (token) => token?.token_type === "verify_email"
+          ? createVerificationToken(target, token)
+          : target.createAuthToken(token);
+      }
+      if (property === "consumeEmailVerification") {
+        return async (tokenHash, timestamp) => consumeVerificationToken(target, tokenHash, timestamp);
+      }
+      return bindRepositoryMember(target, property);
     },
   });
 }
 
 export function authenticationRepository(repository, now = () => new Date()) {
-  return withPasswordRehash(withLegacyEmailVerification(requiredRepository(repository)), now);
+  return withPasswordRehash(withEmailVerificationLifecycle(requiredRepository(repository)), now);
 }
 
 export function adminWorkspaceRepository(repository, identity) {
@@ -54,4 +89,8 @@ export function schedulerRepository(repository) {
   return withDispatchErrorCodes(requiredRepository(repository));
 }
 
-export const __test = { withLegacyEmailVerification };
+export const __test = {
+  consumeVerificationToken,
+  createVerificationToken,
+  withEmailVerificationLifecycle,
+};
