@@ -2,12 +2,22 @@ name: Deploy Cloudflare Worker
 
 on:
   workflow_dispatch:
+    inputs:
+      deployment_mode:
+        description: Deployment safety mode
+        required: true
+        default: fresh_install
+        type: choice
+        options:
+          - fresh_install
+          - legacy_takeover
   push:
     branches:
       - "main"
     paths:
       - ".github/workflows/deploy-worker.yml"
       - "worker/**"
+      - "tools/d1-takeover-audit.mjs"
 
 permissions:
   contents: read
@@ -32,17 +42,32 @@ jobs:
           node-version: "22"
       - run: python -m unittest discover -s runner/tests -p 'test_*.py' -v
       - run: npm test --prefix worker
+      - run: node --test tools/d1-takeover-audit.test.mjs
 
   deploy:
     needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      DEPLOYMENT_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.deployment_mode || 'fresh_install' }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+
+      - name: Validate deployment mode
+        run: |
+          set -euo pipefail
+          case "$DEPLOYMENT_MODE" in
+            fresh_install|legacy_takeover) ;;
+            *)
+              echo "Unsupported deployment mode: $DEPLOYMENT_MODE"
+              exit 1
+              ;;
+          esac
+          echo "Worker deployment mode: $DEPLOYMENT_MODE"
 
       - name: Check required Cloudflare secrets
         env:
@@ -95,46 +120,6 @@ jobs:
               f.write(f"token={token}\n")
           PY
 
-      - name: Verify D1 takeover before retiring legacy configuration
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ steps.normalize_token.outputs.token }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          set -euo pipefail
-          audit_json="$(npx --yes wrangler@4.94.0 d1 execute DB --remote --config worker/wrangler.toml --json --command "SELECT (SELECT COUNT(*) FROM accounts) AS account_count, (SELECT COUNT(*) FROM accounts WHERE status = 'connected') AS connected_account_count, (SELECT COUNT(*) FROM accounts a WHERE a.status = 'connected' AND EXISTS (SELECT 1 FROM secret_values s WHERE s.owner_type = 'account' AND s.owner_id = a.id AND s.purpose = 'telegram_session')) AS connected_session_account_count, (SELECT COUNT(*) FROM tasks) AS task_count, (SELECT COUNT(*) FROM task_runs WHERE status = 'success') AS successful_run_count;")"
-          AUDIT_JSON="$audit_json" node - <<'NODE'
-          const payload = JSON.parse(process.env.AUDIT_JSON || "null");
-          function findEvidence(value) {
-            if (Array.isArray(value)) {
-              for (const item of value) {
-                const found = findEvidence(item);
-                if (found) return found;
-              }
-              return null;
-            }
-            if (!value || typeof value !== "object") return null;
-            if (Object.hasOwn(value, "account_count") && Object.hasOwn(value, "successful_run_count")) return value;
-            for (const child of Object.values(value)) {
-              const found = findEvidence(child);
-              if (found) return found;
-            }
-            return null;
-          }
-          const evidence = findEvidence(payload);
-          if (!evidence) throw new Error("D1 retirement audit did not return an inventory row.");
-          const counts = Object.fromEntries(Object.entries(evidence).map(([key, value]) => [key, Number(value)]));
-          if (counts.account_count < 1 || counts.connected_account_count < 1) {
-            throw new Error("D1 retirement blocked: no connected migrated Telegram account.");
-          }
-          if (counts.connected_session_account_count !== counts.connected_account_count) {
-            throw new Error("D1 retirement blocked: a connected account has no encrypted Session record.");
-          }
-          if (counts.task_count < 1 || counts.successful_run_count < 1) {
-            throw new Error("D1 retirement blocked: no migrated task with a successful D1 Runner canary.");
-          }
-          console.log(`D1 takeover verified: ${counts.connected_account_count} connected account(s), ${counts.task_count} task(s), ${counts.successful_run_count} successful run(s).`);
-          NODE
-
       - name: Apply D1 migrations
         uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3.15.0
         with:
@@ -142,6 +127,16 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: "4.94.0"
           command: d1 migrations apply DB --remote --config worker/wrangler.toml
+
+      - name: Verify legacy D1 takeover evidence
+        if: ${{ env.DEPLOYMENT_MODE == 'legacy_takeover' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ steps.normalize_token.outputs.token }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          audit_json="$(npx --yes wrangler@4.94.0 d1 execute DB --remote --config worker/wrangler.toml --json --command "SELECT (SELECT COUNT(*) FROM accounts) AS account_count, (SELECT COUNT(*) FROM accounts WHERE status = 'connected') AS connected_account_count, (SELECT COUNT(*) FROM accounts a WHERE a.status = 'connected' AND EXISTS (SELECT 1 FROM secret_values s WHERE s.owner_type = 'account' AND s.owner_id = a.id AND s.purpose = 'telegram_session')) AS connected_session_account_count, (SELECT COUNT(*) FROM tasks) AS task_count, (SELECT COUNT(*) FROM task_runs WHERE status = 'success') AS successful_run_count;")"
+          printf '%s' "$audit_json" | node tools/d1-takeover-audit.mjs
 
       - name: Deploy Worker
         uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3.15.0
