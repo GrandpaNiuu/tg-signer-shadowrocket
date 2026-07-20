@@ -4,6 +4,7 @@ import { verifyRunnerRequest } from "./auth.js";
 import { errorResponse, json } from "./http.js";
 import { createD1Repository } from "./repository.js";
 import { handleRunnerApi } from "./runner-api.js";
+import { withRunnerSessionState } from "./runner-repository.js";
 import { runScheduler } from "./scheduler.js";
 
 const REQUIRED_READY_CONFIG = Object.freeze([
@@ -152,7 +153,7 @@ export function createWorker(dependencies = {}) {
         }
         if (url.pathname.startsWith("/api/runner/")) {
           const claims = await verifyRunner(request, env);
-          const repository = repositoryFactory(env);
+          const repository = withRunnerSessionState(repositoryFactory(env), now);
           return await withRequestId(
             await handleRunnerApi(request, env, repository, { uuid, now, fetch: fetchImpl }, claims),
             requestId,
