@@ -4,9 +4,10 @@ import asyncio
 import hashlib
 import json
 import logging
+import time
 from collections import deque
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from pyrogram import Client
 from pyrogram.handlers import MessageHandler
@@ -22,6 +23,8 @@ from listener.telegram_runtime import build_client, stop_client
 from listener.worker_client import ListenerWorkerClient, WorkerClientError
 
 LOGGER = logging.getLogger("telegram-listener.manager")
+REPLY_COOLDOWN_SECONDS = 60
+REPLIES_PER_RULE_PER_HOUR = 60
 
 
 @dataclass
@@ -32,7 +35,7 @@ class ManagedAccount:
 
 
 class RealtimeManager:
-    def __init__(self, worker: ListenerWorkerClient) -> None:
+    def __init__(self, worker: ListenerWorkerClient, monotonic: Callable[[], float] = time.monotonic) -> None:
         self.worker = worker
         self.accounts: dict[str, ManagedAccount] = {}
         self.rules_by_account: dict[str, list[dict[str, Any]]] = {}
@@ -40,6 +43,9 @@ class RealtimeManager:
         self.last_error: str | None = None
         self._seen_order: deque[tuple[str, str, str]] = deque(maxlen=10_000)
         self._seen: set[tuple[str, str, str]] = set()
+        self._monotonic = monotonic
+        self._reply_cooldowns: dict[tuple[str, str, str], float] = {}
+        self._reply_windows: dict[str, deque[float]] = {}
 
     @property
     def active_rule_count(self) -> int:
@@ -57,6 +63,30 @@ class RealtimeManager:
             self._seen.discard(oldest)
         self._seen_order.append(key)
         self._seen.add(key)
+        return True
+
+    def _allow_reply(self, rule_id: str, chat_id: str, sender_id: str) -> bool:
+        now = self._monotonic()
+        key = (rule_id, chat_id, sender_id)
+        prior = self._reply_cooldowns.get(key)
+        if prior is not None and now - prior < REPLY_COOLDOWN_SECONDS:
+            return False
+
+        window = self._reply_windows.setdefault(rule_id, deque())
+        while window and now - window[0] >= 3_600:
+            window.popleft()
+        if len(window) >= REPLIES_PER_RULE_PER_HOUR:
+            return False
+
+        self._reply_cooldowns[key] = now
+        window.append(now)
+        if len(self._reply_cooldowns) > 20_000:
+            cutoff = now - 3_600
+            self._reply_cooldowns = {
+                item: timestamp
+                for item, timestamp in self._reply_cooldowns.items()
+                if timestamp >= cutoff
+            }
         return True
 
     async def _report_event(self, payload: dict[str, Any]) -> None:
@@ -101,8 +131,12 @@ class RealtimeManager:
                 "message_preview": content[:600],
             }
             if rule.get("kind") == "keyword_reply":
+                # Only reply to a real Telegram user. This prevents bot-to-bot loops,
+                # channel-post loops, and automatic replies to anonymous service events.
+                if sender is None or bool(getattr(sender, "is_bot", False)):
+                    continue
                 response = str(rule.get("response_text") or "")
-                if not response:
+                if not response or not self._allow_reply(str(rule["id"]), chat_id, sender_id):
                     continue
                 try:
                     await message.reply_text(response)
