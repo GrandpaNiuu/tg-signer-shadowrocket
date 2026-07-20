@@ -23,7 +23,11 @@ const REQUIRED_READY_CONFIG = Object.freeze([
 ]);
 
 const READY_SCHEMA_SQL = `SELECT COUNT(*) AS ready FROM sqlite_master
-  WHERE type = 'table' AND name IN ('accounts', 'tasks', 'task_runs', 'secret_values')`;
+  WHERE type = 'table' AND name IN (
+    'accounts', 'tasks', 'task_runs', 'secret_values',
+    'bot_inspections', 'realtime_rules', 'listener_instances', 'listener_events'
+  )`;
+const REQUIRED_READY_TABLE_COUNT = 8;
 const CF_RAY_PATTERN = /^[A-Za-z0-9-]{1,80}$/;
 
 function defaultUuid() {
@@ -87,7 +91,7 @@ async function checkReadiness(env) {
   if (env.DB) {
     try {
       const result = await env.DB.prepare(READY_SCHEMA_SQL).first();
-      database = Number(result?.ready) === 4 ? "ok" : "schema_missing";
+      database = Number(result?.ready) === REQUIRED_READY_TABLE_COUNT ? "ok" : "schema_missing";
     } catch {
       database = "error";
     }
