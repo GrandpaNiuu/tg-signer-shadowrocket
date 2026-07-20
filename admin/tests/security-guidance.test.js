@@ -8,10 +8,12 @@ async function source(path) {
   return readFile(new URL(path, root), "utf8");
 }
 
-test("admin shell loads secure authentication and platform broadcast guidance", async () => {
+test("admin shell loads versioned secure authentication and platform broadcast guidance", async () => {
   const index = await source("index.html");
-  assert.match(index, /src="\/src\/auth-security\.js"/);
-  assert.match(index, /src="\/src\/notification-guidance\.js"/);
+  assert.match(index, /src="\/src\/app\.js\?v=[0-9-]+"/);
+  assert.match(index, /src="\/src\/auth-security\.js\?v=[0-9-]+"/);
+  assert.match(index, /src="\/src\/notification-guidance\.js\?v=[0-9-]+"/);
+  assert.match(index, /href="\/assets\/styles\.css\?v=[0-9-]+"/);
 });
 
 test("registration guidance distinguishes available GitHub registration from closed email registration", async () => {
