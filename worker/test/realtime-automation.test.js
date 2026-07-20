@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
+import { createWorker } from "../src/app.js";
 import { __test } from "../src/realtime-automation.js";
 
 const migrationUrl = new URL("../migrations/0100_realtime_automation.sql", import.meta.url);
@@ -58,6 +59,23 @@ test("listener bearer comparison is deterministic without exposing the secret", 
   assert.equal(await __test.secureEqual("same-secret", "other-secret"), false);
 });
 
+test("bot inspection fails before creating data when the listener token is absent", async () => {
+  const worker = createWorker({
+    uuid: () => "request-id",
+    repositoryFactory: () => ({}),
+    verifyAdmin: async () => ({ authenticated: true, user_id: "user-1", role: "user" }),
+  });
+  const response = await worker.fetch(new Request("https://worker.example/api/v1/bot-inspections", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ account_id: "account-1", target: "@example_bot" }),
+  }), {});
+  const body = await response.json();
+  assert.equal(response.status, 503);
+  assert.equal(body.error.code, "listener_not_configured");
+  assert.match(body.error.message, /常驻 Listener/);
+});
+
 test("realtime migration keeps user inspections and administrator rules separate", async () => {
   const sql = await readFile(migrationUrl, "utf8");
   for (const table of ["bot_inspections", "realtime_rules", "listener_instances", "listener_events"]) {
@@ -74,6 +92,7 @@ test("Worker routes listener traffic before browser workspace APIs", async () =>
   assert.ok(listenerIndex > 0 && workspaceIndex > listenerIndex);
   assert.match(app, /handleWorkspaceRealtimeApi/);
   assert.match(app, /realtime_listener/);
+  assert.match(app, /listener_not_configured/);
 });
 
 test("only administrators can configure continuous monitoring and account validation", async () => {
