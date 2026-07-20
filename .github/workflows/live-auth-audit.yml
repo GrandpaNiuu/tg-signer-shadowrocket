@@ -1,5 +1,6 @@
 name: Live Authentication Audit
 
+# Diagnostic probe branch: do not merge.
 on:
   workflow_dispatch:
     inputs:
