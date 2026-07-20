@@ -2,8 +2,9 @@ name = "tg-signer-shadowrocket"
 main = "cloudflare-worker.js"
 compatibility_date = "2025-01-01"
 
-# Runtime configuration is redeployed only after the secure authentication and
-# beginner-friendly notification contracts pass the repository test suites.
+# Runtime deployment includes the D1 realtime schema and the authenticated
+# Listener API. The external Listener remains disabled until LISTENER_API_TOKEN
+# is configured; existing scheduled tasks continue to operate independently.
 # The Worker tick is minute-based; tasks may be dispatched ahead so the Runner
 # can wait until the configured second.
 [triggers]
