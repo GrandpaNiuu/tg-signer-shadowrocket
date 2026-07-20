@@ -1,2 +1,5 @@
 # Immutable audit baseline: tg-signer 0.9.0b2.
 tg-signer[yaml] @ git+https://github.com/amchii/tg-signer.git@95a98572dcef5e0b96fc17e6a2331c8f4dc9d886
+# Pyrogram-compatible native crypto acceleration. This removes the noisy
+# fallback warning and reduces CPU time for Telegram encryption operations.
+TgCrypto==1.2.5
