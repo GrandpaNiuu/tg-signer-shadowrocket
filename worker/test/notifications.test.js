@@ -23,7 +23,7 @@ async function secret(purpose, plaintext) {
   };
 }
 
-test("run notification is concise, identifies the user, and uses a details button", async () => {
+test("failed run notification identifies the user, explains the problem, and links details", async () => {
   const secrets = new Map([
     ["bot_token", await secret("bot_token", BOT_TOKEN)],
     ["chat_id", await secret("chat_id", CHAT_ID)],
@@ -84,7 +84,7 @@ test("run notification is concise, identifies the user, and uses a details butto
   });
 });
 
-test("successful task broadcasts omit log noise and raw action URLs", async () => {
+test("successful task broadcasts show only the result a beginner needs", async () => {
   const secrets = new Map([
     ["bot_token", await secret("bot_token", BOT_TOKEN)],
     ["chat_id", await secret("chat_id", CHAT_ID)],
@@ -92,6 +92,7 @@ test("successful task broadcasts omit log noise and raw action URLs", async () =
   const repository = {
     async getSettings() { return { notifications_enabled: true }; },
     async getSecretByOwnerPurpose(_ownerType, _ownerId, purpose) { return secrets.get(purpose); },
+    async getUser() { return { display_name: "小红", email: "red@example.com" }; },
     async getRun() {
       return {
         id: "run-2",
@@ -117,9 +118,11 @@ test("successful task broadcasts omit log noise and raw action URLs", async () =
   }, "run-2");
 
   assert.match(message.text, /任务执行成功/);
-  assert.match(message.text, /手动执行/);
-  assert.doesNotMatch(message.text, /very long success log|日志|https:\/\//);
-  assert.equal(message.reply_markup.inline_keyboard[0][0].text, "查看执行详情");
+  assert.match(message.text, /任务：<\/b>开户积分签到/);
+  assert.match(message.text, /用户：<\/b>小红/);
+  assert.match(message.text, /耗时：<\/b>8\.4 秒/);
+  assert.doesNotMatch(message.text, /备用账号|手动执行|very long success log|日志|https:\/\/|查看执行详情/);
+  assert.equal(message.reply_markup, undefined);
 });
 
 test("disabled notifications do not read secrets or call Telegram", async () => {
