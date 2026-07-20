@@ -37,6 +37,7 @@ jobs:
         with:
           node-version: "22"
       - name: Run complete Worker suite
+        id: worker_tests
         shell: bash
         run: |
           set -o pipefail
@@ -48,6 +49,14 @@ jobs:
             tail -n 180 "$log_file"
             exit 1
           fi
+      - name: Upload Worker failure diagnostics
+        if: ${{ failure() && steps.worker_tests.outcome == 'failure' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: worker-test-diagnostics-${{ github.run_id }}
+          path: ${{ runner.temp }}/worker-tests.log
+          if-no-files-found: error
+          retention-days: 3
       - name: Test deployment safety tooling
         run: node --test tools/*.test.mjs
 
