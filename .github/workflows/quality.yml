@@ -34,6 +34,8 @@ jobs:
           node-version: "22"
       - name: Run complete Worker suite
         run: npm test --prefix worker
+      - name: Test deployment safety tooling
+        run: node --test tools/d1-takeover-audit.test.mjs
 
   admin:
     runs-on: ubuntu-latest
