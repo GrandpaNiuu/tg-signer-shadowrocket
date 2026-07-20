@@ -5,6 +5,9 @@ import { sanitizedError } from "./redaction.js";
 export const DISPATCH_ERROR_CODES = Object.freeze({
   HTTP: "github_dispatch_http_error",
   NETWORK: "github_dispatch_network_error",
+  TIMEOUT: "github_dispatch_timeout",
+  CONFIG: "github_dispatch_config_error",
+  STATE_UPDATE: "github_dispatch_state_update_failed",
 });
 
 function plusSeconds(date, seconds) {
@@ -24,6 +27,12 @@ function dispatchFailureMessage(code, message) {
   return `[${code}] ${message}`;
 }
 
+function classifyDispatchException(error) {
+  if (error?.name === "AbortError") return DISPATCH_ERROR_CODES.TIMEOUT;
+  if (error?.code === "github_config_missing") return DISPATCH_ERROR_CODES.CONFIG;
+  return DISPATCH_ERROR_CODES.NETWORK;
+}
+
 function withHiddenProperty(object, name, value) {
   Object.defineProperty(object, name, {
     value,
@@ -36,6 +45,14 @@ function withHiddenProperty(object, name, value) {
 
 function dispatchFailureResult(reason, errorCode, run) {
   return withHiddenProperty({ dispatched: false, reason, run }, "error_code", errorCode);
+}
+
+function acceptedDispatchResult(run, reason = undefined) {
+  return {
+    dispatched: true,
+    run,
+    ...(reason ? { reason } : {}),
+  };
 }
 
 export function makeRun(task, { id, triggerType, scheduledFor, now, dedupeKey = null }) {
@@ -62,32 +79,62 @@ async function dispatchRun(env, fetchImpl, runId) {
   });
 }
 
+async function persistDispatchFailure(repository, run, now, errorCode, message) {
+  await repository.markRunDispatchFailed(
+    run.id,
+    now().toISOString(),
+    dispatchFailureMessage(errorCode, message),
+  );
+}
+
 export async function dispatchNextForAccount(accountId, env, dependencies) {
   if (!accountId) return { dispatched: false, reason: "account_missing" };
   const reservedAt = dependencies.now().toISOString();
   const run = await dependencies.repository.reserveNextDispatch(accountId, reservedAt);
   if (!run) return { dispatched: false, reason: "busy_or_empty" };
+
+  let response;
   try {
-    const response = await dispatchRun(env, dependencies.fetch, run.id);
-    if (!response.ok) {
-      const errorCode = DISPATCH_ERROR_CODES.HTTP;
-      await dependencies.repository.markRunDispatchFailed(
-        run.id,
-        dependencies.now().toISOString(),
-        dispatchFailureMessage(errorCode, `GitHub workflow dispatch returned HTTP ${response.status}.`),
-      );
-      return dispatchFailureResult("github_error", errorCode, run);
-    }
-    await dependencies.repository.markRunDispatched(run.id, dependencies.now().toISOString());
-    return { dispatched: true, run };
+    response = await dispatchRun(env, dependencies.fetch, run.id);
   } catch (error) {
-    const errorCode = DISPATCH_ERROR_CODES.NETWORK;
-    await dependencies.repository.markRunDispatchFailed(
-      run.id,
-      dependencies.now().toISOString(),
-      dispatchFailureMessage(errorCode, sanitizedError(error, 500)),
+    const errorCode = classifyDispatchException(error);
+    await persistDispatchFailure(
+      dependencies.repository,
+      run,
+      dependencies.now,
+      errorCode,
+      sanitizedError(error, 500),
     );
     return dispatchFailureResult("github_error", errorCode, run);
+  }
+
+  if (!response.ok) {
+    const errorCode = DISPATCH_ERROR_CODES.HTTP;
+    await persistDispatchFailure(
+      dependencies.repository,
+      run,
+      dependencies.now,
+      errorCode,
+      `GitHub workflow dispatch returned HTTP ${response.status}.`,
+    );
+    return dispatchFailureResult("github_error", errorCode, run);
+  }
+
+  try {
+    const updated = await dependencies.repository.markRunDispatched(
+      run.id,
+      dependencies.now().toISOString(),
+    );
+    // The Runner can claim the run before the scheduler records the 204 response.
+    // In that race, the dispatch is accepted and the state has already advanced.
+    return acceptedDispatchResult(run, updated === false ? "state_already_advanced" : undefined);
+  } catch (error) {
+    // GitHub has already accepted the workflow. Never reset the run to pending here,
+    // because doing so can dispatch the same Telegram action a second time.
+    const result = acceptedDispatchResult(run, "state_update_failed");
+    withHiddenProperty(result, "warning_code", DISPATCH_ERROR_CODES.STATE_UPDATE);
+    withHiddenProperty(result, "warning", sanitizedError(error, 500));
+    return result;
   }
 }
 
@@ -95,15 +142,22 @@ export async function dispatchPendingRuns(env, dependencies, limit = 20) {
   const timestamp = dependencies.now().toISOString();
   const accountIds = await dependencies.repository.listDispatchableAccountIds(timestamp, limit);
   const failuresByCode = {};
+  const warningsByCode = {};
   const summary = withHiddenProperty(
     { candidates: accountIds.length, dispatched: 0, failed: 0 },
     "failures_by_code",
     failuresByCode,
   );
+  withHiddenProperty(summary, "warnings_by_code", warningsByCode);
+
   for (const accountId of accountIds) {
     const result = await dispatchNextForAccount(accountId, env, dependencies);
-    if (result.dispatched) summary.dispatched += 1;
-    else if (result.reason === "github_error") {
+    if (result.dispatched) {
+      summary.dispatched += 1;
+      if (result.warning_code) {
+        warningsByCode[result.warning_code] = (warningsByCode[result.warning_code] || 0) + 1;
+      }
+    } else if (result.reason === "github_error") {
       summary.failed += 1;
       const code = result.error_code || "github_dispatch_error";
       failuresByCode[code] = (failuresByCode[code] || 0) + 1;
@@ -188,5 +242,6 @@ export async function runScheduler(env, dependencies) {
   const dispatch = await dispatchPendingRuns(env, dependencies, 100);
   summary.dispatched = dispatch.dispatched;
   summary.failed = dispatch.failed;
+  withHiddenProperty(summary, "warnings_by_code", dispatch.warnings_by_code);
   return withHiddenProperty(summary, "failures_by_code", dispatch.failures_by_code);
 }
