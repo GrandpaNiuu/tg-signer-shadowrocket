@@ -1,5 +1,6 @@
 name: Live Authentication Audit
 
+# Temporary production-asset diagnostic. Do not merge.
 on:
   workflow_dispatch:
     inputs:
