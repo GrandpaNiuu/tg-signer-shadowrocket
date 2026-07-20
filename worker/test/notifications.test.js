@@ -84,7 +84,7 @@ test("failed run notification identifies the user, explains the problem, and lin
   });
 });
 
-test("successful task broadcasts show only the result a beginner needs", async () => {
+test("successful task broadcasts keep a short body and one optional details action", async () => {
   const secrets = new Map([
     ["bot_token", await secret("bot_token", BOT_TOKEN)],
     ["chat_id", await secret("chat_id", CHAT_ID)],
@@ -122,7 +122,12 @@ test("successful task broadcasts show only the result a beginner needs", async (
   assert.match(message.text, /用户：<\/b>小红/);
   assert.match(message.text, /耗时：<\/b>8\.4 秒/);
   assert.doesNotMatch(message.text, /备用账号|手动执行|very long success log|日志|https:\/\/|查看执行详情/);
-  assert.equal(message.reply_markup, undefined);
+  assert.deepEqual(message.reply_markup, {
+    inline_keyboard: [[{
+      text: "查看执行详情",
+      url: "https://github.com/owner/repo/actions/runs/123456789",
+    }]],
+  });
 });
 
 test("disabled notifications do not read secrets or call Telegram", async () => {
