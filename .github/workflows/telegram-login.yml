@@ -21,8 +21,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      WORKER_URL: ${{ secrets.WORKER_URL || vars.WORKER_URL }}
-      WORKER_OIDC_AUDIENCE: ${{ secrets.WORKER_OIDC_AUDIENCE || vars.WORKER_OIDC_AUDIENCE }}
       FLOW_ID: ${{ inputs.flow_id }}
 
     steps:
@@ -37,6 +35,21 @@ jobs:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: runner/requirements.txt
+
+      - name: Resolve Worker configuration
+        uses: ./.github/actions/resolve-worker-config
+        with:
+          worker-url: ${{ secrets.WORKER_URL || vars.WORKER_URL }}
+          worker-oidc-audience: ${{ secrets.WORKER_OIDC_AUDIENCE || vars.WORKER_OIDC_AUDIENCE }}
+
+      - name: Validate login flow id
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$FLOW_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]{7,159}$ ]] || {
+            echo "Invalid flow_id format."
+            exit 1
+          }
 
       - name: Install pinned Telegram dependency
         run: python -m pip install --disable-pip-version-check --requirement runner/requirements.txt
@@ -68,6 +81,6 @@ jobs:
           python - "$RESULT_FILE" <<'PY'
           import json, pathlib, sys
           path = pathlib.Path(sys.argv[1])
-          if not path.exists() or json.loads(path.read_text())["status"] != "connected":
+          if not path.exists() or json.loads(path.read_text()) ["status"] != "connected":
               raise SystemExit("Telegram login did not complete")
           PY
