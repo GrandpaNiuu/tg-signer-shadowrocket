@@ -37,11 +37,17 @@ class ListenerService:
         self.started_at = utc_now()
         self.stop_event = asyncio.Event()
         self.manager = RealtimeManager(worker)
+        self.is_leader = False
 
     async def sync_loop(self) -> None:
         while not self.stop_event.is_set():
             try:
-                await self.manager.apply_config(await self.worker.fetch_config())
+                config = await self.worker.fetch_config()
+                self.is_leader = config.get("leader") is not False
+                await self.manager.apply_config(config)
+                if not self.is_leader:
+                    self.manager.last_error = None
+                    LOGGER.info("Listener instance %s is in standby mode", self.instance_id)
             except Exception as exc:
                 self.manager.last_error = f"config_sync:{type(exc).__name__}"
                 LOGGER.warning("Configuration sync failed: %s", exc)
@@ -85,6 +91,9 @@ class ListenerService:
     async def inspection_loop(self) -> None:
         while not self.stop_event.is_set():
             try:
+                if not self.is_leader:
+                    await asyncio.wait_for(self.stop_event.wait(), timeout=self.inspection_interval)
+                    continue
                 job = await self.worker.claim_inspection(self.instance_id)
                 if job:
                     inspection_id = str(job["inspection"]["id"])
@@ -104,6 +113,8 @@ class ListenerService:
                         LOGGER.warning("Inspection failed: %s", type(exc).__name__)
                         await self._complete_inspection_failure(inspection_id, exc)
                     continue
+            except asyncio.TimeoutError:
+                pass
             except Exception as exc:
                 LOGGER.warning("Inspection polling failed: %s", exc)
             try:
