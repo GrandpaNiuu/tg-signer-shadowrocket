@@ -17,12 +17,11 @@ async function notificationCredentials(repository, env) {
 }
 
 async function telegramBotRequest(fetchImpl, token, method, body) {
-  const response = await fetchImpl(`https://api.telegram.org/bot${encodeURIComponent(token)}/${method}`, {
+  return fetchImpl(`https://api.telegram.org/bot${encodeURIComponent(token)}/${method}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-  return response;
 }
 
 function githubActionsUrl(env, run) {
@@ -41,18 +40,63 @@ function redactKnownSecrets(value, secrets) {
   return text;
 }
 
-function sanitizedLogTail(logs, secrets, limit = 5) {
-  const entries = Array.isArray(logs) ? logs.slice(-limit) : [];
+function usefulLogMessage(entry) {
+  const raw = String(entry?.message || "").trim();
+  if (!raw || /TgCrypto is missing/i.test(raw)) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (["task_started", "attempt_succeeded"].includes(parsed?.event)) return null;
+    if (parsed?.error?.message) return String(parsed.error.message);
+    if (parsed?.message) return String(parsed.message);
+  } catch {
+    // Plain text log entry.
+  }
+  return raw;
+}
+
+function sanitizedLogTail(logs, secrets, limit = 2) {
+  const entries = Array.isArray(logs)
+    ? logs.map((entry) => ({ ...entry, message: usefulLogMessage(entry) })).filter((entry) => entry.message).slice(-limit)
+    : [];
   if (!entries.length) return null;
-  const text = entries.map((entry) => {
-    const level = String(entry?.level || "info").toUpperCase();
-    const message = sanitizeLogText(
-      redactKnownSecrets(String(entry?.message || "").replace(/\r?\n/g, " ↩ "), secrets),
-      { maxLines: 1, maxLength: 180 },
-    );
-    return `[${level}] ${message}`;
-  }).join("\n");
-  return sanitizeLogText(redactKnownSecrets(text, secrets), { maxLines: limit, maxLength: 1_000 });
+  const text = entries.map((entry) => sanitizeLogText(
+    redactKnownSecrets(String(entry.message).replace(/\r?\n/g, " ↩ "), secrets),
+    { maxLines: 1, maxLength: 180 },
+  )).filter(Boolean).join("\n");
+  return sanitizeLogText(redactKnownSecrets(text, secrets), { maxLines: limit, maxLength: 420 });
+}
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (character) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  })[character]);
+}
+
+function durationLabel(value) {
+  const milliseconds = Number(value || 0);
+  if (!Number.isFinite(milliseconds) || milliseconds < 0) return "—";
+  if (milliseconds < 1_000) return `${Math.round(milliseconds)} 毫秒`;
+  if (milliseconds < 60_000) return `${(milliseconds / 1_000).toFixed(milliseconds < 10_000 ? 1 : 0)} 秒`;
+  const minutes = Math.floor(milliseconds / 60_000);
+  const seconds = Math.round((milliseconds % 60_000) / 1_000);
+  return seconds ? `${minutes} 分 ${seconds} 秒` : `${minutes} 分钟`;
+}
+
+function statusPresentation(status) {
+  return ({
+    success: { icon: "✅", title: "任务执行成功" },
+    failed: { icon: "❌", title: "任务执行失败" },
+    ambiguous: { icon: "⚠️", title: "任务结果待确认" },
+    cancelled: { icon: "⏹", title: "任务已取消" },
+  })[status] || { icon: "ℹ️", title: "任务状态已更新" };
+}
+
+function userLabel(user, run) {
+  return user?.display_name || user?.email || user?.github_login || run.user_id || "未知用户";
 }
 
 export async function sendRunNotification(env, repository, fetchImpl, runId) {
@@ -64,25 +108,46 @@ export async function sendRunNotification(env, repository, fetchImpl, runId) {
     repository.getRun(runId),
   ]);
   if (!token || !chatId || !run) return { sent: false, reason: "not_configured" };
+
+  const user = run.user_id && typeof repository.getUser === "function"
+    ? await repository.getUser(run.user_id)
+    : null;
   const knownSecrets = [token, chatId];
-  const icon = run.status === "success" ? "✅" : run.status === "ambiguous" ? "⚠️" : "❌";
+  const presentation = statusPresentation(run.status);
   const actionsUrl = githubActionsUrl(env, run);
-  const logTail = sanitizedLogTail(run.logs, knownSecrets);
   const taskName = redactKnownSecrets(run.task_name || run.task_id || "已删除任务", knownSecrets);
+  const accountName = redactKnownSecrets(run.account_name || "未记录", knownSecrets);
   const errorMessage = run.error_message ? redactKnownSecrets(run.error_message, knownSecrets) : null;
-  const text = sanitizeLogText([
-    `${icon} Telegram 自动消息：${run.status}`,
-    `任务：${taskName}`,
-    `耗时：${run.duration_ms ?? 0} ms`,
-    ...(errorMessage ? [`错误：${errorMessage}`] : []),
-    ...(actionsUrl ? [`GitHub Actions：${actionsUrl}`] : []),
-    ...(logTail ? ["日志尾部：", logTail] : []),
-  ].join("\n"), { maxLines: 18, maxLength: 3_500 });
-  const response = await telegramBotRequest(fetchImpl, token, "sendMessage", {
+  const logTail = run.status === "success" ? null : sanitizedLogTail(run.logs, knownSecrets);
+  const attempts = Number(run.attempt_count || 0);
+  const trigger = run.trigger_type === "manual" ? "手动执行" : "定时执行";
+
+  const lines = [
+    `${presentation.icon} <b>${presentation.title}</b>`,
+    "",
+    `<b>任务：</b>${escapeHtml(taskName)}`,
+    `<b>用户：</b>${escapeHtml(userLabel(user, run))}`,
+    `<b>账号：</b>${escapeHtml(accountName)}`,
+    `<b>方式：</b>${trigger}`,
+    `<b>耗时：</b>${durationLabel(run.duration_ms)}`,
+    ...(attempts > 1 ? [`<b>尝试：</b>${attempts} 次`] : []),
+    ...(errorMessage ? ["", `<b>原因：</b>${escapeHtml(sanitizeLogText(errorMessage, { maxLines: 1, maxLength: 240 }))}`] : []),
+    ...(logTail && !errorMessage ? ["", `<b>诊断：</b>${escapeHtml(logTail)}`] : []),
+    ...(run.status !== "success" && actionsUrl ? ["", "可点击下方按钮查看完整执行详情。"] : []),
+  ];
+
+  const body = {
     chat_id: chatId,
-    text,
+    text: lines.join("\n"),
+    parse_mode: "HTML",
     disable_web_page_preview: true,
-  });
+    ...(actionsUrl ? {
+      reply_markup: {
+        inline_keyboard: [[{ text: "查看执行详情", url: actionsUrl }]],
+      },
+    } : {}),
+  };
+  const response = await telegramBotRequest(fetchImpl, token, "sendMessage", body);
   return { sent: response.ok, reason: response.ok ? null : `http_${response.status}` };
 }
 
@@ -144,10 +209,18 @@ export async function sendTestNotification(env, repository, fetchImpl) {
   if (!token || !chatId) return { sent: false, reason: "not_configured" };
   const response = await telegramBotRequest(fetchImpl, token, "sendMessage", {
     chat_id: chatId,
-    text: "✅ Telegram 自动消息：测试通知\n通知通道配置成功。后续任务完成后，执行结果会发送到这里。",
+    text: "✅ <b>通知配置成功</b>\n\n以后所有用户的任务结果都会统一发送到这里。成功通知保持简洁，失败通知会附带原因和详情按钮。",
+    parse_mode: "HTML",
     disable_web_page_preview: true,
   });
   return { sent: response.ok, reason: response.ok ? null : `http_${response.status}` };
 }
 
-export const __test = { githubActionsUrl, redactKnownSecrets, sanitizedLogTail, notificationChatLabel };
+export const __test = {
+  durationLabel,
+  githubActionsUrl,
+  notificationChatLabel,
+  redactKnownSecrets,
+  sanitizedLogTail,
+  statusPresentation,
+};
