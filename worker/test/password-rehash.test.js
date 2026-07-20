@@ -39,6 +39,7 @@ test("password rehash is requested only when the configured target is higher", (
   };
   assert.equal(passwordNeedsRehash(record, OLD_ENV), false);
   assert.equal(passwordNeedsRehash(record, NEW_ENV), true);
+  assert.equal(passwordNeedsRehash({ ...record, password_iterations: 50000 }, OLD_ENV), true);
   assert.equal(passwordNeedsRehash({ ...record, password_iterations: 200000 }, NEW_ENV), false);
   assert.equal(passwordNeedsRehash({ ...record, password_algorithm: "unknown" }, NEW_ENV), false);
 });
@@ -61,6 +62,16 @@ test("successful password verification upgrades an older hash", async () => {
   assert.notEqual(replacement.password_salt, record.password_salt);
 });
 
+test("rehash persistence failure does not reject a verified login", async () => {
+  const record = await hashPassword("correct horse battery staple", OLD_ENV);
+  Object.defineProperty(record, PASSWORD_REHASH_CALLBACK, {
+    enumerable: false,
+    value: async () => { throw new Error("temporary D1 failure"); },
+  });
+
+  assert.equal(await verifyPassword("correct horse battery staple", record, NEW_ENV), true);
+});
+
 test("invalid passwords never trigger rehash", async () => {
   const record = await hashPassword("correct horse battery staple", OLD_ENV);
   let calls = 0;
@@ -71,6 +82,18 @@ test("invalid passwords never trigger rehash", async () => {
 
   assert.equal(await verifyPassword("wrong password value", record, NEW_ENV), false);
   assert.equal(calls, 0);
+});
+
+test("malformed hashes and unsafe iteration values are rejected without derivation", async () => {
+  const base = {
+    password_algorithm: "PBKDF2-HMAC-SHA256",
+    password_hash: "not-valid-base64!",
+    password_salt: "not-valid-base64!",
+    password_iterations: 100000,
+  };
+  assert.equal(await verifyPassword("password value", base, OLD_ENV), false);
+  assert.equal(await verifyPassword("password value", { ...base, password_iterations: 0 }, OLD_ENV), false);
+  assert.equal(await verifyPassword("password value", { ...base, password_iterations: 1000001 }, OLD_ENV), false);
 });
 
 test("rehash persistence is optimistic and does not overwrite a concurrent password change", async () => {
@@ -90,7 +113,8 @@ test("rehash persistence is optimistic and does not overwrite a concurrent passw
   }, () => new Date("2026-07-20T00:00:00.000Z"));
 
   const record = await repository.getUserByEmail("user@example.com");
-  assert.equal(Object.keys(record).includes(String(PASSWORD_REHASH_CALLBACK)), false);
+  assert.equal(Object.getOwnPropertySymbols(record).includes(PASSWORD_REHASH_CALLBACK), true);
+  assert.equal(Object.getOwnPropertyDescriptor(record, PASSWORD_REHASH_CALLBACK).enumerable, false);
   assert.equal(typeof record[PASSWORD_REHASH_CALLBACK], "function");
   assert.equal(await record[PASSWORD_REHASH_CALLBACK]({
     password_algorithm: "PBKDF2-HMAC-SHA256",
