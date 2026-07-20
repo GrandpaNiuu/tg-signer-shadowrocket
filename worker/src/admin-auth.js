@@ -116,9 +116,10 @@ function publicAuthConfiguration(env) {
   return {
     github_enabled: githubEnabled,
     email_enabled: passwordAuth.enabled,
-    registration_enabled: true,
+    registration_enabled: passwordAuth.registrationEnabled,
     email_verification_required: passwordAuth.emailVerificationRequired,
     password_reset_enabled: passwordAuth.passwordResetEnabled,
+    security_setup_required: passwordAuth.securitySetupRequired,
     turnstile_site_key: passwordAuth.turnstileSiteKey,
   };
 }
