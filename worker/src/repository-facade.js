@@ -1,6 +1,6 @@
 import { authenticationRepository } from "./auth-repository.js";
 import { withDispatchErrorCodes } from "./dispatch-repository.js";
-import { withInspectionDispatchGuard, withRealtimeTaskGuard } from "./realtime-repository.js";
+import { withInspectionDispatchGuard, withRealtimeMaintenance, withRealtimeTaskGuard } from "./realtime-repository.js";
 import { withRunnerSessionState } from "./runner-repository.js";
 
 function requiredRepository(repository) {
@@ -28,5 +28,6 @@ export function runnerRepository(repository, now = () => new Date()) {
 }
 
 export function schedulerRepository(repository) {
-  return withInspectionDispatchGuard(withDispatchErrorCodes(requiredRepository(repository)));
+  const guarded = withInspectionDispatchGuard(withDispatchErrorCodes(requiredRepository(repository)));
+  return withRealtimeMaintenance(guarded);
 }
