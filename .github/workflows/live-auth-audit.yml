@@ -11,6 +11,21 @@ on:
   pull_request:
     paths:
       - ".github/workflows/live-auth-audit.yml"
+      - "admin/**"
+      - "worker/src/admin-auth.js"
+      - "worker/src/email-auth.js"
+      - "worker/src/public-auth-configuration.js"
+      - "tools/live-auth-audit.mjs"
+      - "tools/live-auth-audit.test.mjs"
+  push:
+    branches:
+      - "main"
+    paths:
+      - ".github/workflows/live-auth-audit.yml"
+      - "admin/**"
+      - "worker/src/admin-auth.js"
+      - "worker/src/email-auth.js"
+      - "worker/src/public-auth-configuration.js"
       - "tools/live-auth-audit.mjs"
       - "tools/live-auth-audit.test.mjs"
   schedule:
@@ -18,6 +33,10 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: live-auth-audit-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   audit:
