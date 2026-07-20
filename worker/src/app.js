@@ -1,6 +1,7 @@
 import { handleAdminApi } from "./admin-api.js";
 import { createAdminAuth } from "./admin-auth.js";
 import { verifyRunnerRequest } from "./auth.js";
+import { withDispatchErrorCodes } from "./dispatch-repository.js";
 import { errorResponse, json } from "./http.js";
 import { createD1Repository } from "./repository.js";
 import { handleRunnerApi } from "./runner-api.js";
@@ -141,9 +142,10 @@ export function createWorker(dependencies = {}) {
             user_id: verified?.user_id || "legacy-admin",
             role: verified?.role || "admin",
           };
-          const userRepository = typeof repository.forUser === "function"
+          const scopedRepository = typeof repository.forUser === "function"
             ? repository.forUser(identity)
             : repository;
+          const userRepository = withDispatchErrorCodes(scopedRepository);
           return await withRequestId(await handleAdminApi(request, env, userRepository, {
             uuid,
             now,
@@ -153,7 +155,10 @@ export function createWorker(dependencies = {}) {
         }
         if (url.pathname.startsWith("/api/runner/")) {
           const claims = await verifyRunner(request, env);
-          const repository = withRunnerSessionState(repositoryFactory(env), now);
+          const repository = withRunnerSessionState(
+            withDispatchErrorCodes(repositoryFactory(env)),
+            now,
+          );
           return await withRequestId(
             await handleRunnerApi(request, env, repository, { uuid, now, fetch: fetchImpl }, claims),
             requestId,
@@ -176,7 +181,7 @@ export function createWorker(dependencies = {}) {
           if (env.DB) {
             try {
               scheduler = await runScheduler(env, {
-                repository: repositoryFactory(env),
+                repository: withDispatchErrorCodes(repositoryFactory(env)),
                 fetch: fetchImpl,
                 now,
                 uuid,
