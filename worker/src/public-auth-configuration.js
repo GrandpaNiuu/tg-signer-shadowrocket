@@ -17,19 +17,21 @@ export function publicPasswordAuthConfiguration(env) {
   const origin = httpsOrigin(env.ADMIN_ORIGIN);
   const emailDeliveryEnabled = Boolean(resendApiKey && emailFrom && origin);
   const verifiedRegistrationEnabled = passwordPepperConfigured && turnstileEnabled && emailDeliveryEnabled;
+  const localModeRequested = String(env.PUBLIC_PASSWORD_AUTH_MODE || "").trim().toLowerCase() === "local";
 
-  // Existing password users may continue to sign in while the administrator
-  // finishes mail and Turnstile setup. New registrations always fail closed
-  // until both verification controls are available.
+  // Local mode is an explicit development-only compatibility switch. Production
+  // uses secure mode and fails new registration closed until mail + Turnstile are ready.
   const enabled = passwordPepperConfigured;
+  const localMode = enabled && localModeRequested;
+  const registrationEnabled = localMode || verifiedRegistrationEnabled;
 
   return {
     enabled,
-    localMode: enabled && !verifiedRegistrationEnabled,
-    registrationEnabled: verifiedRegistrationEnabled,
-    emailVerificationRequired: verifiedRegistrationEnabled,
-    passwordResetEnabled: verifiedRegistrationEnabled,
-    securitySetupRequired: enabled && !verifiedRegistrationEnabled,
+    localMode,
+    registrationEnabled,
+    emailVerificationRequired: verifiedRegistrationEnabled && !localMode,
+    passwordResetEnabled: verifiedRegistrationEnabled && !localMode,
+    securitySetupRequired: enabled && !localMode && !verifiedRegistrationEnabled,
     turnstileEnabled: enabled && turnstileEnabled,
     turnstileSiteKey: enabled && turnstileEnabled ? turnstileSiteKey : null,
     turnstileSecretKey: enabled && turnstileEnabled ? turnstileSecretKey : null,
