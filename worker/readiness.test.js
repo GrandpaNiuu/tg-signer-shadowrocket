@@ -12,9 +12,10 @@ function readyEnv(overrides = {}) {
     DB: {
       prepare(sql) {
         assert.match(sql, /sqlite_master/);
+        assert.match(sql, /bot_inspections/);
         return {
           async first() {
-            return { ready: 4 };
+            return { ready: 8 };
           },
         };
       },
@@ -42,7 +43,7 @@ test("health remains a liveness check without dependencies", async () => {
   });
 });
 
-test("ready returns 200 when core schema, configuration, and secrets are available", async () => {
+test("ready returns 200 when core and realtime schema, configuration, and secrets are available", async () => {
   const worker = createWorker({ uuid: fixedUuid });
   const response = await worker.fetch(new Request("https://example.test/ready"), readyEnv());
 
@@ -102,14 +103,14 @@ test("ready returns 503 and safe diagnostics when dependencies are missing", asy
   });
 });
 
-test("ready detects a database without the required application schema", async () => {
+test("ready detects a database without the required realtime schema", async () => {
   const worker = createWorker({ uuid: fixedUuid });
   const env = readyEnv({
     DB: {
       prepare() {
         return {
           async first() {
-            return { ready: 2 };
+            return { ready: 4 };
           },
         };
       },
