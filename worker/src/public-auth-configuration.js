@@ -16,15 +16,20 @@ export function publicPasswordAuthConfiguration(env) {
   const emailFrom = String(env.AUTH_EMAIL_FROM || "").trim();
   const origin = httpsOrigin(env.ADMIN_ORIGIN);
   const emailDeliveryEnabled = Boolean(resendApiKey && emailFrom && origin);
-  const localMode = String(env.PUBLIC_PASSWORD_AUTH_MODE || "").trim().toLowerCase() === "local";
-  const fullEmailMode = passwordPepperConfigured && turnstileEnabled && emailDeliveryEnabled;
-  const enabled = passwordPepperConfigured && (localMode || fullEmailMode);
+  const verifiedRegistrationEnabled = passwordPepperConfigured && turnstileEnabled && emailDeliveryEnabled;
+
+  // Existing password users may continue to sign in while the administrator
+  // finishes mail and Turnstile setup. New registrations always fail closed
+  // until both verification controls are available.
+  const enabled = passwordPepperConfigured;
 
   return {
     enabled,
-    localMode: enabled && localMode,
-    emailVerificationRequired: enabled && !localMode,
-    passwordResetEnabled: enabled && !localMode && emailDeliveryEnabled,
+    localMode: enabled && !verifiedRegistrationEnabled,
+    registrationEnabled: verifiedRegistrationEnabled,
+    emailVerificationRequired: verifiedRegistrationEnabled,
+    passwordResetEnabled: verifiedRegistrationEnabled,
+    securitySetupRequired: enabled && !verifiedRegistrationEnabled,
     turnstileEnabled: enabled && turnstileEnabled,
     turnstileSiteKey: enabled && turnstileEnabled ? turnstileSiteKey : null,
     turnstileSecretKey: enabled && turnstileEnabled ? turnstileSecretKey : null,
@@ -33,4 +38,3 @@ export function publicPasswordAuthConfiguration(env) {
     origin,
   };
 }
-
