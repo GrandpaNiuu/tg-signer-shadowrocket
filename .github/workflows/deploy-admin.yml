@@ -8,6 +8,7 @@ on:
     paths:
       - ".github/workflows/deploy-admin.yml"
       - "admin/**"
+      - "tools/admin-deploy-workflow.test.mjs"
 
 permissions:
   contents: read
@@ -28,6 +29,7 @@ jobs:
         with:
           node-version: "22"
       - run: npm test --prefix admin
+      - run: node --test tools/admin-deploy-workflow.test.mjs
 
   deploy:
     needs: verify
@@ -37,6 +39,12 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22"
 
       - name: Validate Cloudflare deployment credentials
         env:
@@ -85,3 +93,42 @@ jobs:
           wranglerVersion: "4.94.0"
           workingDirectory: admin
           command: pages deploy . --project-name=telegram-checkin-admin --branch=main
+
+      - name: Smoke test deployed Pages Admin
+        env:
+          ADMIN_URL: ${{ vars.ADMIN_URL }}
+        run: |
+          set -euo pipefail
+          base_url="${ADMIN_URL:-}"
+          if [ -z "$base_url" ]; then
+            canonical_host="$(sed -n 's/^CANONICAL_HOST = "\(.*\)"$/\1/p' admin/wrangler.toml | head -n 1)"
+            if [ -z "$canonical_host" ]; then
+              echo "ADMIN_URL is missing and CANONICAL_HOST cannot be derived from admin/wrangler.toml."
+              exit 1
+            fi
+            base_url="https://$canonical_host"
+            echo "ADMIN_URL is not configured; using CANONICAL_HOST from admin/wrangler.toml."
+          fi
+          base_url="${base_url%/}"
+          case "$base_url" in
+            https://*) ;;
+            *)
+              echo "Admin smoke-test URL must use HTTPS."
+              exit 1
+              ;;
+          esac
+
+          curl --fail-with-body --silent --show-error --retry 6 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 20 "$base_url/" >/dev/null
+          auth_config="$(curl --fail-with-body --silent --show-error --retry 6 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 20 "$base_url/api/auth/config")"
+          RESPONSE_BODY="$auth_config" node - <<'NODE'
+          let payload;
+          try {
+            payload = JSON.parse(process.env.RESPONSE_BODY || "null");
+          } catch {
+            throw new Error("Pages /api/auth/config returned invalid JSON.");
+          }
+          if (!payload?.data || typeof payload.data !== "object") {
+            throw new Error("Pages Service Binding did not return the expected auth configuration.");
+          }
+          console.log("Pages root and /api/auth/config verified.");
+          NODE
