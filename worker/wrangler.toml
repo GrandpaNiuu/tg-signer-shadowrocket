@@ -28,5 +28,8 @@ ADMIN_SESSION_TTL_SECONDS = "604800"
 # value automatically rehashes active users after their next successful login;
 # benchmark Worker CPU first because password hashing is CPU-bound.
 PASSWORD_HASH_ITERATIONS = "100000"
-PUBLIC_PASSWORD_AUTH_MODE = "local"
+# Production never allows immediate, unverified email registration. Existing
+# password users may still sign in while Resend and Turnstile are being set up;
+# new registration opens only when both verification services are configured.
+PUBLIC_PASSWORD_AUTH_MODE = "secure"
 SCHEDULE_DISPATCH_LEAD_SECONDS = "120"
