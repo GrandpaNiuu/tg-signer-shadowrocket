@@ -204,11 +204,29 @@ export function createEmailAuth(dependencies = {}) {
           throw new HttpError(422, "validation_failed", "请输入显示名称。", { fields: ["display_name"] });
         }
         const password = passwordInput(body.password);
-        await verifyTurnstile(request, turnstileInput(body.turnstile_token), config, fetchImpl);
+        await verifyTurnstile(request, turnstileInput(body.turnstile_token, {
+          required: Boolean(config.turnstileSecret),
+        }), config, fetchImpl);
         await enforceRateLimit(repository, request, "register_ip", "*", timestamp, 5, 3600);
         await enforceRateLimit(repository, request, "register", email.normalized, timestamp, 5, 3600);
         const passwordRecord = await hashPassword(password, env);
         const createdAt = timestamp.toISOString();
+
+        if (config.localMode) {
+          const result = await repository.createOrActivateLocalEmailUser({
+            id: `user-${randomToken(18)}`,
+            display_name: displayName,
+            email: email.original,
+            email_normalized: email.normalized,
+            created_at: createdAt,
+            updated_at: createdAt,
+          }, passwordRecord);
+          if (!result.created) {
+            throw new HttpError(409, "account_exists", "该邮箱已注册，请直接登录。");
+          }
+          return createSession(request, env, repository, result.user, 201);
+        }
+
         const result = await repository.createOrUpdatePendingEmailUser({
           id: `user-${randomToken(18)}`,
           display_name: displayName,
