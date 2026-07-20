@@ -1,5 +1,6 @@
 import { authenticationRepository } from "./auth-repository.js";
 import { withDispatchErrorCodes } from "./dispatch-repository.js";
+import { withInspectionDispatchGuard } from "./realtime-repository.js";
 import { withRunnerSessionState } from "./runner-repository.js";
 
 function requiredRepository(repository) {
@@ -16,7 +17,7 @@ export function adminWorkspaceRepository(repository, identity) {
   if (typeof target.forUser !== "function") {
     throw new Error("User-scoped Repository is required for administrator API routes.");
   }
-  return withDispatchErrorCodes(target.forUser(identity));
+  return withInspectionDispatchGuard(withDispatchErrorCodes(target.forUser(identity)));
 }
 
 export function runnerRepository(repository, now = () => new Date()) {
@@ -27,5 +28,5 @@ export function runnerRepository(repository, now = () => new Date()) {
 }
 
 export function schedulerRepository(repository) {
-  return withDispatchErrorCodes(requiredRepository(repository));
+  return withInspectionDispatchGuard(withDispatchErrorCodes(requiredRepository(repository)));
 }
