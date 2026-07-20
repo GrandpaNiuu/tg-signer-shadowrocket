@@ -20,9 +20,15 @@ const REQUIRED_READY_CONFIG = Object.freeze([
 
 const READY_SCHEMA_SQL = `SELECT COUNT(*) AS ready FROM sqlite_master
   WHERE type = 'table' AND name IN ('accounts', 'tasks', 'task_runs', 'secret_values')`;
+const CF_RAY_PATTERN = /^[A-Za-z0-9-]{1,80}$/;
 
 function defaultUuid() {
   return crypto.randomUUID();
+}
+
+function resolveRequestId(request, uuid) {
+  const candidate = String(request.headers.get("cf-ray") || "").trim();
+  return CF_RAY_PATTERN.test(candidate) ? candidate : uuid();
 }
 
 async function withRequestId(response, requestId) {
@@ -121,7 +127,7 @@ export function createWorker(dependencies = {}) {
 
   return {
     async fetch(request, env) {
-      const requestId = request.headers.get("cf-ray") || uuid();
+      const requestId = resolveRequestId(request, uuid);
       try {
         const url = new URL(request.url);
         if (url.pathname === "/health" && request.method === "GET") {
