@@ -34,7 +34,7 @@ const ADMIN_HTML = `<!doctype html>
 <script type="module" src="/src/auth-security.js?v=1"></script>
 <script type="module" src="/src/notification-guidance.js?v=1"></script>
 <script type="module" src="/src/skill-guidance.js?v=2"></script>
-<script type="module" src="/src/realtime-automation.js?v=1"></script>
+<script type="module" src="/src/realtime-automation.js?v=20260721-2"></script>
 <div id="auth-content"></div>`;
 
 test("verified email registration requires the complete security contract", () => {
@@ -125,7 +125,7 @@ test("live audit verifies auth, guided sign-in, and realtime production assets",
     "https://grandpaniu.ccwu.cc/src/auth-security.js?v=1",
     "https://grandpaniu.ccwu.cc/src/notification-guidance.js?v=1",
     "https://grandpaniu.ccwu.cc/src/skill-guidance.js?v=2",
-    "https://grandpaniu.ccwu.cc/src/realtime-automation.js?v=1",
+    "https://grandpaniu.ccwu.cc/src/realtime-automation.js?v=20260721-2",
     "https://grandpaniu.ccwu.cc/assets/styles.css?v=1",
     "https://grandpaniu.ccwu.cc/api/auth/config",
   ]);
