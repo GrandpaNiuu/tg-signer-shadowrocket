@@ -59,6 +59,14 @@ jobs:
         run: |
           set -o pipefail
           node tools/live-auth-audit.mjs | tee "${RUNNER_TEMP}/live-auth-audit.log"
+      - name: Verify scheduled-run refresh is deployed
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_file="$(curl --fail-with-body --silent --show-error --retry 8 --retry-delay 3 --retry-all-errors --connect-timeout 10 --max-time 30 "${ADMIN_URL}/src/live-refresh.js?v=scheduled-run-refresh")"
+          grep -F 'if (route === "dashboard") return 20_000;' <<<"$source_file" >/dev/null
+          grep -F '? 3_000 : 20_000' <<<"$source_file" >/dev/null
+          echo "Scheduled-run dashboard and idle execution polling are deployed."
       - name: Upload sanitized audit result
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
