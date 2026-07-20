@@ -44,16 +44,31 @@ test("method-not-allowed responses receive the same request id", async () => {
   });
 });
 
-test("cf-ray is preserved as the request id", async () => {
+test("valid cf-ray is preserved as the request id", async () => {
   const worker = createWorker({ uuid: fixedUuid });
   const response = await worker.fetch(new Request("https://example.test/health", {
-    headers: { "cf-ray": "cloudflare-ray-id" },
+    headers: { "cf-ray": "0123456789abcdef-SJC" },
   }), {});
 
   assert.equal(response.status, 200);
-  assert.equal(response.headers.get("x-request-id"), "cloudflare-ray-id");
+  assert.equal(response.headers.get("x-request-id"), "0123456789abcdef-SJC");
   assert.deepEqual(await response.json(), {
     ok: true,
     worker: "tg-signer-shadowrocket",
   });
+});
+
+test("invalid or oversized cf-ray values fall back to a generated id", async () => {
+  const worker = createWorker({ uuid: fixedUuid });
+  for (const candidate of [
+    "contains spaces",
+    "contains/slash",
+    "x".repeat(81),
+  ]) {
+    const response = await worker.fetch(new Request("https://example.test/health", {
+      headers: { "cf-ray": candidate },
+    }), {});
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("x-request-id"), "request-test-id");
+  }
 });
