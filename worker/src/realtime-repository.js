@@ -33,6 +33,28 @@ function realtimeAccountConflict() {
   );
 }
 
+function cutoff(timestamp, days) {
+  const value = Date.parse(timestamp);
+  if (!Number.isFinite(value)) throw new Error("Invalid realtime cleanup timestamp.");
+  return new Date(value - days * 24 * 60 * 60 * 1_000).toISOString();
+}
+
+async function cleanupRealtimeHistory(repository, timestamp) {
+  if (!repository.db?.batch || !repository.db?.prepare) return false;
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime()) || date.getUTCMinutes() !== 0) return false;
+  await repository.db.batch([
+    repository.db.prepare("DELETE FROM listener_events WHERE created_at < ?")
+      .bind(cutoff(timestamp, 30)),
+    repository.db.prepare(`DELETE FROM bot_inspections
+      WHERE status IN ('success', 'failed', 'expired', 'cancelled') AND updated_at < ?`)
+      .bind(cutoff(timestamp, 7)),
+    repository.db.prepare("DELETE FROM listener_instances WHERE last_heartbeat_at < ?")
+      .bind(cutoff(timestamp, 7)),
+  ]);
+  return true;
+}
+
 export function withRealtimeTaskGuard(repository) {
   const target = requiredRepository(repository);
   if (typeof target.createTask !== "function" && typeof target.updateTask !== "function") return target;
@@ -89,4 +111,26 @@ export function withInspectionDispatchGuard(repository) {
   });
 }
 
-export const __test = { inspectionActive, realtimeRuleActive };
+export function withRealtimeMaintenance(repository) {
+  const target = requiredRepository(repository);
+  if (typeof target.reconcileRuns !== "function") return target;
+  return new Proxy(target, {
+    get(current, property) {
+      if (property === "reconcileRuns") {
+        return async (timestamp, staleDispatchBefore) => {
+          const result = await current.reconcileRuns(timestamp, staleDispatchBefore);
+          await cleanupRealtimeHistory(current, timestamp);
+          return result;
+        };
+      }
+      return bindMember(current, property);
+    },
+  });
+}
+
+export const __test = {
+  cleanupRealtimeHistory,
+  cutoff,
+  inspectionActive,
+  realtimeRuleActive,
+};
