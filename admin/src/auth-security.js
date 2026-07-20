@@ -1,20 +1,21 @@
+import {
+  githubButtonLabel,
+  loginSecurityMessage,
+  registrationPresentation,
+  turnstileActionForMode,
+} from "./auth-presentation.js";
+
 const authContent = document.querySelector("#auth-content");
+const authMessage = document.querySelector("#auth-message");
 let authConfiguration = null;
 let applying = false;
-
-const TURNSTILE_ACTIONS = Object.freeze({
-  login: "email_login",
-  register: "email_register",
-  "forgot-password": "forgot_password",
-  "reset-password": "reset_password",
-});
 
 function authMode() {
   return String(location.hash || "#/login").replace(/^#\/?/, "").split("?", 1)[0] || "login";
 }
 
 function turnstileAction() {
-  return TURNSTILE_ACTIONS[authMode()] || "email_login";
+  return turnstileActionForMode(authMode());
 }
 
 function wrapTurnstileRender() {
@@ -56,17 +57,76 @@ function watchTurnstileLoader() {
   }, { once: true });
 }
 
-function securityNotice(kind, text, key) {
+function securityNotice(kind, title, text, key) {
   const notice = document.createElement("div");
   notice.className = `notice ${kind}`;
   notice.dataset.authSecurityNotice = key;
-  notice.innerHTML = `<span aria-hidden="true">${kind === "warning" ? "!" : "✓"}</span><span>${text}</span>`;
+  const icon = document.createElement("span");
+  icon.setAttribute("aria-hidden", "true");
+  icon.textContent = kind === "warning" ? "!" : "✓";
+  const content = document.createElement("span");
+  const heading = document.createElement("strong");
+  heading.textContent = title;
+  content.append(heading, document.createElement("br"), document.createTextNode(text));
+  notice.append(icon, content);
   return notice;
 }
 
-function appendNoticeOnce(form, key, kind, text) {
+function appendNoticeOnce(form, key, kind, title, text) {
   if (!form || form.querySelector(`[data-auth-security-notice="${key}"]`)) return;
-  form.append(securityNotice(kind, text, key));
+  form.append(securityNotice(kind, title, text, key));
+}
+
+function registrationReplacementTarget() {
+  return authContent.querySelector("#email-register-form")
+    || [...authContent.querySelectorAll(".notice.warning")]
+      .find((notice) => !notice.dataset.authSecurityNotice)
+    || null;
+}
+
+function applyRegistrationState() {
+  const presentation = registrationPresentation(authConfiguration);
+  const divider = authContent.querySelector(".auth-divider");
+  if (!presentation.showEmailDivider) divider?.remove();
+
+  if (presentation.state === "open") {
+    appendNoticeOnce(
+      authContent.querySelector("#email-register-form"),
+      "secure-email-ready",
+      "success",
+      presentation.title,
+      presentation.message,
+    );
+    return;
+  }
+
+  const target = registrationReplacementTarget();
+  if (!target) return;
+  const primary = securityNotice(
+    presentation.state === "github-only" ? "success" : "warning",
+    presentation.title,
+    presentation.message,
+    "registration-primary",
+  );
+  const details = presentation.state === "github-only" && authConfiguration.email_enabled
+    ? securityNotice(
+      "warning",
+      "邮箱注册尚未开放",
+      "管理员需要完成邮箱验证、发件服务和人机验证配置后才能开放。",
+      "registration-email-closed",
+    )
+    : null;
+  const back = document.createElement("button");
+  back.className = "auth-link";
+  back.type = "button";
+  back.dataset.authMode = "login";
+  back.textContent = "已有邮箱账号？返回登录";
+  target.replaceWith(primary, ...(details ? [details] : []), back);
+  if (authMessage) {
+    authMessage.textContent = presentation.state === "github-only"
+      ? "使用 GitHub 创建独立工作区；邮箱新注册暂未开放。"
+      : "当前没有可用的公开注册方式。";
+  }
 }
 
 function applyAuthenticationState() {
@@ -74,50 +134,34 @@ function applyAuthenticationState() {
   applying = true;
   try {
     const mode = authMode();
+    const githubButton = authContent.querySelector(".github-button");
+    if (githubButton) githubButton.textContent = githubButtonLabel(mode);
+
     const registerTab = authContent.querySelector('[data-auth-mode="register"]');
     if (registerTab && !authConfiguration.registration_enabled) {
-      registerTab.title = "邮箱注册将在邮件验证和人机验证配置完成后开放";
-      registerTab.setAttribute("aria-description", "邮箱注册暂时关闭");
+      registerTab.title = authConfiguration.github_enabled
+        ? "GitHub 注册可用；邮箱注册暂未开放"
+        : "公开注册暂未开放";
+      registerTab.setAttribute("aria-description", registerTab.title);
     }
 
-    if (mode === "register" && authConfiguration.email_enabled && !authConfiguration.registration_enabled) {
-      const form = authContent.querySelector("#email-register-form");
-      if (form) {
-        const notice = securityNotice(
-          "warning",
-          "邮箱新注册暂时关闭。平台管理员完成邮件验证和人机验证配置后才会开放；目前可以使用 GitHub 注册，已有邮箱用户仍可返回登录。",
-          "registration-closed",
+    if (mode === "register") {
+      applyRegistrationState();
+      return;
+    }
+
+    if (mode === "login") {
+      const message = loginSecurityMessage(authConfiguration);
+      if (message) {
+        const secure = authConfiguration.registration_enabled === true;
+        appendNoticeOnce(
+          authContent.querySelector("#email-login-form"),
+          secure ? "secure-email-ready" : "security-setup",
+          secure ? "success" : "warning",
+          secure ? "邮箱安全注册已启用" : "邮箱注册尚未开放",
+          message,
         );
-        const back = document.createElement("button");
-        back.className = "auth-link";
-        back.type = "button";
-        back.dataset.authMode = "login";
-        back.textContent = "返回邮箱登录";
-        form.replaceWith(notice, back);
       }
-      return;
-    }
-
-    if (mode === "login" && authConfiguration.security_setup_required) {
-      appendNoticeOnce(
-        authContent.querySelector("#email-login-form"),
-        "security-setup",
-        "warning",
-        "已有邮箱账号可以继续登录；为防止未验证账号和机器人注册，新的邮箱注册已暂时关闭。",
-      );
-      return;
-    }
-
-    if (["login", "register"].includes(mode)
-      && authConfiguration.registration_enabled
-      && authConfiguration.email_verification_required
-      && authConfiguration.turnstile_site_key) {
-      appendNoticeOnce(
-        authContent.querySelector(mode === "register" ? "#email-register-form" : "#email-login-form"),
-        "secure-email-ready",
-        "success",
-        "邮箱注册需要人机验证和邮件确认；验证完成后可以使用找回密码功能。",
-      );
     }
   } finally {
     applying = false;
