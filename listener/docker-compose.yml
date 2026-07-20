@@ -1,0 +1,23 @@
+services:
+  telegram-listener:
+    build:
+      context: ..
+      dockerfile: listener/Dockerfile
+    image: telegramautomaticcheckin-listener:local
+    restart: unless-stopped
+    init: true
+    env_file:
+      - .env
+    environment:
+      LISTENER_INSTANCE_ID: ${LISTENER_INSTANCE_ID:-listener-vps-1}
+      LISTENER_LABEL: ${LISTENER_LABEL:-Telegram Listener VPS}
+      LISTENER_SYNC_SECONDS: ${LISTENER_SYNC_SECONDS:-30}
+      LISTENER_HEARTBEAT_SECONDS: ${LISTENER_HEARTBEAT_SECONDS:-60}
+      LISTENER_INSPECTION_SECONDS: ${LISTENER_INSPECTION_SECONDS:-4}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+      - /home/listener:rw,noexec,nosuid,size=16m
