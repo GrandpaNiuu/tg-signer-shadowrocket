@@ -41,6 +41,8 @@ jobs:
           set -euo pipefail
           python -m unittest discover -s listener/tests -p 'test_*.py' -v
           python -m compileall -q listener
+          cp listener/.env.example listener/.env
+          trap 'rm -f listener/.env' EXIT
           docker compose -f listener/docker-compose.yml config >/dev/null
 
   deploy:
@@ -76,6 +78,7 @@ jobs:
           [ "${#LISTENER_API_TOKEN}" -ge 32 ] || { echo "LISTENER_API_TOKEN must contain at least 32 characters"; exit 1; }
           [[ "$WORKER_URL" == https://* ]] || { echo "WORKER_URL must use HTTPS"; exit 1; }
           [[ "$VPS_PORT" =~ ^[0-9]{1,5}$ ]] || { echo "LISTENER_VPS_PORT must be a valid port"; exit 1; }
+          [ "$VPS_PORT" -ge 1 ] && [ "$VPS_PORT" -le 65535 ] || { echo "LISTENER_VPS_PORT must be between 1 and 65535"; exit 1; }
           [[ "$LISTENER_INSTANCE_ID" =~ ^[A-Za-z0-9._:-]{1,80}$ ]] || { echo "instance_id contains unsupported characters"; exit 1; }
           [ -n "$LISTENER_LABEL" ] && [ "${#LISTENER_LABEL}" -le 120 ] || { echo "listener_label must contain 1-120 characters"; exit 1; }
 
@@ -139,9 +142,17 @@ jobs:
             -o StrictHostKeyChecking=yes
             -o ConnectTimeout=15
           )
+          scp_options=(
+            -i "$HOME/.ssh/listener_deploy_key"
+            -P "$VPS_PORT"
+            -o BatchMode=yes
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=yes
+            -o ConnectTimeout=15
+          )
           ssh "${ssh_options[@]}" "$VPS_USER@$VPS_HOST" \
             "mkdir -p \"\$HOME/telegramautomaticcheckin/releases/$release\""
-          scp "${ssh_options[@]}" \
+          scp "${scp_options[@]}" \
             "${RUNNER_TEMP}/listener-deploy/source.tar.gz" \
             "${RUNNER_TEMP}/listener-deploy/listener.env" \
             "$VPS_USER@$VPS_HOST:telegramautomaticcheckin/releases/$release/"
