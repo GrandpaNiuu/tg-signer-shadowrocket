@@ -25,6 +25,8 @@ jobs:
         with:
           python-version: "3.11"
       - run: python -m unittest discover -s runner/tests -p 'test_*.py' -v
+      - run: python -m unittest discover -s listener/tests -p 'test_*.py' -v
+      - run: python -m compileall -q listener
 
   worker:
     runs-on: ubuntu-latest
