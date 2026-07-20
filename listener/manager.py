@@ -136,18 +136,22 @@ class RealtimeManager:
             await stop_client(managed.client)
 
     async def apply_config(self, config: dict[str, Any]) -> None:
-        source = json.dumps(config, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        stable_config = {
+            "accounts": config.get("accounts", []),
+            "rules": config.get("rules", []),
+        }
+        source = json.dumps(stable_config, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         signature = hashlib.sha256(source.encode("utf-8")).hexdigest()
         if signature == self.config_signature:
             return
 
         await self.stop()
-        rules = [item for item in config.get("rules", []) if isinstance(item, dict)]
+        rules = [item for item in stable_config["rules"] if isinstance(item, dict)]
         for rule in rules:
             self.rules_by_account.setdefault(str(rule.get("account_id")), []).append(rule)
 
         failures: list[str] = []
-        for account in config.get("accounts", []):
+        for account in stable_config["accounts"]:
             if not isinstance(account, dict) or not account.get("id"):
                 continue
             account_id = str(account["id"])
