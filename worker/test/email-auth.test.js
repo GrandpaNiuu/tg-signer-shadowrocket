@@ -27,6 +27,13 @@ function tokenFromEmail(email, route) {
   return match[1];
 }
 
+function actionForCaptcha(token) {
+  if (token.includes("register") || token === "valid-captcha" || token === "invalid-captcha") return "email_register";
+  if (token.includes("forgot")) return "forgot_password";
+  if (token.includes("reset") || token.includes("replay")) return "reset_password";
+  return "email_login";
+}
+
 function harness() {
   const { sqlite, db, repository } = createTestRepository();
   const emails = [];
@@ -36,7 +43,12 @@ function harness() {
     if (String(url) === "https://challenges.cloudflare.com/turnstile/v0/siteverify") {
       const form = new URLSearchParams(init.body);
       turnstile.push(Object.fromEntries(form));
-      return Response.json({ success: form.get("response") !== "invalid-captcha" });
+      const token = String(form.get("response") || "");
+      return Response.json({
+        success: token !== "invalid-captcha",
+        hostname: "telegram-checkin-admin.pages.dev",
+        action: actionForCaptcha(token),
+      });
     }
     if (String(url) === "https://api.resend.com/emails") {
       emails.push(JSON.parse(init.body));
