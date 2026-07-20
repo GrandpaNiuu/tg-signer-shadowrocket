@@ -31,7 +31,7 @@ export function publicPasswordAuthConfiguration(env) {
     registrationEnabled,
     emailVerificationRequired: verifiedRegistrationEnabled && !localMode,
     passwordResetEnabled: verifiedRegistrationEnabled && !localMode,
-    securitySetupRequired: enabled && !localMode && !verifiedRegistrationEnabled,
+    securitySetupRequired: enabled && !localMode && !verifiedRegistrationEnabled ? true : undefined,
     turnstileEnabled: enabled && turnstileEnabled,
     turnstileSiteKey: enabled && turnstileEnabled ? turnstileSiteKey : null,
     turnstileSecretKey: enabled && turnstileEnabled ? turnstileSecretKey : null,
