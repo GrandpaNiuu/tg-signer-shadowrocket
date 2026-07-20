@@ -34,6 +34,7 @@ const ADMIN_HTML = `<!doctype html>
 <script type="module" src="/src/auth-security.js?v=1"></script>
 <script type="module" src="/src/notification-guidance.js?v=1"></script>
 <script type="module" src="/src/skill-guidance.js?v=2"></script>
+<script type="module" src="/src/realtime-automation.js?v=1"></script>
 <div id="auth-content"></div>`;
 
 test("verified email registration requires the complete security contract", () => {
@@ -68,7 +69,7 @@ test("at least one public authentication provider is required", () => {
   }), /No public authentication provider/);
 });
 
-test("live audit verifies the production shell, critical assets, guided sign-in marker, and safe auth booleans", async () => {
+test("live audit verifies auth, guided sign-in, and realtime production assets", async () => {
   const calls = [];
   const fetchImpl = async (url) => {
     const value = String(url);
@@ -87,6 +88,12 @@ test("live audit verifies the production shell, critical assets, guided sign-in 
     }
     if (value.includes("/src/skill-guidance.js")) {
       return new Response('export const marker = "不用填写 JSON";', {
+        status: 200,
+        headers: { "content-type": "application/javascript" },
+      });
+    }
+    if (value.includes("/src/realtime-automation.js")) {
+      return new Response('export const marker = "自动识别机器人操作";', {
         status: 200,
         headers: { "content-type": "application/javascript" },
       });
@@ -118,17 +125,18 @@ test("live audit verifies the production shell, critical assets, guided sign-in 
     "https://grandpaniu.ccwu.cc/src/auth-security.js?v=1",
     "https://grandpaniu.ccwu.cc/src/notification-guidance.js?v=1",
     "https://grandpaniu.ccwu.cc/src/skill-guidance.js?v=2",
+    "https://grandpaniu.ccwu.cc/src/realtime-automation.js?v=1",
     "https://grandpaniu.ccwu.cc/assets/styles.css?v=1",
     "https://grandpaniu.ccwu.cc/api/auth/config",
   ]);
   assert.equal(result.requested_origin, "https://grandpaniu.ccwu.cc");
   assert.equal(result.critical_assets_verified, true);
-  assert.equal(result.asset_count, 5);
+  assert.equal(result.asset_count, 6);
   assert.equal(result.registration_enabled, false);
   assert.equal(JSON.stringify(result).includes("site-key"), false);
 });
 
-test("live audit rejects a stale guided sign-in script", async () => {
+test("live audit rejects stale guided sign-in and realtime scripts", async () => {
   const fetchImpl = async (url) => {
     const value = String(url);
     if (value === "https://grandpaniu.ccwu.cc/") {
@@ -144,7 +152,13 @@ test("live audit rejects a stale guided sign-in script", async () => {
       });
     }
     if (value.includes("/src/skill-guidance.js")) {
-      return new Response("export const oldSkillUi = true;", {
+      return new Response('export const marker = "不用填写 JSON";', {
+        status: 200,
+        headers: { "content-type": "application/javascript" },
+      });
+    }
+    if (value.includes("/src/realtime-automation.js")) {
+      return new Response("export const oldRealtimeUi = true;", {
         status: 200,
         headers: { "content-type": "application/javascript" },
       });
@@ -168,6 +182,6 @@ test("live audit rejects a stale guided sign-in script", async () => {
   };
   await assert.rejects(
     () => runLiveAuthAudit({ adminUrl: "https://grandpaniu.ccwu.cc", fetchImpl }),
-    /skill_guidance marker/,
+    /realtime_automation marker/,
   );
 });
