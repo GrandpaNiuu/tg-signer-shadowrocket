@@ -50,13 +50,24 @@ function turnstileInput(value, { required = true } = {}) {
   return token;
 }
 
-function authConfiguration(env, { emailDelivery = false } = {}) {
+function authConfiguration(env, { requireRegistration = false, emailDelivery = false } = {}) {
   const passwordAuth = publicPasswordAuthConfiguration(env);
-  if (!passwordAuth.enabled || (emailDelivery && !passwordAuth.passwordResetEnabled)) {
+  if (!passwordAuth.enabled) {
     throw new HttpError(503, "email_auth_not_configured", "邮箱登录服务尚未完成配置。");
+  }
+  if (requireRegistration && !passwordAuth.registrationEnabled) {
+    throw new HttpError(
+      503,
+      "secure_registration_not_configured",
+      "邮箱新注册暂时关闭。管理员完成邮件验证与人机验证配置后才会开放。",
+    );
+  }
+  if (emailDelivery && !passwordAuth.passwordResetEnabled) {
+    throw new HttpError(503, "email_auth_not_configured", "邮箱找回服务尚未完成配置。");
   }
   return {
     localMode: passwordAuth.localMode,
+    registrationEnabled: passwordAuth.registrationEnabled,
     emailVerificationRequired: passwordAuth.emailVerificationRequired,
     turnstileSecret: passwordAuth.turnstileSecretKey,
     apiKey: passwordAuth.resendApiKey,
@@ -97,6 +108,28 @@ async function sendEmail(fetchImpl, config, message) {
     body: JSON.stringify({ from: config.from, ...message }),
   });
   if (!response.ok) throw new HttpError(502, "email_delivery_failed", "验证邮件暂时无法发送，请稍后重试。");
+}
+
+async function createVerificationToken(repository, randomToken, userId, timestamp) {
+  const token = randomToken();
+  await repository.createAuthToken({
+    id: `auth-${randomToken(18)}`,
+    token_hash: await sha256(token),
+    user_id: userId,
+    token_type: "verify_email",
+    expires_at: new Date(timestamp.getTime() + 24 * 60 * 60 * 1000).toISOString(),
+    created_at: timestamp.toISOString(),
+  });
+  return token;
+}
+
+async function sendVerificationEmail(fetchImpl, config, email, token) {
+  const verificationUrl = `${config.origin}/#/verify-email?token=${token}`;
+  await sendEmail(fetchImpl, config, {
+    to: [email],
+    subject: "验证 Telegram 自动消息平台邮箱",
+    html: `<p>请点击下面的链接完成邮箱验证：</p><p><a href="${verificationUrl}">验证邮箱</a></p><p>链接将在 24 小时后失效。</p>`,
+  });
 }
 
 function sessionTtlSeconds(env) {
@@ -162,8 +195,7 @@ export function createEmailAuth(dependencies = {}) {
       const timestamp = new Date(now());
 
       if (path === "/api/auth/email/register") {
-        const publicConfig = publicPasswordAuthConfiguration(env);
-        const config = authConfiguration(env, { emailDelivery: publicConfig.emailVerificationRequired });
+        const config = authConfiguration(env, { requireRegistration: true });
         const body = await readJson(request, 8_192);
         exactInput(body, ["email", "display_name", "password", "turnstile_token"]);
         const email = emailInput(body.email);
@@ -172,29 +204,11 @@ export function createEmailAuth(dependencies = {}) {
           throw new HttpError(422, "validation_failed", "请输入显示名称。", { fields: ["display_name"] });
         }
         const password = passwordInput(body.password);
-        await verifyTurnstile(request, turnstileInput(body.turnstile_token, {
-          required: Boolean(config.turnstileSecret),
-        }), config, fetchImpl);
-        if (config.localMode) {
-          await enforceRateLimit(repository, request, "register_ip", "*", timestamp, 5, 3600);
-        }
+        await verifyTurnstile(request, turnstileInput(body.turnstile_token), config, fetchImpl);
+        await enforceRateLimit(repository, request, "register_ip", "*", timestamp, 5, 3600);
         await enforceRateLimit(repository, request, "register", email.normalized, timestamp, 5, 3600);
         const passwordRecord = await hashPassword(password, env);
         const createdAt = timestamp.toISOString();
-        if (config.localMode) {
-          const result = await repository.createOrActivateLocalEmailUser({
-            id: `user-${randomToken(18)}`,
-            display_name: displayName,
-            email: email.original,
-            email_normalized: email.normalized,
-            created_at: createdAt,
-            updated_at: createdAt,
-          }, passwordRecord);
-          if (!result.created) {
-            throw new HttpError(409, "account_exists", "该邮箱已注册，请直接登录。");
-          }
-          return createSession(request, env, repository, result.user, 201);
-        }
         const result = await repository.createOrUpdatePendingEmailUser({
           id: `user-${randomToken(18)}`,
           display_name: displayName,
@@ -203,23 +217,11 @@ export function createEmailAuth(dependencies = {}) {
           created_at: createdAt,
           updated_at: createdAt,
         }, passwordRecord);
-        if (result.verification_required) {
-          const token = randomToken();
-          await repository.createAuthToken({
-            id: `auth-${randomToken(18)}`,
-            token_hash: await sha256(token),
-            user_id: result.user.id,
-            token_type: "verify_email",
-            expires_at: new Date(timestamp.getTime() + 24 * 60 * 60 * 1000).toISOString(),
-            created_at: createdAt,
-          });
-          const verificationUrl = `${config.origin}/#/verify-email?token=${token}`;
-          await sendEmail(fetchImpl, config, {
-            to: [email.original],
-            subject: "验证 Telegram 自动消息平台邮箱",
-            html: `<p>请点击下面的链接完成邮箱验证：</p><p><a href="${verificationUrl}">验证邮箱</a></p><p>链接将在 24 小时后失效。</p>`,
-          });
+        if (!result.verification_required) {
+          throw new HttpError(409, "account_exists", "该邮箱已注册，请直接登录或找回密码。");
         }
+        const token = await createVerificationToken(repository, randomToken, result.user.id, timestamp);
+        await sendVerificationEmail(fetchImpl, config, email.original, token);
         return json({ data: { status: "verification_required" } }, 202);
       }
 
@@ -254,6 +256,12 @@ export function createEmailAuth(dependencies = {}) {
           throw new HttpError(401, "invalid_credentials", "邮箱或密码不正确。");
         }
         if (user.status !== "active" || (config.emailVerificationRequired && !user.email_verified_at)) {
+          if (config.registrationEnabled && !user.email_verified_at && ["pending", "active"].includes(user.status)) {
+            await enforceRateLimit(repository, request, "verification_resend", email.normalized, timestamp, 3, 3600);
+            const token = await createVerificationToken(repository, randomToken, user.id, timestamp);
+            await sendVerificationEmail(fetchImpl, config, user.email || email.original, token);
+            throw new HttpError(403, "email_verification_required", "请先完成邮箱验证。新的验证邮件已经发送。");
+          }
           throw new HttpError(403, "email_verification_required", "请先完成邮箱验证。");
         }
         return createSession(request, env, repository, user);
