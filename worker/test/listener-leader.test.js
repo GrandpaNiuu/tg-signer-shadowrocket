@@ -26,6 +26,7 @@ function databaseReturning(leaderId) {
         bind() { return this; },
         async run() {
           assert.match(sql, /listener_instances/);
+          assert.match(sql, /started_at = excluded\.started_at/);
           return { success: true };
         },
         async first() {
