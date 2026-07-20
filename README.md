@@ -64,7 +64,7 @@ D1 是唯一配置与调度来源。Cloudflare 的分钟级 Cron 会提前派发
 - Timeout 或发送结果无法确认时记录为 `ambiguous`，不会盲目重试造成重复签到。
 - Retry 只用于明确未执行的失败（例如 Telegram FloodWait）；连接中断保持不确定状态。
 - Pages 与 Worker 使用 GitHub OAuth + S256 PKCE 或已验证邮箱登录；随机会话只以 SHA-256 摘要保存到 D1。只有配置的不可变 GitHub user id 会取得管理员角色，登录名相同不能冒充管理员。
-- 邮箱密码使用 PBKDF2-HMAC-SHA256、独立随机盐和 Worker Secret 中的 pepper；注册、登录和重置密码均要求服务端验证 Turnstile，验证/重置令牌只存摘要且只能使用一次。
+- 邮箱密码使用 PBKDF2-HMAC-SHA256、独立随机盐和 Worker Secret 中的 pepper；目标迭代数提高后，活跃用户会在下一次密码登录成功时使用新盐渐进 rehash，不要求统一重置密码。更新使用旧哈希条件保护，不会覆盖并发密码修改。
 
 ## 首次部署
 
@@ -88,7 +88,7 @@ D1 是唯一配置与调度来源。Cloudflare 的分钟级 Cron 会提前派发
    - 新增 `GITHUB_OAUTH_CLIENT_ID` 与 `GITHUB_OAUTH_CLIENT_SECRET`。
    - 免费即时注册模式只需新增 `PASSWORD_PEPPER`；部署 workflow 会从同名 GitHub Secret 自动同步到 Worker。
    - 需要邮箱验证和找回密码时，再新增 `TURNSTILE_SECRET_KEY` 与 `RESEND_API_KEY`。
-7. 免费即时注册模式在 Worker Variables 设置 `PUBLIC_PASSWORD_AUTH_MODE=local`，邮箱仅作为登录名，不发送邮件，也不提供自助找回密码。完整邮箱模式则移除该变量，并配置 Turnstile 的 `TURNSTILE_SITE_KEY`、已经过发件域名验证的 `AUTH_EMAIL_FROM` 以及上述邮件 Secrets；`PASSWORD_HASH_ITERATIONS` 默认 600000。未完整配置时邮箱入口会安全地隐藏，GitHub 登录仍可用。
+7. 免费即时注册模式在 Worker Variables 设置 `PUBLIC_PASSWORD_AUTH_MODE=local`，邮箱仅作为登录名，不发送邮件，也不提供自助找回密码。完整邮箱模式则移除该变量，并配置 Turnstile 的 `TURNSTILE_SITE_KEY`、已经过发件域名验证的 `AUTH_EMAIL_FROM` 以及上述邮件 Secrets。`PASSWORD_HASH_ITERATIONS` 支持 100000–1000000，当前免费 Worker 部署基线为 100000；提高前应先在实际 Worker 环境做 CPU 验证，提高后会在用户下一次密码登录成功时渐进升级。未完整配置时邮箱入口会安全地隐藏，GitHub 登录仍可用。
 8. 在 GitHub Repository Secrets 保留 `CLOUDFLARE_API_TOKEN` 与 `CLOUDFLARE_ACCOUNT_ID`。Token 至少需要目标账号的 Workers Scripts Edit、D1 Edit 与 Cloudflare Pages Edit。Worker 使用的 `GITHUB_TOKEN` 需对本仓库有 Actions: write 权限。
 9. 在 GitHub Repository Variables 配置：
    - `WORKER_URL`；
