@@ -39,11 +39,16 @@ test("shared action derives either endpoint and rejects inconsistent audiences",
   assert.match(content, /GITHUB_ENV/);
 });
 
-test("terminal callbacks remain unconditional and run before outcome reflection", async () => {
+test("terminal callbacks run after execution but not after invalid setup", async () => {
   const task = await read(taskUrl);
   const login = await read(loginUrl);
   assert.ok(task.indexOf("- name: Ensure terminal callback") < task.indexOf("- name: Reflect task outcome in Actions"));
   assert.ok(login.indexOf("- name: Ensure failed/interrupted login is recorded") < login.indexOf("- name: Reflect login outcome in Actions"));
-  assert.equal((task.match(/if: always\(\)/g) || []).length, 2);
-  assert.equal((login.match(/if: always\(\)/g) || []).length, 2);
+
+  for (const content of [task, login]) {
+    assert.equal((content.match(/always\(\)/g) || []).length, 2);
+    assert.equal((content.match(/steps\.resolve_worker\.outcome == 'success'/g) || []).length, 2);
+    assert.equal((content.match(/steps\.validate_id\.outcome == 'success'/g) || []).length, 2);
+    assert.equal((content.match(/steps\.install_dependency\.outcome == 'success'/g) || []).length, 2);
+  }
 });
