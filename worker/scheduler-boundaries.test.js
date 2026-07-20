@@ -128,3 +128,21 @@ test("dispatchable account selection cannot select an ambiguous run", async () =
   assert.match(sql, /r\.status = 'queued' AND r\.dispatch_status = 'pending'/);
   assert.doesNotMatch(sql, /r\.status = 'ambiguous'/);
 });
+
+test("dispatch reservation keeps every Telegram account strictly serial", async () => {
+  const db = statementDatabase();
+  const repository = createD1Repository(db);
+
+  assert.equal(await repository.reserveNextDispatch("account-1", NOW.toISOString()), null);
+
+  const statement = db.statements[0];
+  assert.match(statement.sql, /NOT EXISTS \([\s\S]*active\.status IN \('claimed', 'running'\)/);
+  assert.match(statement.sql, /active\.status = 'queued' AND active\.dispatch_status IN \('dispatching', 'dispatched'\)/);
+  assert.deepEqual(statement.bindings, [
+    NOW.toISOString(),
+    NOW.toISOString(),
+    "account-1",
+    NOW.toISOString(),
+    "account-1",
+  ]);
+});
