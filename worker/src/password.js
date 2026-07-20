@@ -1,5 +1,6 @@
 const encoder = new TextEncoder();
 const PASSWORD_ALGORITHM = "PBKDF2-HMAC-SHA256";
+const MAX_STORED_ITERATIONS = 1000000;
 
 export const PASSWORD_REHASH_CALLBACK = Symbol("password_rehash_callback");
 
@@ -18,9 +19,16 @@ function base64UrlToBytes(value) {
 
 function iterationsFromEnv(env) {
   const configured = Number(env.PASSWORD_HASH_ITERATIONS || 100000);
-  return Number.isInteger(configured) && configured >= 100000 && configured <= 1000000
+  return Number.isInteger(configured) && configured >= 100000 && configured <= MAX_STORED_ITERATIONS
     ? configured
     : 100000;
+}
+
+function storedIterations(record) {
+  const iterations = Number(record?.password_iterations);
+  return Number.isInteger(iterations) && iterations > 0 && iterations <= MAX_STORED_ITERATIONS
+    ? iterations
+    : null;
 }
 
 function passwordMaterial(password, env) {
@@ -50,10 +58,9 @@ function constantTimeEqual(left, right) {
 }
 
 export function passwordNeedsRehash(record, env) {
-  const current = Number(record?.password_iterations);
+  const current = storedIterations(record);
   return record?.password_algorithm === PASSWORD_ALGORITHM
-    && Number.isInteger(current)
-    && current >= 100000
+    && current !== null
     && current < iterationsFromEnv(env);
 }
 
@@ -71,16 +78,27 @@ export async function hashPassword(password, env) {
 }
 
 export async function verifyPassword(password, record, env) {
+  const iterations = storedIterations(record);
   if (record?.password_algorithm !== PASSWORD_ALGORITHM
-    || !record.password_hash || !record.password_salt
-    || !Number.isInteger(Number(record.password_iterations))) return false;
-  const actual = await derive(
-    password,
-    base64UrlToBytes(record.password_salt),
-    Number(record.password_iterations),
-    env,
-  );
-  const valid = constantTimeEqual(actual, base64UrlToBytes(record.password_hash));
+    || !record.password_hash || !record.password_salt || iterations === null) return false;
+
+  let salt;
+  let expected;
+  try {
+    salt = base64UrlToBytes(record.password_salt);
+    expected = base64UrlToBytes(record.password_hash);
+  } catch {
+    return false;
+  }
+  if (salt.length < 16 || salt.length > 64 || expected.length !== 32) return false;
+
+  let actual;
+  try {
+    actual = await derive(password, salt, iterations, env);
+  } catch {
+    return false;
+  }
+  const valid = constantTimeEqual(actual, expected);
   if (valid && passwordNeedsRehash(record, env)
     && typeof record[PASSWORD_REHASH_CALLBACK] === "function") {
     try {
@@ -93,4 +111,4 @@ export async function verifyPassword(password, record, env) {
   return valid;
 }
 
-export const __test = { constantTimeEqual, iterationsFromEnv };
+export const __test = { constantTimeEqual, iterationsFromEnv, storedIterations };
