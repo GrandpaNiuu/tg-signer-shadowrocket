@@ -2,8 +2,58 @@ const authContent = document.querySelector("#auth-content");
 let authConfiguration = null;
 let applying = false;
 
+const TURNSTILE_ACTIONS = Object.freeze({
+  login: "email_login",
+  register: "email_register",
+  "forgot-password": "forgot_password",
+  "reset-password": "reset_password",
+});
+
 function authMode() {
   return String(location.hash || "#/login").replace(/^#\/?/, "").split("?", 1)[0] || "login";
+}
+
+function turnstileAction() {
+  return TURNSTILE_ACTIONS[authMode()] || "email_login";
+}
+
+function wrapTurnstileRender() {
+  const turnstile = globalThis.turnstile;
+  if (!turnstile?.render || turnstile.render.__authContextWrapped) return Boolean(turnstile?.render);
+  try {
+    const originalRender = turnstile.render.bind(turnstile);
+    const wrappedRender = (container, options = {}) => originalRender(container, {
+      ...options,
+      action: turnstileAction(),
+    });
+    Object.defineProperty(wrappedRender, "__authContextWrapped", { value: true });
+    turnstile.render = wrappedRender;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function watchTurnstileLoader() {
+  if (wrapTurnstileRender()) return;
+  const head = document.head;
+  if (!head) return;
+  const observer = new MutationObserver((records) => {
+    for (const record of records) {
+      for (const node of record.addedNodes) {
+        if (!(node instanceof HTMLScriptElement)
+          || !node.src.startsWith("https://challenges.cloudflare.com/turnstile/v0/api.js")) continue;
+        node.addEventListener("load", () => {
+          wrapTurnstileRender();
+          observer.disconnect();
+        }, { once: true });
+      }
+    }
+  });
+  observer.observe(head, { childList: true });
+  window.addEventListener("load", () => {
+    if (wrapTurnstileRender()) observer.disconnect();
+  }, { once: true });
 }
 
 function securityNotice(kind, text, key) {
@@ -88,6 +138,8 @@ async function loadAuthenticationConfiguration() {
     // The main application already renders connection errors.
   }
 }
+
+watchTurnstileLoader();
 
 if (authContent) {
   new MutationObserver(applyAuthenticationState).observe(authContent, { childList: true, subtree: true });
