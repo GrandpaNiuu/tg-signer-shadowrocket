@@ -14,7 +14,7 @@ on:
           - legacy_takeover
   push:
     branches:
-      - "main"
+      - main
     paths:
       - ".github/workflows/deploy-worker.yml"
       - "worker/cloudflare-worker.js"
@@ -78,10 +78,7 @@ jobs:
           set -euo pipefail
           case "$DEPLOYMENT_MODE" in
             bootstrap|fresh_install|legacy_takeover) ;;
-            *)
-              echo "Unsupported deployment mode: $DEPLOYMENT_MODE"
-              exit 1
-              ;;
+            *) echo "Unsupported deployment mode: $DEPLOYMENT_MODE"; exit 1 ;;
           esac
           echo "Worker deployment mode: $DEPLOYMENT_MODE"
 
@@ -92,22 +89,11 @@ jobs:
           PASSWORD_PEPPER: ${{ secrets.PASSWORD_PEPPER }}
         run: |
           set -euo pipefail
-          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
-            echo "Missing GitHub Secret: CLOUDFLARE_API_TOKEN"
-            exit 1
-          fi
-          if [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
-            echo "Missing GitHub Secret: CLOUDFLARE_ACCOUNT_ID"
-            exit 1
-          fi
+          [ -n "${CLOUDFLARE_API_TOKEN:-}" ] || { echo "Missing GitHub Secret: CLOUDFLARE_API_TOKEN"; exit 1; }
+          [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ] || { echo "Missing GitHub Secret: CLOUDFLARE_ACCOUNT_ID"; exit 1; }
           if [ "$DEPLOYMENT_MODE" != "bootstrap" ] && [ "${#PASSWORD_PEPPER}" -lt 16 ]; then
             echo "Missing or invalid GitHub Secret: PASSWORD_PEPPER"
             exit 1
-          fi
-          if [ "$DEPLOYMENT_MODE" = "bootstrap" ]; then
-            echo "Bootstrap mode: application Worker secrets may be configured after the first deployment."
-          else
-            echo "Cloudflare deployment secrets are present."
           fi
 
       - name: Prepare secure deployment configuration
@@ -126,34 +112,27 @@ jobs:
           import pathlib
           import sys
 
-          mode = os.environ["DEPLOYMENT_MODE"]
           source = pathlib.Path("worker/wrangler.toml")
           target = pathlib.Path("worker/wrangler.deploy.toml")
           text = source.read_text(encoding="utf-8")
           target.write_text(text, encoding="utf-8")
-
           output = pathlib.Path(os.environ["GITHUB_OUTPUT"])
-          if mode == "bootstrap":
-              with output.open("a", encoding="utf-8") as stream:
-                  stream.write("configured=false\n")
+
+          if os.environ["DEPLOYMENT_MODE"] == "bootstrap":
+              output.write_text("configured=false\n", encoding="utf-8")
               sys.exit(0)
 
-          names = [
-              "TURNSTILE_SITE_KEY",
-              "TURNSTILE_SECRET_KEY",
-              "RESEND_API_KEY",
-              "AUTH_EMAIL_FROM",
-          ]
+          names = ["TURNSTILE_SITE_KEY", "TURNSTILE_SECRET_KEY", "RESEND_API_KEY", "AUTH_EMAIL_FROM"]
           values = {name: os.environ.get(name, "").strip() for name in names}
-          present = [name for name, value in values.items() if value]
+          present = [name for name in names if values[name]]
           if present and len(present) != len(names):
               missing = [name for name in names if not values[name]]
               print("Verified email authentication is only partially configured.")
               print("Missing GitHub Variables/Secrets: " + ", ".join(missing))
               sys.exit(1)
 
-          secrets = {"PASSWORD_PEPPER": os.environ["PASSWORD_PEPPER"]}
           configured = len(present) == len(names)
+          secrets = {"PASSWORD_PEPPER": os.environ["PASSWORD_PEPPER"]}
           if configured:
               for name in ("TURNSTILE_SITE_KEY", "AUTH_EMAIL_FROM"):
                   value = values[name]
@@ -161,7 +140,7 @@ jobs:
                       print(f"Invalid GitHub Variable: {name}")
                       sys.exit(1)
               if len(values["TURNSTILE_SECRET_KEY"]) < 8 or len(values["RESEND_API_KEY"]) < 8:
-                  print("TURNSTILE_SECRET_KEY and RESEND_API_KEY must be configured as non-empty GitHub Secrets.")
+                  print("TURNSTILE_SECRET_KEY and RESEND_API_KEY are invalid.")
                   sys.exit(1)
               text += "\nTURNSTILE_SITE_KEY = " + json.dumps(values["TURNSTILE_SITE_KEY"], ensure_ascii=False) + "\n"
               text += "AUTH_EMAIL_FROM = " + json.dumps(values["AUTH_EMAIL_FROM"], ensure_ascii=False) + "\n"
@@ -190,16 +169,8 @@ jobs:
           import os
           import sys
 
-          raw = os.environ.get("RAW_CLOUDFLARE_API_TOKEN", "")
-          token = raw.strip().strip('"').strip("'")
-          for prefix in [
-              "Authorization: Bearer ",
-              "authorization: bearer ",
-              "Bearer ",
-              "bearer ",
-              "CLOUDFLARE_API_TOKEN=",
-              "cloudflare_api_token=",
-          ]:
+          token = os.environ.get("RAW_CLOUDFLARE_API_TOKEN", "").strip().strip('"').strip("'")
+          for prefix in ("Authorization: Bearer ", "authorization: bearer ", "Bearer ", "bearer ", "CLOUDFLARE_API_TOKEN=", "cloudflare_api_token="):
               if token.startswith(prefix):
                   token = token[len(prefix):].strip()
           token = "".join(token.split())
@@ -207,8 +178,8 @@ jobs:
               print("CLOUDFLARE_API_TOKEN is empty after normalization.")
               sys.exit(1)
           print(f"::add-mask::{token}")
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
-              f.write(f"token={token}\n")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
+              stream.write(f"token={token}\n")
           PY
 
       - name: Apply D1 migrations
@@ -249,11 +220,10 @@ jobs:
           wranglerVersion: "4.94.0"
           command: deploy --config wrangler.deploy.toml --secrets-file .deploy-secrets.json
 
-      - name: Smoke test deployed Worker
+      - name: Resolve deployed Worker URL
+        id: worker_url
         env:
           WORKER_URL: ${{ vars.WORKER_URL }}
-          EMAIL_AUTH_CONFIGURED: ${{ steps.email_auth.outputs.configured }}
-          EXPECTED_TURNSTILE_SITE_KEY: ${{ vars.TURNSTILE_SITE_KEY }}
         run: |
           set -euo pipefail
           base_url="${WORKER_URL:-}"
@@ -261,66 +231,62 @@ jobs:
             audience="$(sed -n 's/^RUNNER_OIDC_AUDIENCE = "\(.*\)"$/\1/p' worker/wrangler.toml | head -n 1)"
             case "$audience" in
               https://*/api/runner) base_url="${audience%/api/runner}" ;;
-              *)
-                echo "WORKER_URL is missing and RUNNER_OIDC_AUDIENCE cannot be used as a fallback."
-                exit 1
-                ;;
+              *) echo "WORKER_URL is missing and RUNNER_OIDC_AUDIENCE cannot be used as a fallback."; exit 1 ;;
             esac
-            echo "WORKER_URL is not configured; using the Worker origin derived from RUNNER_OIDC_AUDIENCE."
           fi
           base_url="${base_url%/}"
-          case "$base_url" in
-            https://*) ;;
-            *)
-              echo "Worker smoke-test URL must use HTTPS."
-              exit 1
-              ;;
-          esac
+          case "$base_url" in https://*) ;; *) echo "Worker smoke-test URL must use HTTPS."; exit 1 ;; esac
+          echo "base_url=$base_url" >> "$GITHUB_OUTPUT"
 
-          check_endpoint() {
-            endpoint="$1"
-            body="$(curl --fail-with-body --silent --show-error --retry 6 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 20 "$base_url/$endpoint")"
-            ENDPOINT="$endpoint" RESPONSE_BODY="$body" node - <<'NODE'
-          const endpoint = process.env.ENDPOINT;
-          let payload;
-          try {
-            payload = JSON.parse(process.env.RESPONSE_BODY || "null");
-          } catch {
-            throw new Error(`Worker /${endpoint} returned invalid JSON.`);
-          }
-          if (payload?.ok !== true) throw new Error(`Worker /${endpoint} is not healthy.`);
-          console.log(`Worker /${endpoint} verified.`);
-          NODE
-          }
+      - name: Verify deployed Worker health
+        env:
+          BASE_URL: ${{ steps.worker_url.outputs.base_url }}
+        run: |
+          set -euo pipefail
+          file="${RUNNER_TEMP}/worker-health.json"
+          status="$(curl --silent --show-error --retry 6 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 20 --output "$file" --write-out '%{http_code}' "$BASE_URL/health")"
+          cat "$file"
+          [ "$status" = "200" ] || { echo "Worker /health returned HTTP $status"; exit 1; }
+          RESPONSE_FILE="$file" node -e 'const p=JSON.parse(require("node:fs").readFileSync(process.env.RESPONSE_FILE,"utf8")); if(p?.ok!==true) throw new Error("Worker /health is not healthy")'
 
-          check_endpoint health
-          if [ "$DEPLOYMENT_MODE" != "bootstrap" ]; then
-            check_endpoint ready
-            auth_body="$(curl --fail-with-body --silent --show-error --retry 6 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 20 "$base_url/api/auth/config")"
-            RESPONSE_BODY="$auth_body" node - <<'NODE'
-          const payload = JSON.parse(process.env.RESPONSE_BODY || "null")?.data;
-          if (!payload || payload.email_enabled !== true) {
-            throw new Error("Worker email login configuration is unavailable.");
-          }
-          const configured = process.env.EMAIL_AUTH_CONFIGURED === "true";
-          if (configured) {
+      - name: Verify deployed Worker readiness
+        if: ${{ env.DEPLOYMENT_MODE != 'bootstrap' }}
+        env:
+          BASE_URL: ${{ steps.worker_url.outputs.base_url }}
+        run: |
+          set -euo pipefail
+          file="${RUNNER_TEMP}/worker-ready.json"
+          status="$(curl --silent --show-error --retry 6 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 20 --output "$file" --write-out '%{http_code}' "$BASE_URL/ready")"
+          cat "$file"
+          [ "$status" = "200" ] || { echo "Worker /ready returned HTTP $status"; exit 1; }
+          RESPONSE_FILE="$file" node -e 'const p=JSON.parse(require("node:fs").readFileSync(process.env.RESPONSE_FILE,"utf8")); if(p?.ok!==true) throw new Error("Worker /ready is not ready")'
+
+      - name: Verify deployed email authentication state
+        if: ${{ env.DEPLOYMENT_MODE != 'bootstrap' }}
+        env:
+          BASE_URL: ${{ steps.worker_url.outputs.base_url }}
+          EMAIL_AUTH_CONFIGURED: ${{ steps.email_auth.outputs.configured }}
+          EXPECTED_TURNSTILE_SITE_KEY: ${{ vars.TURNSTILE_SITE_KEY }}
+        run: |
+          set -euo pipefail
+          file="${RUNNER_TEMP}/worker-auth-config.json"
+          status="$(curl --silent --show-error --retry 6 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 20 --output "$file" --write-out '%{http_code}' "$BASE_URL/api/auth/config")"
+          cat "$file"
+          [ "$status" = "200" ] || { echo "Worker /api/auth/config returned HTTP $status"; exit 1; }
+          RESPONSE_FILE="$file" node - <<'NODE'
+          const payload = JSON.parse(require("node:fs").readFileSync(process.env.RESPONSE_FILE, "utf8"))?.data;
+          if (!payload || payload.email_enabled !== true) throw new Error("Worker email login configuration is unavailable.");
+          if (process.env.EMAIL_AUTH_CONFIGURED === "true") {
             if (payload.registration_enabled !== true
               || payload.email_verification_required !== true
               || payload.password_reset_enabled !== true
               || payload.turnstile_site_key !== process.env.EXPECTED_TURNSTILE_SITE_KEY) {
               throw new Error("Verified email authentication smoke check failed.");
             }
-            console.log("Verified email registration, Turnstile, and password recovery are enabled.");
-          } else {
-            if (payload.registration_enabled !== false || payload.password_reset_enabled !== false) {
-              throw new Error("Unverified email registration was not safely closed.");
-            }
-            console.log("Email login remains available; unverified registration is safely closed.");
+          } else if (payload.registration_enabled !== false || payload.password_reset_enabled !== false) {
+            throw new Error("Unverified email registration was not safely closed.");
           }
           NODE
-          else
-            echo "Bootstrap deployment completed; configure Worker Secrets, then rerun fresh_install to require /ready."
-          fi
 
       - name: Remove temporary deployment secrets
         if: always()
