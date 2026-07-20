@@ -143,11 +143,3 @@ node --test tools/*.test.mjs
 ```
 
 CI 会在 `Quality Checks` workflow 中运行对应测试。测试通过只证明仓库内契约没有回归，不等同于 Cloudflare、GitHub、Telegram 和邮件服务的生产配置一定正确；生产环境还需要执行 smoke check 和线上审计。
-
-## 兼容范围
-
-- 已迁入 D1 的旧账号、Session、任务和历史运行继续可用。
-- 旧 5 段 Cron 按第 0 秒解释；新任务可以使用 6 段 Cron。
-- `send-text`、`task` 等旧名称继续映射到当前 Skill。
-- 旧代理和导入字段可能仍存在于底层数据结构，用于兼容已迁移数据，但网页不再提供普通用户配置入口。
-- 日常账号与任务管理请使用网页后台；D1 id、OAuth 凭据、Worker Secret 和部署 Token 属于基础设施配置。
