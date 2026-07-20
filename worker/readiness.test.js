@@ -42,7 +42,7 @@ test("health remains a liveness check without dependencies", async () => {
   });
 });
 
-test("ready returns 200 when schema, configuration, and secrets are available", async () => {
+test("ready returns 200 when core schema, configuration, and secrets are available", async () => {
   const worker = createWorker({ uuid: fixedUuid });
   const response = await worker.fetch(new Request("https://example.test/ready"), readyEnv());
 
@@ -57,8 +57,22 @@ test("ready returns 200 when schema, configuration, and secrets are available", 
       credentials: "ok",
       github_token: "ok",
       secret_root_key: "ok",
+      realtime_listener: "disabled",
     },
   });
+});
+
+test("ready reports the optional realtime listener token without making it a core dependency", async () => {
+  const worker = createWorker({ uuid: fixedUuid });
+  const response = await worker.fetch(
+    new Request("https://example.test/ready"),
+    readyEnv({ LISTENER_API_TOKEN: "x".repeat(48) }),
+  );
+  const body = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(body.ok, true);
+  assert.equal(body.checks.realtime_listener, "configured");
 });
 
 test("ready returns 503 and safe diagnostics when dependencies are missing", async () => {
@@ -75,6 +89,7 @@ test("ready returns 503 and safe diagnostics when dependencies are missing", asy
       credentials: "missing",
       github_token: "missing",
       secret_root_key: "missing",
+      realtime_listener: "disabled",
     },
     missing_configuration: [
       "GITHUB_OWNER",
