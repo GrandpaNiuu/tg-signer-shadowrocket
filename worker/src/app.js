@@ -15,6 +15,9 @@ const REQUIRED_READY_CONFIG = Object.freeze([
   "ADMIN_ORIGIN",
 ]);
 
+const READY_SCHEMA_SQL = `SELECT COUNT(*) AS ready FROM sqlite_master
+  WHERE type = 'table' AND name IN ('accounts', 'tasks', 'task_runs', 'secret_values')`;
+
 function defaultUuid() {
   return crypto.randomUUID();
 }
@@ -46,23 +49,39 @@ async function withRequestId(response, requestId) {
   });
 }
 
+function rootKeyStatus(value) {
+  const encoded = String(value || "").trim();
+  if (!encoded) return "missing";
+  try {
+    return atob(encoded).length === 32 ? "ok" : "invalid";
+  } catch {
+    return "invalid";
+  }
+}
+
 async function checkReadiness(env) {
   const missingConfiguration = REQUIRED_READY_CONFIG.filter(
     (name) => !String(env[name] || "").trim(),
   );
-  const credentials = String(env.GITHUB_TOKEN || "").trim() ? "ok" : "missing";
+  const githubToken = String(env.GITHUB_TOKEN || "").trim() ? "ok" : "missing";
+  const secretRootKey = rootKeyStatus(env.SECRET_ROOT_KEY);
 
   let database = "missing";
   if (env.DB) {
     try {
-      const result = await env.DB.prepare("SELECT 1 AS ready").first();
-      database = Number(result?.ready) === 1 ? "ok" : "error";
+      const result = await env.DB.prepare(READY_SCHEMA_SQL).first();
+      database = Number(result?.ready) === 4 ? "ok" : "schema_missing";
     } catch {
       database = "error";
     }
   }
 
   const configuration = missingConfiguration.length === 0 ? "ok" : "missing";
+  const credentials = githubToken === "ok" && secretRootKey === "ok"
+    ? "ok"
+    : secretRootKey === "invalid"
+      ? "invalid"
+      : "missing";
   const ok = database === "ok" && configuration === "ok" && credentials === "ok";
   return {
     status: ok ? 200 : 503,
@@ -73,6 +92,8 @@ async function checkReadiness(env) {
         database,
         configuration,
         credentials,
+        github_token: githubToken,
+        secret_root_key: secretRootKey,
       },
       ...(missingConfiguration.length ? { missing_configuration: missingConfiguration } : {}),
     },
@@ -178,6 +199,9 @@ export function createWorker(dependencies = {}) {
           };
           if (scheduler.failures_by_code && Object.keys(scheduler.failures_by_code).length) {
             log.failures_by_code = scheduler.failures_by_code;
+          }
+          if (scheduler.warnings_by_code && Object.keys(scheduler.warnings_by_code).length) {
+            log.warnings_by_code = scheduler.warnings_by_code;
           }
           if (hasNonZeroValues(scheduler.reconciliation)) {
             log.reconciliation = scheduler.reconciliation;
