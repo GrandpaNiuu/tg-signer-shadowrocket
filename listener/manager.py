@@ -122,6 +122,12 @@ class RealtimeManager:
                 })
             asyncio.create_task(self._report_event(event))
 
+    def _callback_for(self, account_id: str):
+        async def callback(client_value: Client, message: Any) -> None:
+            await self._handle_message(account_id, client_value, message)
+
+        return callback
+
     async def stop(self) -> None:
         current = list(self.accounts.values())
         self.accounts.clear()
@@ -146,9 +152,7 @@ class RealtimeManager:
                 continue
             account_id = str(account["id"])
             client = build_client(account)
-            client.add_handler(MessageHandler(
-                lambda client_value, message, aid=account_id: self._handle_message(aid, client_value, message)
-            ))
+            client.add_handler(MessageHandler(self._callback_for(account_id)))
             try:
                 await client.start()
                 self.accounts[account_id] = ManagedAccount(
