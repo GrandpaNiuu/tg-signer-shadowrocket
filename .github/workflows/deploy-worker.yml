@@ -43,7 +43,7 @@ jobs:
           node-version: "22"
       - run: python -m unittest discover -s runner/tests -p 'test_*.py' -v
       - run: npm test --prefix worker
-      - run: node --test tools/d1-takeover-audit.test.mjs
+      - run: node --test tools/*.test.mjs
 
   deploy:
     needs: verify
