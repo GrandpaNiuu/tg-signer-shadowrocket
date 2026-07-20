@@ -55,3 +55,5 @@ test("live Worker audit checks health before readiness", async () => {
   assert.equal(result.database, "ok");
   assert.equal(result.realtime_listener, "disabled");
 });
+
+// Temporary branch-only change used to trigger the production Worker audit.
