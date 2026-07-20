@@ -9,6 +9,7 @@ import {
   runnerRepository,
   schedulerRepository,
 } from "./repository-facade.js";
+import { handleListenerApi, handleWorkspaceRealtimeApi } from "./realtime-automation.js";
 import { handleRunnerApi } from "./runner-api.js";
 import { runScheduler } from "./scheduler.js";
 
@@ -106,6 +107,7 @@ async function checkReadiness(env) {
         credentials,
         github_token: githubToken,
         secret_root_key: secretRootKey,
+        realtime_listener: String(env.LISTENER_API_TOKEN || "").trim().length >= 32 ? "configured" : "disabled",
       },
       ...(missingConfiguration.length ? { missing_configuration: missingConfiguration } : {}),
     },
@@ -144,6 +146,10 @@ export function createWorker(dependencies = {}) {
           const repository = authenticationRepository(repositoryFactory(env), now);
           return await withRequestId(await adminAuth.handle(request, env, repository), requestId);
         }
+        if (url.pathname.startsWith("/api/listener/v1/")) {
+          const repository = repositoryFactory(env);
+          return await withRequestId(await handleListenerApi(request, env, repository), requestId);
+        }
         if (url.pathname.startsWith("/api/v1/")) {
           const repository = repositoryFactory(env);
           const verified = await verifyAdmin(request, env, repository);
@@ -153,12 +159,15 @@ export function createWorker(dependencies = {}) {
             role: verified?.role || "admin",
           };
           const userRepository = adminWorkspaceRepository(repository, identity);
-          return await withRequestId(await handleAdminApi(request, env, userRepository, {
+          const context = {
             uuid,
             now,
             fetch: fetchImpl,
             identity,
-          }), requestId);
+          };
+          const realtimeResponse = await handleWorkspaceRealtimeApi(request, env, userRepository, context);
+          if (realtimeResponse) return await withRequestId(realtimeResponse, requestId);
+          return await withRequestId(await handleAdminApi(request, env, userRepository, context), requestId);
         }
         if (url.pathname.startsWith("/api/runner/")) {
           const claims = await verifyRunner(request, env);
