@@ -8,6 +8,24 @@ export class HttpError extends Error {
   }
 }
 
+const DATABASE_CONFLICTS = Object.freeze([
+  {
+    marker: "bot_inspection_account_busy",
+    code: "account_busy",
+    message: "这个 Telegram 账号正在执行普通任务，暂时不能进行机器人识别。请等待执行结束后重试。",
+  },
+  {
+    marker: "realtime_account_has_tasks",
+    code: "listener_account_has_tasks",
+    message: "实时监听账号不能同时运行普通定时任务。请先停用该账号的全部普通任务，或改用专用账号。",
+  },
+  {
+    marker: "account_reserved_for_realtime_listener",
+    code: "account_reserved_for_realtime_listener",
+    message: "这个 Telegram 账号正在用于 24 小时实时服务，不能同时运行普通定时任务。请停用实时规则，或改用其他账号。",
+  },
+]);
+
 export function json(data, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(data), {
     status,
@@ -17,6 +35,11 @@ export function json(data, status = 200, extraHeaders = {}) {
       ...extraHeaders,
     },
   });
+}
+
+function databaseConflict(error) {
+  const value = error instanceof Error ? String(error.message || "") : "";
+  return DATABASE_CONFLICTS.find((candidate) => value.includes(candidate.marker));
 }
 
 export function errorResponse(error, requestId) {
@@ -30,6 +53,14 @@ export function errorResponse(error, requestId) {
       request_id: requestId,
     };
     return json(payload, error.status);
+  }
+
+  const conflict = databaseConflict(error);
+  if (conflict) {
+    return json({
+      error: { code: conflict.code, message: conflict.message },
+      request_id: requestId,
+    }, 409);
   }
 
   console.error(JSON.stringify({
@@ -70,3 +101,5 @@ export function methodNotAllowed(allowed) {
     allow: allowed.join(", "),
   });
 }
+
+export const __test = { databaseConflict };
