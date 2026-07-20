@@ -1,4 +1,4 @@
-import { ACCOUNT_STATUSES, TERMINAL_RUN_STATUSES } from "./states.js";
+import { ACCOUNT_STATUSES, RUN_STATUSES } from "./states.js";
 
 const SESSION_RECONNECT_ERROR_CODES = new Set([
   "session_invalid",
@@ -10,13 +10,14 @@ function bindRepositoryMember(target, property) {
 }
 
 function completionRequiresReconnect(completion) {
-  return SESSION_RECONNECT_ERROR_CODES.has(String(completion?.error_code || ""));
+  return completion?.status === RUN_STATUSES.FAILED
+    && SESSION_RECONNECT_ERROR_CODES.has(String(completion?.error_code || ""));
 }
 
 async function updateReconnectState(repository, runId, githubRunId, completion, now) {
   const execution = await repository.getExecution(runId);
   if (!execution || String(execution.github_run_id || "") !== String(githubRunId || "")) return;
-  if (!TERMINAL_RUN_STATUSES.includes(execution.status)) return;
+  if (execution.status !== RUN_STATUSES.FAILED) return;
   if (!SESSION_RECONNECT_ERROR_CODES.has(String(execution.error_code || ""))) return;
   if (!execution.account_id) return;
 
