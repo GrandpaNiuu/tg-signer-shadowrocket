@@ -21,6 +21,8 @@ export function publicPasswordAuthConfiguration(env) {
 
   // Local mode is an explicit development-only compatibility switch. Production
   // uses secure mode and fails new registration closed until mail + Turnstile are ready.
+  // Keeping this decision in one function also makes post-deployment auth smoke
+  // checks evaluate the exact same contract that the public login page receives.
   const enabled = passwordPepperConfigured;
   const localMode = enabled && localModeRequested;
   const registrationEnabled = localMode || verifiedRegistrationEnabled;
