@@ -27,6 +27,14 @@ const CLOSED = {
   },
 };
 
+const ADMIN_HTML = `<!doctype html>
+<title>Telegram 自动消息</title>
+<link rel="stylesheet" href="/assets/styles.css?v=1">
+<script type="module" src="/src/app.js?v=1"></script>
+<script type="module" src="/src/auth-security.js?v=1"></script>
+<script type="module" src="/src/notification-guidance.js?v=1"></script>
+<div id="auth-content"></div>`;
+
 test("verified email registration requires the complete security contract", () => {
   assert.deepEqual(validateAuthSnapshot(OPEN), {
     github_enabled: true,
@@ -59,17 +67,36 @@ test("at least one public authentication provider is required", () => {
   }), /No public authentication provider/);
 });
 
-test("live audit follows the production page and reports only safe booleans", async () => {
+test("live audit verifies the production shell, critical assets, and safe auth booleans", async () => {
   const calls = [];
   const fetchImpl = async (url) => {
-    calls.push(String(url));
-    if (String(url).endsWith("/api/auth/config")) {
+    const value = String(url);
+    calls.push(value);
+    if (value.endsWith("/api/auth/config")) {
       return new Response(JSON.stringify(CLOSED), {
         status: 200,
         headers: { "content-type": "application/json" },
       });
     }
-    return new Response("<!doctype html><title>Telegram</title>", {
+    if (value.includes("/src/auth-security.js")) {
+      return new Response("const applyScheduled = true; export default applyScheduled;", {
+        status: 200,
+        headers: { "content-type": "application/javascript" },
+      });
+    }
+    if (value.includes("/src/")) {
+      return new Response("export const loaded = true;", {
+        status: 200,
+        headers: { "content-type": "application/javascript" },
+      });
+    }
+    if (value.includes("/assets/styles.css")) {
+      return new Response(".auth-gate { display: block; }", {
+        status: 200,
+        headers: { "content-type": "text/css" },
+      });
+    }
+    return new Response(ADMIN_HTML, {
       status: 200,
       headers: { "content-type": "text/html; charset=utf-8" },
     });
@@ -80,9 +107,53 @@ test("live audit follows the production page and reports only safe booleans", as
   });
   assert.deepEqual(calls, [
     "https://grandpaniu.ccwu.cc/",
+    "https://grandpaniu.ccwu.cc/src/app.js?v=1",
+    "https://grandpaniu.ccwu.cc/src/auth-security.js?v=1",
+    "https://grandpaniu.ccwu.cc/src/notification-guidance.js?v=1",
+    "https://grandpaniu.ccwu.cc/assets/styles.css?v=1",
     "https://grandpaniu.ccwu.cc/api/auth/config",
   ]);
   assert.equal(result.requested_origin, "https://grandpaniu.ccwu.cc");
+  assert.equal(result.critical_assets_verified, true);
+  assert.equal(result.asset_count, 4);
   assert.equal(result.registration_enabled, false);
   assert.equal(JSON.stringify(result).includes("site-key"), false);
+});
+
+test("live audit rejects a stale authentication renderer", async () => {
+  const fetchImpl = async (url) => {
+    const value = String(url);
+    if (value === "https://grandpaniu.ccwu.cc/") {
+      return new Response(ADMIN_HTML, {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      });
+    }
+    if (value.includes("/src/auth-security.js")) {
+      return new Response("export const oldRenderer = true;", {
+        status: 200,
+        headers: { "content-type": "application/javascript" },
+      });
+    }
+    if (value.includes("/src/")) {
+      return new Response("export const loaded = true;", {
+        status: 200,
+        headers: { "content-type": "application/javascript" },
+      });
+    }
+    if (value.includes("/assets/styles.css")) {
+      return new Response(".auth-gate { display: block; }", {
+        status: 200,
+        headers: { "content-type": "text/css" },
+      });
+    }
+    return new Response(JSON.stringify(CLOSED), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  await assert.rejects(
+    () => runLiveAuthAudit({ adminUrl: "https://grandpaniu.ccwu.cc", fetchImpl }),
+    /stable authentication renderer/,
+  );
 });
