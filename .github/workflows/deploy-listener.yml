@@ -1,0 +1,200 @@
+name: Deploy Telegram Listener
+
+on:
+  workflow_dispatch:
+    inputs:
+      instance_id:
+        description: Listener instance identifier
+        required: true
+        default: listener-vps-1
+        type: string
+      listener_label:
+        description: Listener label shown in the administrator console
+        required: true
+        default: Telegram Listener VPS
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-telegram-listener
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.11"
+
+      - name: Verify Listener source
+        run: |
+          set -euo pipefail
+          python -m unittest discover -s listener/tests -p 'test_*.py' -v
+          python -m compileall -q listener
+          docker compose -f listener/docker-compose.yml config >/dev/null
+
+  deploy:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      VPS_HOST: ${{ secrets.LISTENER_VPS_HOST }}
+      VPS_USER: ${{ secrets.LISTENER_VPS_USER }}
+      VPS_PORT: ${{ vars.LISTENER_VPS_PORT || '22' }}
+      VPS_SSH_KEY: ${{ secrets.LISTENER_VPS_SSH_KEY }}
+      VPS_KNOWN_HOSTS: ${{ secrets.LISTENER_VPS_KNOWN_HOSTS }}
+      WORKER_URL: ${{ vars.WORKER_URL }}
+      LISTENER_API_TOKEN: ${{ secrets.LISTENER_API_TOKEN }}
+      LISTENER_INSTANCE_ID: ${{ inputs.instance_id }}
+      LISTENER_LABEL: ${{ inputs.listener_label }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Validate deployment configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          [ -n "${VPS_HOST:-}" ] || { echo "Missing GitHub Secret: LISTENER_VPS_HOST"; exit 1; }
+          [ -n "${VPS_USER:-}" ] || { echo "Missing GitHub Secret: LISTENER_VPS_USER"; exit 1; }
+          [ -n "${VPS_SSH_KEY:-}" ] || { echo "Missing GitHub Secret: LISTENER_VPS_SSH_KEY"; exit 1; }
+          [ -n "${VPS_KNOWN_HOSTS:-}" ] || { echo "Missing GitHub Secret: LISTENER_VPS_KNOWN_HOSTS"; exit 1; }
+          [ -n "${WORKER_URL:-}" ] || { echo "Missing GitHub Variable: WORKER_URL"; exit 1; }
+          [ "${#LISTENER_API_TOKEN}" -ge 32 ] || { echo "LISTENER_API_TOKEN must contain at least 32 characters"; exit 1; }
+          [[ "$WORKER_URL" == https://* ]] || { echo "WORKER_URL must use HTTPS"; exit 1; }
+          [[ "$VPS_PORT" =~ ^[0-9]{1,5}$ ]] || { echo "LISTENER_VPS_PORT must be a valid port"; exit 1; }
+          [[ "$LISTENER_INSTANCE_ID" =~ ^[A-Za-z0-9._:-]{1,80}$ ]] || { echo "instance_id contains unsupported characters"; exit 1; }
+          [ -n "$LISTENER_LABEL" ] && [ "${#LISTENER_LABEL}" -le 120 ] || { echo "listener_label must contain 1-120 characters"; exit 1; }
+
+      - name: Prepare SSH authentication
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$VPS_SSH_KEY" > "$HOME/.ssh/listener_deploy_key"
+          printf '%s\n' "$VPS_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/listener_deploy_key" "$HOME/.ssh/known_hosts"
+
+      - name: Build deployment bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/listener-deploy"
+          tar \
+            --exclude='listener/.env' \
+            --exclude='listener/__pycache__' \
+            --exclude='listener/tests/__pycache__' \
+            --exclude='runner/__pycache__' \
+            -czf "${RUNNER_TEMP}/listener-deploy/source.tar.gz" \
+            listener runner/requirements.txt
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          values = {
+              "WORKER_URL": os.environ["WORKER_URL"].rstrip("/"),
+              "LISTENER_API_TOKEN": os.environ["LISTENER_API_TOKEN"],
+              "LISTENER_INSTANCE_ID": os.environ["LISTENER_INSTANCE_ID"],
+              "LISTENER_LABEL": os.environ["LISTENER_LABEL"],
+              "LISTENER_SYNC_SECONDS": "30",
+              "LISTENER_HEARTBEAT_SECONDS": "60",
+              "LISTENER_INSPECTION_SECONDS": "4",
+              "LOG_LEVEL": "INFO",
+          }
+          for name, value in values.items():
+              if "\n" in value or "\r" in value:
+                  raise SystemExit(f"{name} contains a newline")
+          target = Path(os.environ["RUNNER_TEMP"]) / "listener-deploy" / "listener.env"
+          target.write_text(
+              "".join(f"{name}={json.dumps(value, ensure_ascii=False)}\n" for name, value in values.items()),
+              encoding="utf-8",
+          )
+          target.chmod(0o600)
+          PY
+
+      - name: Upload release to VPS
+        shell: bash
+        run: |
+          set -euo pipefail
+          release="${GITHUB_SHA:0:12}"
+          ssh_options=(
+            -i "$HOME/.ssh/listener_deploy_key"
+            -p "$VPS_PORT"
+            -o BatchMode=yes
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=yes
+            -o ConnectTimeout=15
+          )
+          ssh "${ssh_options[@]}" "$VPS_USER@$VPS_HOST" \
+            "mkdir -p \"\$HOME/telegramautomaticcheckin/releases/$release\""
+          scp "${ssh_options[@]}" \
+            "${RUNNER_TEMP}/listener-deploy/source.tar.gz" \
+            "${RUNNER_TEMP}/listener-deploy/listener.env" \
+            "$VPS_USER@$VPS_HOST:telegramautomaticcheckin/releases/$release/"
+
+      - name: Activate Listener release
+        shell: bash
+        run: |
+          set -euo pipefail
+          release="${GITHUB_SHA:0:12}"
+          ssh_options=(
+            -i "$HOME/.ssh/listener_deploy_key"
+            -p "$VPS_PORT"
+            -o BatchMode=yes
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=yes
+            -o ConnectTimeout=15
+          )
+          ssh "${ssh_options[@]}" "$VPS_USER@$VPS_HOST" \
+            "bash -s -- '$release'" <<'REMOTE'
+          set -euo pipefail
+          release="$1"
+          root="$HOME/telegramautomaticcheckin"
+          release_dir="$root/releases/$release"
+
+          command -v docker >/dev/null 2>&1 || { echo "Docker is not installed on the VPS"; exit 1; }
+          docker compose version >/dev/null 2>&1 || { echo "Docker Compose plugin is not installed on the VPS"; exit 1; }
+
+          tar -xzf "$release_dir/source.tar.gz" -C "$release_dir"
+          install -m 600 "$release_dir/listener.env" "$release_dir/listener/.env"
+          cd "$release_dir/listener"
+          docker compose config >/dev/null
+          docker compose up -d --build --remove-orphans
+
+          sleep 8
+          container_id="$(docker compose ps -q telegram-listener)"
+          if [ -z "$container_id" ] || [ "$(docker inspect -f '{{.State.Running}}' "$container_id" 2>/dev/null || true)" != "true" ]; then
+            docker compose logs --tail=150 telegram-listener || true
+            exit 1
+          fi
+
+          ln -sfn "$release_dir" "$root/current"
+          docker compose ps
+
+          # Retain the newest five releases. The active release is always the newest one here.
+          mapfile -t stale < <(find "$root/releases" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -nr | tail -n +6 | cut -d' ' -f2-)
+          if [ "${#stale[@]}" -gt 0 ]; then
+            rm -rf -- "${stale[@]}"
+          fi
+          REMOTE
+
+      - name: Remove local deployment credentials
+        if: always()
+        shell: bash
+        run: |
+          rm -f "$HOME/.ssh/listener_deploy_key"
+          rm -rf "${RUNNER_TEMP}/listener-deploy"
