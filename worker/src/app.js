@@ -1,12 +1,15 @@
 import { handleAdminApi } from "./admin-api.js";
 import { createAdminAuth } from "./admin-auth.js";
 import { verifyRunnerRequest } from "./auth.js";
-import { withDispatchErrorCodes } from "./dispatch-repository.js";
 import { errorResponse, json } from "./http.js";
-import { withPasswordRehash } from "./password-repository.js";
 import { createD1Repository } from "./repository.js";
+import {
+  adminWorkspaceRepository,
+  authenticationRepository,
+  runnerRepository,
+  schedulerRepository,
+} from "./repository-facade.js";
 import { handleRunnerApi } from "./runner-api.js";
-import { withRunnerSessionState } from "./runner-repository.js";
 import { runScheduler } from "./scheduler.js";
 
 const REQUIRED_READY_CONFIG = Object.freeze([
@@ -138,7 +141,7 @@ export function createWorker(dependencies = {}) {
           return await withRequestId(json(readiness.payload, readiness.status), requestId);
         }
         if (url.pathname.startsWith("/api/auth/")) {
-          const repository = withPasswordRehash(repositoryFactory(env), now);
+          const repository = authenticationRepository(repositoryFactory(env), now);
           return await withRequestId(await adminAuth.handle(request, env, repository), requestId);
         }
         if (url.pathname.startsWith("/api/v1/")) {
@@ -149,10 +152,7 @@ export function createWorker(dependencies = {}) {
             user_id: verified?.user_id || "legacy-admin",
             role: verified?.role || "admin",
           };
-          const scopedRepository = typeof repository.forUser === "function"
-            ? repository.forUser(identity)
-            : repository;
-          const userRepository = withDispatchErrorCodes(scopedRepository);
+          const userRepository = adminWorkspaceRepository(repository, identity);
           return await withRequestId(await handleAdminApi(request, env, userRepository, {
             uuid,
             now,
@@ -162,10 +162,7 @@ export function createWorker(dependencies = {}) {
         }
         if (url.pathname.startsWith("/api/runner/")) {
           const claims = await verifyRunner(request, env);
-          const repository = withRunnerSessionState(
-            withDispatchErrorCodes(repositoryFactory(env)),
-            now,
-          );
+          const repository = runnerRepository(repositoryFactory(env), now);
           return await withRequestId(
             await handleRunnerApi(request, env, repository, { uuid, now, fetch: fetchImpl }, claims),
             requestId,
@@ -188,7 +185,7 @@ export function createWorker(dependencies = {}) {
           if (env.DB) {
             try {
               scheduler = await runScheduler(env, {
-                repository: withDispatchErrorCodes(repositoryFactory(env)),
+                repository: schedulerRepository(repositoryFactory(env)),
                 fetch: fetchImpl,
                 now,
                 uuid,
