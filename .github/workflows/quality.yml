@@ -32,12 +32,6 @@ jobs:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "22"
-      - name: Test state definitions
-        run: node --test worker/states.test.js
-      - name: Test scheduler reconciliation
-        run: node --test worker/scheduler-reconciliation.test.js
-      - name: Test dispatch error classification
-        run: node --test worker/dispatch-errors.test.js
       - name: Run complete Worker suite
         run: npm test --prefix worker
 
