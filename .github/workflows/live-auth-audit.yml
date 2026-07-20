@@ -59,6 +59,13 @@ jobs:
         run: |
           set -o pipefail
           node tools/live-auth-audit.mjs | tee "${RUNNER_TEMP}/live-auth-audit.log"
+      - name: Verify beginner-safe production copy
+        shell: bash
+        run: |
+          set -euo pipefail
+          html="$(curl --fail --silent --show-error --location --max-time 20 "${ADMIN_URL}/?copy-audit=${GITHUB_RUN_ID}")"
+          grep -Fq "验证码和密码不会写入浏览器本地存储" <<<"${html}"
+          grep -Fq "/src/account-login-only.js" <<<"${html}"
       - name: Upload sanitized audit result
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
