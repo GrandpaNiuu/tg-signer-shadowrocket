@@ -1,155 +1,169 @@
-# Telegram 自动消息与签到
+# Telegram 自动消息平台
 
-基于原自动签到仓库增量升级的 Telegram 自动消息平台。签到只是一个用法；同一后台也可以定时向联系人、群组、频道或机器人发送普通消息和命令。Cloudflare Worker/Cron、GitHub Actions、`tg-signer`、`send_text`、Session、代理与通知能力继续复用，日常配置统一收敛到网页后台。
+这是一个基于 Cloudflare 和 GitHub Actions 的多用户 Telegram 自动化平台。用户通过网页管理 Telegram 账号、定时任务、机器人命令、执行记录和通知；Cloudflare Worker 负责权限、调度、加密与数据存储，短生命周期 GitHub Actions Runner 负责实际连接 Telegram。
 
-平台以个人维护为主，也支持公开注册后的独立个人空间。它只增加必要的 GitHub/邮箱注册和数据隔离，不包含支付、套餐、团队、任务市场、商业后台、VPS 常驻服务、Docker、Redis、Celery 或 Kubernetes。
+项目最初用于 Telegram 自动签到，现在也可以用于定时发送普通消息、向机器人发送命令，以及运行仓库中经过审核的 Telegram Skill。
+
+> 本项目不是 Telegram 官方产品，也不是零配置的一键部署项目。部署者需要自行准备并配置 Cloudflare、GitHub OAuth、GitHub Actions、D1、Worker、Pages 和相关 Secret。
+
+## 使用前先看
+
+- **网页新增 Telegram 账号只提供手机号登录。** 普通用户不再看到 Session 导入和代理设置。
+- **普通用户不需要填写 API_ID/API_HASH，但平台管理员必须先配置一次。** 未配置时手机号登录不可用。
+- **6 段 Cron 支持填写秒，但不代表严格准点。** Cloudflare Cron 和 GitHub Actions 排队都可能造成延迟，后台会显示调度偏差。
+- **邮箱功能写进代码，不等于生产环境已经开启。** Turnstile、发件服务和相关 Secret 未配置完整时，邮箱新注册与找回密码会安全关闭。
+- **通知属于尽力发送，不保证必达。** 通知失败不会把已成功的 Telegram 任务改成失败。
+- **仓库没有写死账号或任务数量上限，不代表无限使用。** 实际容量受 Cloudflare、GitHub Actions 和 Telegram 限制。
+- **自动化可能触发 Telegram 的风控或账号限制。** 使用者需要控制频率，并自行遵守 Telegram 和目标机器人的规则。
+
+## 当前能力
+
+### 用户与登录
+
+- GitHub OAuth 登录；首次登录可以创建独立工作区。
+- 安全邮箱体系包含邮箱验证、Turnstile、找回密码和会话撤销。
+- 邮箱注册只有在生产安全配置完整后才开放；关闭时不是数据库故障。
+- 每位用户只能访问自己的 Telegram 账号、任务、执行记录和登录会话。
+- 管理员可以查看用户资源数量，并停用或恢复用户访问。
+
+### Telegram 账号
+
+- 网页只保留手机号登录入口。
+- 登录流程：手机号 → Telegram 验证码 → 可选二步验证 → `get_me` 校验 → 加密保存 Session。
+- 支持账号启停、状态检查、Telegram 名称和用户名同步、删除与批量验证。
+- 验证码、二步验证密码和 Session 不保存到浏览器存储。
+- 已经迁移进 D1 的旧账号和旧 Session 继续兼容，但不再作为普通用户新增入口。
+
+### 自动消息与签到
+
+- 支持普通消息、机器人命令和代码白名单中的 Skill。
+- 支持每日、每周、每小时、分钟间隔和高级 Cron。
+- 支持 Retry、Timeout、Thread ID、Delete After、启停、复制与手动执行。
+- 同一 Telegram 账号的任务串行执行；不同账号可以并行。
+- 任务是否成功取决于 Telegram、目标账号、机器人状态和外部网络，平台不能保证每次都成功。
+
+### 执行记录
+
+- 手动执行和定时执行统一写入 D1 的 `task_runs`。
+- 显示任务、账号、触发方式、计划时间、实际开始、调度偏差、耗时、重试和结果。
+- 首页和执行记录页会自动发现新的定时运行，不需要依靠手动执行刷新。
+- 结果无法确认时记录为 `ambiguous`，不会盲目重试造成重复签到或重复发送。
+
+### Telegram 通知
+
+- 管理员可配置平台级 Bot Token 与 Chat ID，统一接收用户任务结果。
+- 成功通知保持简洁；失败通知显示必要原因和执行详情入口。
+- Token、Chat ID、Session 和原始敏感日志不会出现在通知正文中。
+- Telegram Bot API 故障、网络异常或群权限变化都可能造成通知未送达。
 
 ## 运行架构
 
 ```text
-Cloudflare Pages（GitHub OAuth / 邮箱登录后台）
-        │ 同源 Pages Function / Service Binding
-        ▼
-Cloudflare Worker（API、调度、加密、GitHub OIDC 校验）
-        │
-        ├── Cloudflare D1（账号、任务、运行、脱敏日志）
-        │
-        └── workflow_dispatch（只传不敏感的 run_id / flow_id）
-                ▼
-          GitHub Actions
-                ▼
-          统一 Python Runner
-                ▼
-       send_text / tg_signer / Telegram 登录
-                │
-                └── 结果经 Worker 回写 D1
+Cloudflare Pages
+  网页后台与登录入口
+          │
+          ▼
+Cloudflare Worker
+  API、权限、加密、D1 调度、GitHub OIDC 校验
+          │
+          ├── Cloudflare D1
+          │     用户、账号、任务、运行记录、脱敏日志
+          │
+          └── workflow_dispatch
+                只传 run_id / flow_id
+                        │
+                        ▼
+                 GitHub Actions
+                        │
+                        ▼
+                  Python Runner
+                        │
+                        ▼
+                    Telegram
 ```
 
-D1 是唯一配置与调度来源。Cloudflare 的分钟级 Cron 会提前派发未来 120 秒内的任务，短生命周期 GitHub Runner 再等待到目标秒执行。5 段 Cron 继续兼容，新增和编辑任务推荐使用 6 段 `秒 分 时 日 月 星期`。GitHub Actions 不是硬实时系统；排队造成的晚发会在后台显示为“调度偏差”。
+D1 是配置、调度和运行记录的唯一数据源。Cloudflare Cron 创建运行记录并派发 GitHub Actions。Runner 领取任务、连接 Telegram、执行操作，然后通过 Worker 回写状态和脱敏结果。
 
-## 后台能力
-
-- 概览：今日执行、成功、失败、进行中和最近脱敏日志。
-- 用户登录：GitHub 首次登录自动注册；邮箱注册必须验证，支持找回密码和撤销其他登录会话。每位用户只能访问自己的账号、任务与运行记录。
-- Telegram 账号：添加、编辑、删除、启停、状态；支持导入旧 Session、同步 Telegram 名称/用户名，并可分批检查当前工作区的全部账号。短时 Runner 调用 `get_me` 验证后才标记 connected。
-- 网页登录：新增账号只输入手机号，再依次输入验证码和可选 2FA；API_ID/API_HASH 在设置中统一配置一次，也可自动复用完整的旧账号凭据对。成功后自动导出并加密保存 Session。
-- 自动消息任务：账号、Skill、接收方、消息/命令、6 段秒级 Cron、Retry、Timeout、Thread、Delete After，全字段 CRUD、启停和手动执行；提供每日/每周/每小时/间隔等可视化时间设置、复制，以及不含秘密的 JSON 导入导出。
-- Skill Registry：代码 allowlist 中的 `send_text` 与 `tg_signer`；数据库不能指定任意 Python/Shell 代码。
-- 执行记录：计划时间、实际开始、调度偏差、状态、错误、耗时、重试、attempts 和脱敏日志；页面自动发现新运行，保留任务仍存在时可直接再次执行。
-- 用户管理：管理员查看公开注册用户、工作区资源数量和最近活动，并可停用/恢复访问；停用会撤销会话但保留用户数据。
-- 设置：全局 Telegram 应用凭据、默认时区和通知开关；D1 调度已固定接管，不再提供容易造成重复发送的旧模式切换。
-
-账号和任务数量没有仓库内的固定上限，实际吞吐受 Cloudflare 与 GitHub Actions 的个人账户配额限制。同一账号的任务串行执行，不同账号可以并行，避免多个 Runner 同时使用同一 Telegram Session。
-
-## 仓库结构
-
-| 目录/文件 | 用途 |
-|---|---|
-| `admin/` | 无构建依赖的 Cloudflare Pages 后台与同源 API 代理 |
-| `worker/` | Worker、D1 migrations、管理/Runner API、调度与安全模块 |
-| `runner/` | 统一 TaskSpec、Runner、Skill Registry、登录 Runner 与测试 |
-| `.github/workflows/task-runner.yml` | D1 任务 Runner，只接收 `run_id` |
-| `.github/workflows/telegram-login.yml` | 短生命周期 Telegram 网页登录 Runner |
-
-仓库与后台不是两套产品：后台（`admin/`）只是操作界面；Worker 和 D1 是控制中心；仓库中的 Runner 与两个 GitHub Actions workflow 是实际连接 Telegram 的执行端。删除仓库或停用 Actions 后，后台仍能打开和查看 D1 数据，但网页登录、手动执行和定时发送都会停止。
+GitHub Actions 不是硬实时调度器。即使 Cron 中填写了秒，Runner 也只能在 GitHub 已经分配运行环境后尝试等待到目标秒；排队晚于目标时间时，任务会延迟执行。
 
 ## 安全边界
 
-- Session、API_HASH、代理凭据、tg-signer 配置、验证码、2FA 和通知 Token 不会写入明文日志。
-- D1 敏感值使用 AES-256-GCM 应用层加密；随机 nonce，AAD 绑定 owner、purpose 与 key version。
-- `SECRET_ROOT_KEY` 只存在于 Cloudflare Worker Secret，不进入 D1、Pages、workflow input 或仓库。
-- GitHub workflow input 只含不敏感 ID；Runner 用 GitHub OIDC 短期身份领取任务和回写结果。
-- 验证码和 2FA 是短时、一次性输入；Runner 使用后清空，浏览器不使用 localStorage/sessionStorage/IndexedDB。
-- Session 不出现在命令行参数；敏感临时目录权限为 `0700`、文件为 `0600`，退出清理。
-- Timeout 或发送结果无法确认时记录为 `ambiguous`，不会盲目重试造成重复签到。
-- Retry 只用于明确未执行的失败（例如 Telegram FloodWait）；连接中断保持不确定状态。
-- Pages 与 Worker 使用 GitHub OAuth + S256 PKCE 或已验证邮箱登录；随机会话只以 SHA-256 摘要保存到 D1。只有配置的不可变 GitHub user id 会取得管理员角色，登录名相同不能冒充管理员。
-- 邮箱密码使用 PBKDF2-HMAC-SHA256、独立随机盐和 Worker Secret 中的 pepper；目标迭代数提高后，活跃用户会在下一次密码登录成功时使用新盐渐进 rehash，不要求统一重置密码。更新使用旧哈希条件保护，不会覆盖并发密码修改。
-- 邮箱注册、登录、找回密码和重置密码使用不同的 Turnstile action；Worker 同时校验验证结果、action 与生产域名，跨页面或跨域取得的挑战结果不会被接受。
+- D1 敏感值使用 AES-256-GCM 应用层加密。
+- `SECRET_ROOT_KEY` 只存在于 Cloudflare Worker Secret。
+- GitHub workflow input 只传不敏感的 `run_id` 或 `flow_id`。
+- Runner 使用 GitHub OIDC 短期身份领取任务和回写结果。
+- Session 不出现在命令行参数；敏感临时文件使用严格权限并在退出时清理。
+- 用户作用域缺失时 API 直接拒绝请求，不回退到全局数据访问。
+- 邮箱密码使用 PBKDF2-HMAC-SHA256、随机盐和部署级 pepper。
+- 注册、登录、找回密码和重置密码使用不同的 Turnstile action，并校验生产域名。
+- 找回密码对存在和不存在的邮箱返回一致结果，避免账户枚举。
+- 日志在保存和通知前都会脱敏，但部署者仍不应把 Secret、Session、验证码或密码发到 Issue、聊天或截图中。
 
-## 首次部署
+## 仓库结构
 
-首次基础设施配置仍需执行一次；完成后新增账号、任务、机器人、命令和 Cron 都在网页后台操作，不再改 Python、Shell、YAML 或 GitHub Actions。
+| 路径 | 用途 |
+|---|---|
+| `admin/` | Cloudflare Pages 网页后台和同源 API 代理 |
+| `worker/` | Worker、D1 migrations、认证、调度、管理 API、Runner API 和加密模块 |
+| `runner/` | Telegram Runner、登录 Runner、TaskSpec、Skill Registry 和测试 |
+| `.github/workflows/task-runner.yml` | Telegram 任务执行工作流，只接收 `run_id` |
+| `.github/workflows/telegram-login.yml` | 手机号登录与账号验证工作流 |
+| `.github/workflows/quality.yml` | Worker、Admin、Runner 和部署安全测试 |
+| `.github/workflows/live-auth-audit.yml` | 生产站点与认证状态审计 |
 
-1. 在 Cloudflare 创建 D1 数据库 `telegram-checkin`，记录 database id。
-2. 在 Cloudflare Pages 先创建 **Direct Upload** 项目 `telegram-checkin-admin` 并做一次初始上传。不要同时启用 Git integration。
-3. 将 Pages 项目绑定生产域名 **`https://grandpaniu.ccwu.cc`**；默认 `pages.dev` 地址由中间件重定向到该域名。
-4. 在 GitHub 创建一个 OAuth App，供登录与自动注册使用；无需 Cloudflare Zero Trust 或账单授权：
-   - Homepage URL：`https://grandpaniu.ccwu.cc`
-   - Authorization callback URL：`https://grandpaniu.ccwu.cc/api/auth/github/callback`
-   - 记录 Client ID，并生成 Client Secret；两者只写入 Worker Secret。
-5. 在 `worker/wrangler.toml` 填写：
-   - D1 database id；
-   - `RUNNER_OIDC_AUDIENCE`：生产 Worker URL 加 `/api/runner`；
-   - `ADMIN_ORIGIN=https://grandpaniu.ccwu.cc`；
-   - 唯一管理员的 `ADMIN_GITHUB_LOGIN` 与不可变 `ADMIN_GITHUB_USER_ID`。
-6. 配置 Worker Secrets：
-   - 保留 `GITHUB_TOKEN`；
-   - 新增 `SECRET_ROOT_KEY`（恰好 32 个随机字节的 Base64）；
-   - 新增 `GITHUB_OAUTH_CLIENT_ID` 与 `GITHUB_OAUTH_CLIENT_SECRET`；
-   - 新增 `PASSWORD_PEPPER`；部署 workflow 会从同名 GitHub Secret 自动同步到 Worker；
-   - 新增 `TURNSTILE_SECRET_KEY` 与 `RESEND_API_KEY`，用于验证注册、登录保护和找回密码。
-7. 生产环境保持 `PUBLIC_PASSWORD_AUTH_MODE=secure`，并配置 Turnstile 的 `TURNSTILE_SITE_KEY`、已经过发件域名验证的 `AUTH_EMAIL_FROM` 以及上述邮件 Secrets。`local` 仅用于本地开发兼容测试，不用于公开部署。`PASSWORD_HASH_ITERATIONS` 支持 100000–1000000，当前免费 Worker 部署基线为 100000；提高前应先在实际 Worker 环境做 CPU 验证，提高后会在用户下一次密码登录成功时渐进升级。安全服务未完整配置时，已有邮箱用户仍可登录，但新邮箱注册和自助找回会保持关闭，GitHub 登录仍可用。
-8. 在 GitHub Repository Secrets 保留 `CLOUDFLARE_API_TOKEN` 与 `CLOUDFLARE_ACCOUNT_ID`。Token 至少需要目标账号的 Workers Scripts Edit、D1 Edit 与 Cloudflare Pages Edit。Worker 使用的 `GITHUB_TOKEN` 需对本仓库有 Actions: write 权限。
-9. 在 GitHub Repository Variables 配置：
-   - `WORKER_URL`；
-   - `WORKER_OIDC_AUDIENCE`（必须与 Worker 的 `RUNNER_OIDC_AUDIENCE` 完全一致）。
-10. 运行 `Deploy Cloudflare Worker`，保持默认 `fresh_install`。workflow 会先应用远程 D1 migration，再部署 Worker；空数据库允许首次部署。
-11. 运行 `Deploy Cloudflare Pages Admin`；`CONTROL_PLANE` Service Binding 指向 `tg-signer-shadowrocket`，生产环境保持 `CANONICAL_HOST=grandpaniu.ccwu.cc`。不创建 Cloudflare Access Application。
+## 部署前提
 
-### Worker 部署模式
+这不是只 Fork 仓库就能使用的项目。完整部署至少需要：
 
-- `fresh_install`：默认模式。用于全新安装、普通升级和 `main` 推送触发的自动部署；允许空 D1，先应用 migration，再部署 Worker。
-- `legacy_takeover`：只在准备退役旧调度链路时手动选择。migration 完成后，workflow 会核对已连接账号、加密 Session、任务和成功 Runner canary；任一证据不足都会阻止部署继续。
+1. Cloudflare D1 数据库；
+2. Cloudflare Worker；
+3. Cloudflare Pages Direct Upload 项目；
+4. Pages 到 Worker 的 `CONTROL_PLANE` Service Binding；
+5. GitHub OAuth App；
+6. 能派发 Actions 的 GitHub Token；
+7. `SECRET_ROOT_KEY`、OAuth Secret 等 Worker Secrets；
+8. 管理员配置的 Telegram API_ID/API_HASH；
+9. 若开放邮箱注册，还需要 Turnstile、已验证发件域名和邮件服务 API Key。
 
-旧接管审计工具只输出资源计数，不输出手机号、Session、Secret、任务正文或用户数据。旧链路已经退役后，后续部署继续使用 `fresh_install`，不需要重复执行接管审计。
+缺少某一项时，页面可能仍能打开，但相应功能会不可用。例如：
 
-本仓库沿用原 Worker 名称，通常可以直接保留已有 Worker Secrets。若确实是全新 Cloudflare 账号，先完成一次 Worker 部署以创建服务，再设置 Worker Secrets，并重新部署/验证；不要把真实 Secret 写入 TOML 或仓库。
+- Pages 正常但 Worker 不可用：网页能加载，数据和操作会失败；
+- Worker 正常但 Actions 被禁用：可以查看数据，登录 Telegram 和执行任务会失败；
+- Telegram 应用凭据未配置：新增账号的手机号登录不可用；
+- 邮件或 Turnstile 未配置：GitHub 登录仍可用，但邮箱新注册和找回密码关闭。
 
-具体 Worker 与 Pages 配置说明见 `worker/README.md` 和 `admin/README.md`。
+详细部署参数见 `worker/README.md`、`admin/README.md` 和 `docs/registration.md`。
 
-## 旧配置迁移状态
-
-本实例的旧 GitHub Secrets 已完成一次性迁移，D1 调度已经接管。旧 Session 在迁移时变成 D1 内的 AES-GCM 密文，并继续供已连接账号使用；删除 GitHub 中的旧 Session、目标和文本 Secrets 不会注销 Telegram，也不会删除后台账号。旧 daily workflow、迁移 workflow 和 Shell/Python 适配器已经退役，避免两条链路重复发送。
-
-## 网页 Telegram 登录
-
-后台新增账号时：
+## 网页 Telegram 登录流程
 
 ```text
-手机号
-  → GitHub 登录 Runner 发送验证码
-  → 后台输入验证码（无效可重试，未收到可重新发送）
-  → 如需要，再输入 2FA 密码
-  → Runner 调用 get_me 验证账号
+输入手机号
+  → GitHub 登录 Runner 请求 Telegram 验证码
+  → 用户在网页输入验证码
+  → 如账号启用了二步验证，再输入密码
+  → Runner 调用 get_me 校验身份
   → Runner 导出 Session
-  → Worker AES-GCM 加密入 D1
+  → Worker 加密写入 D1
   → 账号状态变为 connected
 ```
 
-API_ID 与 API_HASH 不再按账号填写。它们在“设置 → Telegram 应用”中加密保存一次，所有新账号统一使用；如果旧迁移账号已有完整凭据对，后台会自动复用，因此升级后无需重新配置。旧 Session 导入保留在新增账号窗口的高级标签中。
+“普通用户无需填写 API_ID/API_HASH”只表示它们不会在新增账号表单中重复出现，并不表示平台不需要这些凭据。平台管理员必须先在设置中完成配置。
 
-Cloudflare Worker 无法保持 Telegram 长连接，因此登录由一个最长 20 分钟的短生命周期 GitHub Actions job 承担。验证码和 2FA 不进入 workflow inputs 或 Actions 日志。导入已有 Session 时复用同一短时 workflow，只执行 Session + `get_me` 验证；验证通过前账号保持 disconnected/login_pending。
-
-## 本地测试
-
-不需要安装前端或 Worker npm 依赖：
+## 测试
 
 ```bash
 python -m unittest discover -s runner/tests -p 'test_*.py' -v
 npm test --prefix worker
 npm test --prefix admin
-node --test tools/d1-takeover-audit.test.mjs
+node --test tools/*.test.mjs
 ```
 
-CI 会在 `Quality Checks` workflow 中执行同一组测试。
+CI 会在 `Quality Checks` workflow 中运行对应测试。测试通过只证明仓库内契约没有回归，不等同于 Cloudflare、GitHub、Telegram 和邮件服务的生产配置一定正确；生产环境还需要执行 smoke check 和线上审计。
 
-## 兼容边界
+## 兼容范围
 
-- 已迁入 D1 的旧账号、Session、任务和历史运行继续可用，不要求重新登录。
-- 旧 5 段 Cron 自动按第 0 秒执行；新任务使用 6 段 Cron。
-- `send-text`、`task` 旧模式继续映射到 `send_text`、`tg_signer`。
-- Thread、Delete After、代理、tg-signer Base64 导入、目标格式归一化和特定 Bot peer workaround 保留。
-- 通知仍是 best-effort：通知失败不改变消息发送结果，日志会先脱敏。
-
-日常配置请只使用后台。基础设施 Secret、D1 id、GitHub OAuth 凭据等部署级值不属于日常账号/任务配置，也不会暴露在网页中。
+- 已迁入 D1 的旧账号、Session、任务和历史运行继续可用。
+- 旧 5 段 Cron 按第 0 秒解释；新任务可以使用 6 段 Cron。
+- `send-text`、`task` 等旧名称继续映射到当前 Skill。
+- 旧代理和导入字段可能仍存在于底层数据结构，用于兼容已迁移数据，但网页不再提供普通用户配置入口。
+- 日常账号与任务管理请使用网页后台；D1 id、OAuth 凭据、Worker Secret 和部署 Token 属于基础设施配置。
