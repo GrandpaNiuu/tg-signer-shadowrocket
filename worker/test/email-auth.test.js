@@ -225,7 +225,7 @@ test("Turnstile and mail configuration fail closed without exposing account exis
     },
   }), context.env);
   assert.equal(mailMissing.status, 503);
-  assert.equal((await mailMissing.json()).error.code, "email_auth_not_configured");
+  assert.equal((await mailMissing.json()).error.code, "secure_registration_not_configured");
 
   const forgotUnknown = await context.worker.fetch(request("/api/auth/email/forgot-password", {
     method: "POST",

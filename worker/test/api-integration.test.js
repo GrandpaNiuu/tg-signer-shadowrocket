@@ -915,7 +915,9 @@ test("admin can discover a notification destination and send a test message", as
   assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
   assert.deepEqual((await response.json()).data, { sent: true });
   assert.equal(telegramMessages.length, 1);
-  assert.match(telegramMessages[0].body.text, /测试通知/);
+  assert.match(telegramMessages[0].body.text, /通知配置成功/);
+  assert.match(telegramMessages[0].body.text, /所有用户的任务结果/);
+  assert.equal(telegramMessages[0].body.parse_mode, "HTML");
   assert.equal(JSON.stringify(await worker.fetch(request("/api/v1/settings"), env).then((item) => item.json())).includes(token), false);
 });
 
@@ -1113,8 +1115,15 @@ test("configured notification secrets are decrypted only to send a completed run
   assert.equal(response.status, 200);
   assert.equal(telegramMessages.length, 1);
   assert.equal(telegramMessages[0].body.chat_id, chatId);
-  assert.match(telegramMessages[0].body.text, /GitHub Actions：https:\/\/github\.com\/owner\/repo\/actions\/runs\/9001/);
-  assert.match(telegramMessages[0].body.text, /check-in done/);
+  assert.match(telegramMessages[0].body.text, /任务执行成功/);
+  assert.match(telegramMessages[0].body.text, /用户：<\/b>GrandpaNiuu/);
+  assert.doesNotMatch(telegramMessages[0].body.text, /GitHub Actions|check-in done/);
+  assert.deepEqual(telegramMessages[0].body.reply_markup, {
+    inline_keyboard: [[{
+      text: "查看执行详情",
+      url: "https://github.com/owner/repo/actions/runs/9001",
+    }]],
+  });
   assert.equal(telegramMessages[0].body.text.includes("must-not-leak"), false);
   assert.equal(telegramMessages[0].body.text.includes(token), false);
 });
