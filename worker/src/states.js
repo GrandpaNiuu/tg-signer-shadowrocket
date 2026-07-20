@@ -1,5 +1,6 @@
 export const ACCOUNT_STATUSES = Object.freeze({
   DISCONNECTED: "disconnected",
+  LOGIN_PENDING: "login_pending",
   CONNECTED: "connected",
   RECONNECT_REQUIRED: "reconnect_required",
   ERROR: "error",
@@ -34,10 +35,18 @@ export const DISPATCH_STATUSES = Object.freeze({
   DISPATCHED: "dispatched",
 });
 
+export function isAccountStatus(value) {
+  return Object.values(ACCOUNT_STATUSES).includes(value);
+}
+
 export function isRunStatus(value) {
   return Object.values(RUN_STATUSES).includes(value);
 }
 
 export function isTerminalRunStatus(value) {
   return TERMINAL_RUN_STATUSES.includes(value);
+}
+
+export function isDispatchStatus(value) {
+  return Object.values(DISPATCH_STATUSES).includes(value);
 }
