@@ -50,7 +50,7 @@ function sessionInvalidCompletion(overrides = {}) {
   };
 }
 
-test("session_invalid completion moves the account to reconnect_required", async () => {
+test("session_invalid failure moves the account to reconnect_required", async () => {
   const raw = repository();
   const wrapped = withRunnerSessionState(raw, () => NOW);
 
@@ -78,6 +78,17 @@ test("ordinary task failures do not change the account connection state", async 
 
   await wrapped.completeRun("run-1", "12345", sessionInvalidCompletion({
     error_code: "telegram_error",
+  }));
+
+  assert.deepEqual(raw.updates, []);
+});
+
+test("a contradictory success result cannot trigger a reconnect transition", async () => {
+  const raw = repository();
+  const wrapped = withRunnerSessionState(raw, () => NOW);
+
+  await wrapped.completeRun("run-1", "12345", sessionInvalidCompletion({
+    status: "success",
   }));
 
   assert.deepEqual(raw.updates, []);
