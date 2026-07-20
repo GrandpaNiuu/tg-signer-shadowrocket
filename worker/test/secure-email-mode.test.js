@@ -93,7 +93,15 @@ test("legacy users receive verification mail after secure services are enabled",
   };
   await createLegacyUser(repository, env);
   const fetch = async (url, init = {}) => {
-    if (String(url).includes("turnstile/v0/siteverify")) return Response.json({ success: true });
+    if (String(url).includes("turnstile/v0/siteverify")) {
+      const token = new URLSearchParams(init.body).get("response");
+      return Response.json({
+        success: true,
+        hostname: "telegram-checkin-admin.pages.dev",
+        action: "email_login",
+        token,
+      });
+    }
     if (String(url) === "https://api.resend.com/emails") {
       emails.push(JSON.parse(init.body));
       return Response.json({ id: "mail-1" });
