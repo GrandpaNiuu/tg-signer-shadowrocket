@@ -7,6 +7,8 @@ import {
   DISPATCH_STATUSES,
   RUN_STATUSES,
   TERMINAL_RUN_STATUSES,
+  isAccountStatus,
+  isDispatchStatus,
   isRunStatus,
   isTerminalRunStatus,
 } from "./src/states.js";
@@ -18,16 +20,28 @@ test("run state groups are complete and disjoint", () => {
 });
 
 test("state validators reject unknown values", () => {
+  assert.equal(isAccountStatus(ACCOUNT_STATUSES.LOGIN_PENDING), true);
+  assert.equal(isAccountStatus(ACCOUNT_STATUSES.RECONNECT_REQUIRED), true);
+  assert.equal(isAccountStatus("needs_reauth"), false);
   assert.equal(isRunStatus(RUN_STATUSES.QUEUED), true);
   assert.equal(isTerminalRunStatus(RUN_STATUSES.AMBIGUOUS), true);
   assert.equal(isRunStatus("unknown"), false);
   assert.equal(isTerminalRunStatus(RUN_STATUSES.RUNNING), false);
+  assert.equal(isDispatchStatus(DISPATCH_STATUSES.DISPATCHING), true);
+  assert.equal(isDispatchStatus("unknown"), false);
 });
 
-test("account and dispatch values remain backward compatible", () => {
-  assert.equal(ACCOUNT_STATUSES.CONNECTED, "connected");
-  assert.equal(ACCOUNT_STATUSES.RECONNECT_REQUIRED, "reconnect_required");
-  assert.equal(DISPATCH_STATUSES.PENDING, "pending");
-  assert.equal(DISPATCH_STATUSES.DISPATCHING, "dispatching");
-  assert.equal(DISPATCH_STATUSES.DISPATCHED, "dispatched");
+test("account and dispatch values match persisted database strings", () => {
+  assert.deepEqual(Object.values(ACCOUNT_STATUSES), [
+    "disconnected",
+    "login_pending",
+    "connected",
+    "reconnect_required",
+    "error",
+  ]);
+  assert.deepEqual(Object.values(DISPATCH_STATUSES), [
+    "pending",
+    "dispatching",
+    "dispatched",
+  ]);
 });
