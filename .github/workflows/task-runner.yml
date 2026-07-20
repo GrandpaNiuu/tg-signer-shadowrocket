@@ -37,12 +37,14 @@ jobs:
           cache-dependency-path: runner/requirements.txt
 
       - name: Resolve Worker configuration
+        id: resolve_worker
         uses: ./.github/actions/resolve-worker-config
         with:
           worker-url: ${{ secrets.WORKER_URL || vars.WORKER_URL }}
           worker-oidc-audience: ${{ secrets.WORKER_OIDC_AUDIENCE || vars.WORKER_OIDC_AUDIENCE }}
 
       - name: Validate task run id
+        id: validate_id
         shell: bash
         run: |
           set -euo pipefail
@@ -52,6 +54,7 @@ jobs:
           }
 
       - name: Install pinned Telegram dependency
+        id: install_dependency
         run: python -m pip install --disable-pip-version-check --requirement runner/requirements.txt
 
       - name: Execute claimed task
@@ -65,7 +68,7 @@ jobs:
           --result-file "$RESULT_FILE"
 
       - name: Ensure terminal callback
-        if: always()
+        if: ${{ always() && steps.resolve_worker.outcome == 'success' && steps.validate_id.outcome == 'success' && steps.install_dependency.outcome == 'success' }}
         env:
           RESULT_FILE: ${{ runner.temp }}/telegram-runner-result.json
         run: >-
@@ -74,7 +77,7 @@ jobs:
           --result-file "$RESULT_FILE"
 
       - name: Reflect task outcome in Actions
-        if: always()
+        if: ${{ always() && steps.resolve_worker.outcome == 'success' && steps.validate_id.outcome == 'success' && steps.install_dependency.outcome == 'success' }}
         env:
           RESULT_FILE: ${{ runner.temp }}/telegram-runner-result.json
         run: python -m runner.cli assert-success --result-file "$RESULT_FILE"
