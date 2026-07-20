@@ -1,0 +1,210 @@
+name: Apply Turnstile context hardening
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/apply-turnstile-context-hardening.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22"
+
+      - name: Apply guarded source updates
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              file = Path(path)
+              text = file.read_text(encoding="utf-8")
+              if old not in text:
+                  raise SystemExit(f"Expected block not found in {path}: {old[:80]!r}")
+              file.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          replace_once(
+              "worker/src/email-auth.js",
+              'import { publicPasswordAuthConfiguration } from "./public-auth-configuration.js";\n',
+              'import { publicPasswordAuthConfiguration } from "./public-auth-configuration.js";\nimport { verifyTurnstileToken } from "./turnstile.js";\n',
+          )
+
+          replace_once(
+              "worker/src/email-auth.js",
+              '''async function verifyTurnstile(request, responseToken, config, fetchImpl) {
+            if (!config.turnstileSecret) return;
+            const body = new URLSearchParams({
+              secret: config.turnstileSecret,
+              response: responseToken,
+            });
+            const remoteIp = String(request.headers.get("cf-connecting-ip") || "").trim();
+            if (remoteIp) body.set("remoteip", remoteIp);
+            let result;
+            try {
+              const response = await fetchImpl("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+                method: "POST",
+                headers: { "content-type": "application/x-www-form-urlencoded" },
+                body,
+              });
+              result = response.ok ? await response.json() : null;
+            } catch {
+              result = null;
+            }
+            if (!result?.success) throw new HttpError(400, "turnstile_failed", "人机验证失败，请重新尝试。");
+          }
+
+          ''',
+              '',
+          )
+
+          replace_once(
+              "worker/src/email-auth.js",
+              '''        await verifyTurnstile(request, turnstileInput(body.turnstile_token, {
+                    required: Boolean(config.turnstileSecret),
+                  }), config, fetchImpl);''',
+              '''        await verifyTurnstileToken({
+                    request,
+                    responseToken: turnstileInput(body.turnstile_token, {
+                      required: Boolean(config.turnstileSecret),
+                    }),
+                    secret: config.turnstileSecret,
+                    origin: config.origin,
+                    action: "email_register",
+                    env,
+                    fetchImpl,
+                  });''',
+          )
+
+          replace_once(
+              "worker/src/email-auth.js",
+              '''        await verifyTurnstile(request, turnstileInput(body.turnstile_token, {
+                    required: Boolean(config.turnstileSecret),
+                  }), config, fetchImpl);''',
+              '''        await verifyTurnstileToken({
+                    request,
+                    responseToken: turnstileInput(body.turnstile_token, {
+                      required: Boolean(config.turnstileSecret),
+                    }),
+                    secret: config.turnstileSecret,
+                    origin: config.origin,
+                    action: "email_login",
+                    env,
+                    fetchImpl,
+                  });''',
+          )
+
+          replace_once(
+              "worker/src/email-auth.js",
+              '        await verifyTurnstile(request, turnstileInput(body.turnstile_token), config, fetchImpl);',
+              '''        await verifyTurnstileToken({
+                    request,
+                    responseToken: turnstileInput(body.turnstile_token),
+                    secret: config.turnstileSecret,
+                    origin: config.origin,
+                    action: "forgot_password",
+                    env,
+                    fetchImpl,
+                  });''',
+          )
+
+          replace_once(
+              "worker/src/email-auth.js",
+              '        await verifyTurnstile(request, turnstileInput(body.turnstile_token), config, fetchImpl);',
+              '''        await verifyTurnstileToken({
+                    request,
+                    responseToken: turnstileInput(body.turnstile_token),
+                    secret: config.turnstileSecret,
+                    origin: config.origin,
+                    action: "reset_password",
+                    env,
+                    fetchImpl,
+                  });''',
+          )
+
+          replace_once(
+              "admin/src/app.js",
+              '''    turnstile.render(container, {
+                sitekey,
+                theme: "light",
+                callback: (token) => { field.value = token; },''',
+              '''    turnstile.render(container, {
+                sitekey,
+                theme: "light",
+                action: ({
+                  login: "email_login",
+                  register: "email_register",
+                  "forgot-password": "forgot_password",
+                  "reset-password": "reset_password",
+                })[authLocation().mode] || "email_login",
+                callback: (token) => { field.value = token; },''',
+          )
+
+          replace_once(
+              "worker/test/email-auth.test.js",
+              '''      const form = new URLSearchParams(init.body);
+                  turnstile.push(Object.fromEntries(form));
+                  return Response.json({ success: form.get("response") !== "invalid-captcha" });''',
+              '''      const form = new URLSearchParams(init.body);
+                  turnstile.push(Object.fromEntries(form));
+                  const token = String(form.get("response") || "");
+                  const action = token.includes("register")
+                    ? "email_register"
+                    : token.includes("forgot")
+                      ? "forgot_password"
+                      : token.includes("reset") || token.includes("replay")
+                        ? "reset_password"
+                        : "email_login";
+                  return Response.json({
+                    success: token !== "invalid-captcha",
+                    hostname: "telegram-checkin-admin.pages.dev",
+                    action,
+                  });''',
+          )
+
+          replace_once(
+              "worker/test/secure-email-mode.test.js",
+              '    if (String(url).includes("turnstile/v0/siteverify")) return Response.json({ success: true });',
+              '''    if (String(url).includes("turnstile/v0/siteverify")) return Response.json({
+                success: true,
+                hostname: "telegram-checkin-admin.pages.dev",
+                action: "email_login",
+              });''',
+          )
+
+          replace_once(
+              "README.md",
+              '''   - 免费即时注册模式只需新增 `PASSWORD_PEPPER`；部署 workflow 会从同名 GitHub Secret 自动同步到 Worker。
+             - 需要邮箱验证和找回密码时，再新增 `TURNSTILE_SECRET_KEY` 与 `RESEND_API_KEY`。
+          7. 免费即时注册模式在 Worker Variables 设置 `PUBLIC_PASSWORD_AUTH_MODE=local`，邮箱仅作为登录名，不发送邮件，也不提供自助找回密码。完整邮箱模式则移除该变量，并配置 Turnstile 的 `TURNSTILE_SITE_KEY`、已经过发件域名验证的 `AUTH_EMAIL_FROM` 以及上述邮件 Secrets。`PASSWORD_HASH_ITERATIONS` 支持 100000–1000000，当前免费 Worker 部署基线为 100000；提高前应先在实际 Worker 环境做 CPU 验证，提高后会在用户下一次密码登录成功时渐进升级。未完整配置时邮箱入口会安全地隐藏，GitHub 登录仍可用。''',
+              '''   - 新增 `PASSWORD_PEPPER`；部署 workflow 会从同名 GitHub Secret 自动同步到 Worker。
+             - 新增 `TURNSTILE_SECRET_KEY` 与 `RESEND_API_KEY`，用于验证注册、登录保护和找回密码。
+          7. 生产环境保持 `PUBLIC_PASSWORD_AUTH_MODE=secure`，并配置 Turnstile 的 `TURNSTILE_SITE_KEY`、已经过发件域名验证的 `AUTH_EMAIL_FROM` 以及上述邮件 Secrets。`local` 仅允许本地开发兼容测试，不用于公开部署。`PASSWORD_HASH_ITERATIONS` 支持 100000–1000000，当前免费 Worker 部署基线为 100000；提高前应先在实际 Worker 环境做 CPU 验证，提高后会在用户下一次密码登录成功时渐进升级。安全服务未完整配置时，已有邮箱用户仍可登录，但新邮箱注册和自助找回会保持关闭，GitHub 登录仍可用。''',
+          )
+          PY
+
+      - name: Run Worker tests
+        run: npm test --prefix worker
+
+      - name: Run Admin tests
+        run: npm test --prefix admin
+
+      - name: Commit hardened flow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/apply-turnstile-context-hardening.yml
+          git add worker/src/email-auth.js admin/src/app.js worker/test/email-auth.test.js worker/test/secure-email-mode.test.js README.md
+          git commit -m "security: bind Turnstile tokens to auth context"
+          git push origin HEAD:main
