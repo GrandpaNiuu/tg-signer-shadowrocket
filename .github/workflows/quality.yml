@@ -58,7 +58,26 @@ jobs:
           if-no-files-found: error
           retention-days: 3
       - name: Test deployment safety tooling
-        run: node --test tools/*.test.mjs
+        id: deployment_tooling
+        shell: bash
+        run: |
+          set -o pipefail
+          log_file="${RUNNER_TEMP}/deployment-tooling-tests.log"
+          if node --test tools/*.test.mjs >"$log_file" 2>&1; then
+            tail -n 30 "$log_file"
+          else
+            echo "Deployment tooling tests failed. Showing the final diagnostic lines:"
+            tail -n 220 "$log_file"
+            exit 1
+          fi
+      - name: Upload deployment tooling failure diagnostics
+        if: ${{ failure() && steps.deployment_tooling.outcome == 'failure' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: deployment-tooling-diagnostics-${{ github.run_id }}
+          path: ${{ runner.temp }}/deployment-tooling-tests.log
+          if-no-files-found: error
+          retention-days: 3
 
   admin:
     runs-on: ubuntu-latest
