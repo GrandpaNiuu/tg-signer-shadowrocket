@@ -16,19 +16,24 @@ class ListenerWorkerClient:
         worker_url: str,
         api_token: str,
         *,
+        instance_id: str | None = None,
         timeout_seconds: float = 20.0,
     ) -> None:
         self.base_url = worker_url.rstrip("/")
         self.api_token = api_token
+        self.instance_id = (instance_id or "").strip()
         self.timeout_seconds = timeout_seconds
+        headers = {
+            "authorization": f"Bearer {api_token}",
+            "accept": "application/json",
+            "user-agent": "telegram-realtime-listener/0.2",
+        }
+        if self.instance_id:
+            headers["x-listener-instance-id"] = self.instance_id
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
             timeout=httpx.Timeout(timeout_seconds),
-            headers={
-                "authorization": f"Bearer {api_token}",
-                "accept": "application/json",
-                "user-agent": "telegram-realtime-listener/0.1",
-            },
+            headers=headers,
             follow_redirects=False,
         )
 
@@ -52,7 +57,7 @@ class ListenerWorkerClient:
 
     async def fetch_config(self) -> dict[str, Any]:
         value = await self._request("GET", "/api/listener/v1/config")
-        return value if isinstance(value, dict) else {"accounts": [], "rules": []}
+        return value if isinstance(value, dict) else {"accounts": [], "rules": [], "leader": False}
 
     async def heartbeat(self, payload: dict[str, Any]) -> dict[str, Any]:
         value = await self._request("POST", "/api/listener/v1/heartbeat", json=payload)
