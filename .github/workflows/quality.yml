@@ -70,6 +70,8 @@ jobs:
             tail -n 220 "$log_file"
             exit 1
           fi
+      - name: Inspect current production authentication state
+        run: node tools/live-auth-audit.mjs
       - name: Upload deployment tooling failure diagnostics
         if: ${{ failure() && steps.deployment_tooling.outcome == 'failure' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
