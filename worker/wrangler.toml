@@ -2,6 +2,8 @@ name = "tg-signer-shadowrocket"
 main = "cloudflare-worker.js"
 compatibility_date = "2025-01-01"
 
+# Runtime configuration is redeployed only after the secure authentication and
+# beginner-friendly notification contracts pass the repository test suites.
 # The Worker tick is minute-based; tasks may be dispatched ahead so the Runner
 # can wait until the configured second.
 [triggers]
