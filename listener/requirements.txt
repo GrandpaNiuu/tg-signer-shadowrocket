@@ -1,0 +1,2 @@
+# Reuse the audited Telegram/Pyrogram dependency baseline used by short-lived tasks.
+-r ../runner/requirements.txt
