@@ -31,17 +31,34 @@ test("migrations run before optional takeover audit and both deployment paths", 
   assert.match(content, /if: \$\{\{ env\.DEPLOYMENT_MODE == 'legacy_takeover' \}\}/);
 });
 
-test("bootstrap does not require or upload PASSWORD_PEPPER", async () => {
+test("bootstrap does not require or upload application secrets", async () => {
   const content = await workflow();
   assert.match(content, /if \[ "\$DEPLOYMENT_MODE" != "bootstrap" \] && \[ "\$\{#PASSWORD_PEPPER\}" -lt 16 \]/);
   assert.match(content, /- name: Deploy Worker bootstrap\s*\n\s*if: \$\{\{ env\.DEPLOYMENT_MODE == 'bootstrap' \}\}/);
-  assert.match(content, /- name: Deploy Worker with configured secrets\s*\n\s*if: \$\{\{ env\.DEPLOYMENT_MODE != 'bootstrap' \}\}[\s\S]*?secrets: \|\s*\n\s*PASSWORD_PEPPER/);
+  assert.match(content, /if mode == "bootstrap":[\s\S]*configured=false/);
+  assert.match(content, /- name: Deploy Worker with configured secrets\s*\n\s*if: \$\{\{ env\.DEPLOYMENT_MODE != 'bootstrap' \}\}[\s\S]*--secrets-file \.deploy-secrets\.json/);
 });
 
-test("bootstrap requires liveness while normal deployments require readiness", async () => {
+test("verified email authentication must be fully configured or safely disabled", async () => {
+  const content = await workflow();
+  for (const name of ["TURNSTILE_SITE_KEY", "TURNSTILE_SECRET_KEY", "RESEND_API_KEY", "AUTH_EMAIL_FROM"]) {
+    assert.match(content, new RegExp(name));
+  }
+  assert.match(content, /Verified email authentication is only partially configured/);
+  assert.match(content, /registration remains safely closed/);
+  assert.match(content, /wrangler\.deploy\.toml/);
+  assert.match(content, /\.deploy-secrets\.json/);
+  assert.doesNotMatch(content, /echo\s+"?\$\{?(?:TURNSTILE_SECRET_KEY|RESEND_API_KEY)\}?/);
+});
+
+test("bootstrap requires liveness while normal deployments require readiness and auth state", async () => {
   const content = await workflow();
   assert.match(content, /check_endpoint health/);
   assert.match(content, /if \[ "\$DEPLOYMENT_MODE" != "bootstrap" \]; then\s*\n\s*check_endpoint ready/);
+  assert.match(content, /api\/auth\/config/);
+  assert.match(content, /email_verification_required/);
+  assert.match(content, /password_reset_enabled/);
+  assert.match(content, /Unverified email registration was not safely closed/);
   assert.match(content, /WORKER_URL: \$\{\{ vars\.WORKER_URL \}\}/);
 });
 
@@ -50,4 +67,10 @@ test("smoke check can derive the Worker origin when WORKER_URL is absent", async
   assert.match(content, /RUNNER_OIDC_AUDIENCE/);
   assert.match(content, /https:\/\/\*\/api\/runner\) base_url="\$\{audience%\/api\/runner\}"/);
   assert.match(content, /curl --fail-with-body/);
+});
+
+test("temporary deployment credentials are removed even after failure", async () => {
+  const content = await workflow();
+  assert.match(content, /- name: Remove temporary deployment secrets\s*\n\s*if: always\(\)/);
+  assert.match(content, /rm -f worker\/\.deploy-secrets\.json worker\/wrangler\.deploy\.toml/);
 });
