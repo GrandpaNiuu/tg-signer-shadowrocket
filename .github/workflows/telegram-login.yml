@@ -37,12 +37,14 @@ jobs:
           cache-dependency-path: runner/requirements.txt
 
       - name: Resolve Worker configuration
+        id: resolve_worker
         uses: ./.github/actions/resolve-worker-config
         with:
           worker-url: ${{ secrets.WORKER_URL || vars.WORKER_URL }}
           worker-oidc-audience: ${{ secrets.WORKER_OIDC_AUDIENCE || vars.WORKER_OIDC_AUDIENCE }}
 
       - name: Validate login flow id
+        id: validate_id
         shell: bash
         run: |
           set -euo pipefail
@@ -52,6 +54,7 @@ jobs:
           }
 
       - name: Install pinned Telegram dependency
+        id: install_dependency
         run: python -m pip install --disable-pip-version-check --requirement runner/requirements.txt
 
       - name: Complete short-lived Telegram login
@@ -65,7 +68,7 @@ jobs:
           --result-file "$RESULT_FILE"
 
       - name: Ensure failed/interrupted login is recorded
-        if: always()
+        if: ${{ always() && steps.resolve_worker.outcome == 'success' && steps.validate_id.outcome == 'success' && steps.install_dependency.outcome == 'success' }}
         env:
           RESULT_FILE: ${{ runner.temp }}/telegram-login-result.json
         run: >-
@@ -74,13 +77,16 @@ jobs:
           --result-file "$RESULT_FILE"
 
       - name: Reflect login outcome in Actions
-        if: always()
+        if: ${{ always() && steps.resolve_worker.outcome == 'success' && steps.validate_id.outcome == 'success' && steps.install_dependency.outcome == 'success' }}
         env:
           RESULT_FILE: ${{ runner.temp }}/telegram-login-result.json
         run: |
           python - "$RESULT_FILE" <<'PY'
-          import json, pathlib, sys
+          import json
+          import pathlib
+          import sys
+
           path = pathlib.Path(sys.argv[1])
-          if not path.exists() or json.loads(path.read_text()) ["status"] != "connected":
+          if not path.exists() or json.loads(path.read_text())["status"] != "connected":
               raise SystemExit("Telegram login did not complete")
           PY
