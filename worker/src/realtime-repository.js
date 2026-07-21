@@ -1,3 +1,5 @@
+import { HttpError } from "./http.js";
+
 function requiredRepository(repository) {
   if (!repository || typeof repository !== "object") throw new Error("Repository is unavailable.");
   return repository;
@@ -76,10 +78,14 @@ function compatibilityDatabase(db) {
               bind(accountId) {
                 return {
                   async first() {
-                    // The old route used this query to prohibit all tasks. It now only
-                    // blocks switching an account into realtime mode while a Runner has
-                    // already been dispatched or is actively using that Session.
-                    return { total: await dispatchedTaskActive(current, accountId) ? 1 : 0 };
+                    if (await dispatchedTaskActive(current, accountId)) {
+                      throw new HttpError(
+                        409,
+                        "listener_account_task_active",
+                        "这个账号当前已有任务交给 GitHub Runner 或正在执行。请等待该任务结束后再启用 24 小时实时规则。",
+                      );
+                    }
+                    return { total: 0 };
                   },
                 };
               },
