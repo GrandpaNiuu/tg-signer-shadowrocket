@@ -56,17 +56,21 @@ async function existingGithubUser(repository, input) {
   return null;
 }
 
-function customGithubDisplayName(user) {
+function customGithubDisplayName(user, input = {}) {
   const displayName = String(user?.display_name || "").trim();
   if (!displayName) return "";
-  const githubName = String(user?.github_name || "").trim();
-  const githubLogin = String(user?.github_login || "").trim();
-  return displayName !== githubName && displayName !== githubLogin ? displayName : "";
+  const providerNames = [
+    user?.github_name,
+    user?.github_login,
+    input?.github_name,
+    input?.github_login,
+  ].map((value) => String(value || "").trim()).filter(Boolean);
+  return providerNames.includes(displayName) ? "" : displayName;
 }
 
 async function upsertGithubUserPreservingDisplayName(repository, input) {
   const existing = await existingGithubUser(repository, input);
-  const preservedName = customGithubDisplayName(existing);
+  const preservedName = customGithubDisplayName(existing, input);
   let user = await repository.upsertGithubUser(input);
   if (!preservedName || !repository.db?.prepare
     || (user?.display_name === preservedName && user?.github_name === preservedName)) return user;
