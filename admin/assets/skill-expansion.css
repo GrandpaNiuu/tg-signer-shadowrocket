@@ -45,6 +45,39 @@
   color: #067647;
 }
 
+.skill-usage {
+  margin-top: 1rem;
+  padding: .8rem .9rem;
+  border: 1px solid var(--line, #dbe3ea);
+  border-radius: 12px;
+  background: var(--panel-soft, #f8fafc);
+}
+
+.skill-usage summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.skill-usage-body {
+  display: grid;
+  gap: .65rem;
+  padding-top: .75rem;
+  color: var(--muted, #667085);
+}
+
+.skill-usage-body p,
+.skill-usage-body ol {
+  margin: 0;
+}
+
+.skill-usage-body ol {
+  padding-left: 1.25rem;
+}
+
+.skill-usage-body li + li {
+  margin-top: .35rem;
+}
+
 @media (max-width: 720px) {
   .skill-flow-step {
     padding: .75rem;
