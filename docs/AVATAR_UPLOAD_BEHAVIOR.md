@@ -1,12 +1,15 @@
 # Avatar upload behavior
 
-The profile and platform avatar pickers are designed to behave like a mobile Telegram avatar picker:
+Personal avatars are available to every signed-in user. Platform branding remains an administrator-only setting.
+
+The avatar picker now behaves as a user-controlled photo editor:
 
 - the picker opens the phone photo library through `image/*`;
-- common mobile formats, including HEIC/HEIF when the browser can decode them, are accepted;
-- large or non-native images are converted locally to JPEG before the existing avatar pipeline runs;
-- EXIF orientation is respected where the browser exposes it;
-- the existing profile module performs the final square crop and storage-size compression;
-- the original photo is not uploaded or retained.
+- common browser-decodable formats are accepted, including JPEG, PNG, WebP, GIF, BMP and AVIF;
+- HEIC/HEIF is accepted when the current browser can decode it;
+- the selected photo opens in a manual crop screen;
+- users can drag the image, change zoom and reset the position before confirming;
+- the original photo is never uploaded or retained;
+- only the confirmed, compressed avatar is saved.
 
-The browser must be able to decode the selected image. When a browser cannot decode HEIC/HEIF, the user is asked to save or share a JPG copy from the phone photo library.
+Unsupported HEIC/HEIF files must be saved as JPEG or uploaded as a screenshot because browser image codec support varies by device.
