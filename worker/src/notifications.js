@@ -172,7 +172,7 @@ export async function sendRunNotification(env, repository, fetchImpl, runId) {
     "",
     `<b>任务：</b>${escapeHtml(taskName)}`,
     `<b>用户：</b>${escapeHtml(userLabel(user, run))}`,
-    `<b>账号：</b>${escapeHtml(accountName)}`,
+    `<b>Telegram：</b>${escapeHtml(accountName)}`,
     `<b>目标：</b>${escapeHtml(target)}`,
     `<b>任务消息：</b><code>${escapeHtml(taskMessage.text)}</code>`,
     ...(taskMessage.truncated ? [`<b>消息长度：</b>${taskMessage.length} 字符（已显示首尾）`] : []),
