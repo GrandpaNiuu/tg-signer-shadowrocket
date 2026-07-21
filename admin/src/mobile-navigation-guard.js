@@ -2,9 +2,11 @@ const MOBILE_QUERY = "(max-width: 760px)";
 const body = document.body;
 const menuToggle = document.querySelector("#menu-toggle");
 const sidebar = document.querySelector(".sidebar");
+const view = document.querySelector("#view");
 
 let touchStartX = null;
 let touchStartY = null;
+let routeResetUntil = 0;
 
 function isMobile() {
   return globalThis.matchMedia?.(MOBILE_QUERY).matches ?? false;
@@ -18,18 +20,45 @@ function closeNavigation() {
 
 function resetRouteScroll() {
   if (!isMobile()) return;
-  requestAnimationFrame(() => {
-    globalThis.scrollTo(0, 0);
-    if (document.scrollingElement) {
-      document.scrollingElement.scrollTop = 0;
-      document.scrollingElement.scrollLeft = 0;
-    }
-  });
+  globalThis.scrollTo(0, 0);
+  if (document.scrollingElement) {
+    document.scrollingElement.scrollTop = 0;
+    document.scrollingElement.scrollLeft = 0;
+  }
+}
+
+function scheduleRouteScrollReset() {
+  if (!isMobile()) return;
+  routeResetUntil = Date.now() + 900;
+  resetRouteScroll();
+  requestAnimationFrame(resetRouteScroll);
+  setTimeout(resetRouteScroll, 60);
+  setTimeout(resetRouteScroll, 220);
+  setTimeout(resetRouteScroll, 600);
+}
+
+function clampScrollToDocument() {
+  if (!isMobile()) return;
+  const viewportHeight = globalThis.visualViewport?.height || globalThis.innerHeight || 0;
+  const maximum = Math.max(0, document.documentElement.scrollHeight - viewportHeight);
+  if (globalThis.scrollY > maximum + 2) globalThis.scrollTo(0, maximum);
 }
 
 if ("scrollRestoration" in history) history.scrollRestoration = "manual";
 
-// Clicking outside the open sidebar closes it. This also handles the CSS backdrop.
+// Give the drawer an explicit close control on mobile.
+if (sidebar && !sidebar.querySelector("[data-mobile-nav-close]")) {
+  const closeButton = document.createElement("button");
+  closeButton.type = "button";
+  closeButton.className = "mobile-nav-close";
+  closeButton.dataset.mobileNavClose = "true";
+  closeButton.setAttribute("aria-label", "关闭导航");
+  closeButton.textContent = "×";
+  closeButton.addEventListener("click", closeNavigation);
+  sidebar.prepend(closeButton);
+}
+
+// Clicking outside the open sidebar closes it. This includes the dimmed backdrop.
 document.addEventListener("click", (event) => {
   if (!isMobile() || !body.classList.contains("nav-open")) return;
   const target = event.target;
@@ -37,12 +66,12 @@ document.addEventListener("click", (event) => {
   closeNavigation();
 });
 
-// Selecting a sidebar destination closes the drawer immediately.
+// Selecting a destination closes the drawer immediately.
 sidebar?.addEventListener("click", (event) => {
   if (event.target instanceof Element && event.target.closest("a[data-route]")) closeNavigation();
 });
 
-// A horizontal swipe while the drawer is open closes it in either direction.
+// A horizontal swipe while the drawer is open closes it.
 document.addEventListener("touchstart", (event) => {
   if (!isMobile() || !body.classList.contains("nav-open") || event.touches.length !== 1) return;
   touchStartX = event.touches[0].clientX;
@@ -60,13 +89,25 @@ document.addEventListener("touchend", (event) => {
 
 window.addEventListener("hashchange", () => {
   closeNavigation();
-  resetRouteScroll();
+  scheduleRouteScrollReset();
 });
 
 window.addEventListener("popstate", () => {
   closeNavigation();
-  resetRouteScroll();
+  scheduleRouteScrollReset();
 });
 
-window.addEventListener("pageshow", resetRouteScroll);
-window.addEventListener("orientationchange", closeNavigation);
+window.addEventListener("pageshow", scheduleRouteScrollReset);
+window.addEventListener("orientationchange", () => {
+  closeNavigation();
+  scheduleRouteScrollReset();
+});
+window.addEventListener("resize", clampScrollToDocument, { passive: true });
+
+// Routes render asynchronously. Re-apply the reset after the new page has entered #view.
+if (view) {
+  new MutationObserver(() => {
+    if (Date.now() < routeResetUntil) requestAnimationFrame(resetRouteScroll);
+    else requestAnimationFrame(clampScrollToDocument);
+  }).observe(view, { childList: true, subtree: false });
+}
