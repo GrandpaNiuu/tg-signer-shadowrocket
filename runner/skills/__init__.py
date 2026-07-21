@@ -1,4 +1,3 @@
-from runner.skills.account_audit import AccountAuditSkill
 from runner.skills.bot_flow import BotFlowSkill
 from runner.skills.chat_snapshot import ChatSnapshotSkill
 from runner.skills.registry import SkillRegistry
@@ -14,7 +13,6 @@ def build_registry() -> SkillRegistry:
     registry.register(BotFlowSkill())
     registry.register(SendMediaSkill())
     registry.register(ChatSnapshotSkill())
-    registry.register(AccountAuditSkill())
     return registry
 
 
