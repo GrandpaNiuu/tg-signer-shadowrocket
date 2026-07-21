@@ -7,22 +7,21 @@ import { __test } from "../src/skill-expansion-entry.js";
 const indexUrl = new URL("../index.html", import.meta.url);
 const sourceUrl = new URL("../src/skill-expansion-entry.js", import.meta.url);
 
-test("only usable expanded Skills receive creation entry points", () => {
-  assert.deepEqual([...__test.ACTIVE_SKILLS].sort(), ["bot_flow", "chat_snapshot", "send_media"]);
-  assert.equal(__test.RETIRED_SKILLS.has("account_audit"), true);
-  assert.equal(__test.DEFINITIONS.account_audit, undefined);
+test("only media sending receives a new task entry point", () => {
+  assert.deepEqual([...__test.ACTIVE_SKILLS], ["send_media"]);
+  for (const key of ["account_audit", "bot_flow", "chat_snapshot"]) {
+    assert.equal(__test.RETIRED_SKILLS.has(key), true);
+    assert.equal(__test.DEFINITIONS[key], undefined);
+  }
 });
 
-test("each expanded Skill has concrete setup instructions and an example", () => {
-  for (const key of __test.ACTIVE_SKILLS) {
-    const definition = __test.DEFINITIONS[key];
-    assert.ok(definition);
-    assert.ok(definition.button.startsWith("创建"));
-    assert.ok(definition.defaultName.length > 0);
-    assert.ok(definition.summary.length > 10);
-    assert.ok(definition.steps.length >= 4);
-    assert.ok(definition.example.length > 10);
-  }
+test("the media card explains the actual task inputs and outcome", () => {
+  const definition = __test.DEFINITIONS.send_media;
+  assert.ok(definition.button.startsWith("创建"));
+  assert.ok(definition.defaultName.length > 0);
+  assert.match(definition.summary, /图片、文档或视频/);
+  assert.match(definition.required, /执行账号、发送目标、源媒体消息、执行时间/);
+  assert.match(definition.example, /每天/);
 });
 
 test("entry script retries route rendering instead of relying on one MutationObserver pass", async () => {
@@ -33,8 +32,9 @@ test("entry script retries route rendering instead of relying on one MutationObs
   assert.match(source, /select\.dispatchEvent\(new Event\("change"/);
 });
 
-test("production page cache-busts the repaired entry script and guidance styles", async () => {
+test("production page cache-busts the repaired media form scripts and styles", async () => {
   const index = await readFile(indexUrl, "utf8");
-  assert.match(index, /skill-expansion\.css\?v=20260722-2/);
-  assert.match(index, /skill-expansion-entry\.js\?v=20260722-2/);
+  assert.match(index, /skill-expansion\.css\?v=20260722-3/);
+  assert.match(index, /skill-expansion\.js\?v=20260722-3/);
+  assert.match(index, /skill-expansion-entry\.js\?v=20260722-3/);
 });
