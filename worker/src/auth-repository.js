@@ -46,6 +46,33 @@ async function consumeVerificationToken(repository, tokenHash, timestamp) {
   return user;
 }
 
+async function existingGithubUser(repository, input) {
+  if (input?.is_admin && typeof repository.getUser === "function") {
+    return repository.getUser("legacy-admin");
+  }
+  if (input?.github_user_id && typeof repository.getUserByGithubId === "function") {
+    return repository.getUserByGithubId(input.github_user_id);
+  }
+  return null;
+}
+
+async function upsertGithubUserPreservingDisplayName(repository, input) {
+  const existing = await existingGithubUser(repository, input);
+  const preservedName = String(existing?.display_name || "").trim();
+  let user = await repository.upsertGithubUser(input);
+  if (!existing || !preservedName || !repository.db?.prepare || user?.display_name === preservedName) return user;
+  await repository.db.prepare("UPDATE users SET display_name = ?, updated_at = ? WHERE id = ?")
+    .bind(preservedName, input.timestamp, user.id).run();
+  return typeof repository.getUser === "function"
+    ? repository.getUser(user.id)
+    : { ...user, display_name: preservedName };
+}
+
+function preferPlatformDisplayName(session) {
+  if (!session?.display_name) return session;
+  return { ...session, github_name: session.display_name };
+}
+
 export function withEmailVerificationLifecycle(repository) {
   const target = requiredRepository(repository);
   if (typeof target.consumeEmailVerification !== "function"
@@ -65,11 +92,30 @@ export function withEmailVerificationLifecycle(repository) {
   });
 }
 
+export function withGithubProfilePersistence(repository) {
+  const target = requiredRepository(repository);
+  return new Proxy(target, {
+    get(current, property) {
+      if (property === "upsertGithubUser" && typeof current.upsertGithubUser === "function") {
+        return async (input) => upsertGithubUserPreservingDisplayName(current, input);
+      }
+      if (property === "getUserSession" && typeof current.getUserSession === "function") {
+        return async (...args) => preferPlatformDisplayName(await current.getUserSession(...args));
+      }
+      return bindRepositoryMember(current, property);
+    },
+  });
+}
+
 export function authenticationRepository(repository, now = () => new Date()) {
-  return withPasswordRehash(withEmailVerificationLifecycle(requiredRepository(repository)), now);
+  const verified = withEmailVerificationLifecycle(requiredRepository(repository));
+  return withPasswordRehash(withGithubProfilePersistence(verified), now);
 }
 
 export const __test = {
   consumeVerificationToken,
   createVerificationToken,
+  existingGithubUser,
+  preferPlatformDisplayName,
+  upsertGithubUserPreservingDisplayName,
 };
