@@ -23,6 +23,6 @@ globalThis.fetch = function sameOriginAdminFetch(input, init = {}) {
   return nativeFetch(input, { ...init, headers });
 };
 
-void import("./platform-account-health.js");
+if (typeof document !== "undefined") void import("./platform-account-health.js");
 
 export const __test = { requestMethod, requestUrl };
