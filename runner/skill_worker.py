@@ -43,7 +43,10 @@ def execute(payload: Mapping[str, Any]) -> dict[str, Any]:
             retryable=bool(getattr(exc, "retryable", False)),
             ambiguous=bool(getattr(exc, "ambiguous", False)),
             retry_after_seconds=getattr(exc, "retry_after_seconds", None),
-            logs=_captured_logs(captured_out, captured_error, redactor),
+            logs=redactor.redact(
+                list(getattr(exc, "logs", []) or [])
+                + _captured_logs(captured_out, captured_error, redactor)
+            ),
         )
     except Exception as exc:
         # A short, sanitized diagnostic is useful; never serialize locals or payload.
