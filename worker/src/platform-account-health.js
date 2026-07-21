@@ -48,6 +48,16 @@ function mapHealthRow(row) {
   };
 }
 
+function flowSummary(flow) {
+  return {
+    id: flow?.id || null,
+    account_id: flow?.account_id || null,
+    status: flow?.status || "starting",
+    expires_at: flow?.expires_at || null,
+    created_at: flow?.created_at || null,
+  };
+}
+
 async function listPlatformAccounts(db, url) {
   const { limit, offset } = listOptions(url);
   const status = String(url.searchParams.get("status") || "").trim();
@@ -171,7 +181,7 @@ function batchAccountIds(body) {
 export async function handlePlatformAccountHealthApi(request, env, repository, context) {
   const url = new URL(request.url);
   const prefix = "/api/v1/admin/account-health";
-  if (!url.pathname.startsWith(prefix)) return null;
+  if (url.pathname !== prefix && !url.pathname.startsWith(`${prefix}/`)) return null;
   if (context.identity?.role !== "admin") {
     throw new HttpError(403, "administrator_required", "只有平台管理员可以查看全平台账号健康状态。 ");
   }
@@ -196,7 +206,7 @@ export async function handlePlatformAccountHealthApi(request, env, repository, c
         continue;
       }
       try {
-        flows.push(await startSessionValidation(env, repository, context, accountId));
+        flows.push(flowSummary(await startSessionValidation(env, repository, context, accountId)));
       } catch (error) {
         failures.push({
           account_id: accountId,
@@ -212,10 +222,10 @@ export async function handlePlatformAccountHealthApi(request, env, repository, c
     exactObject(await readJson(request, 1_000), []);
     const account = await getPlatformAccount(env.DB, parts[0]);
     if (!account) throw new HttpError(404, "account_not_found", "账号不存在。 ");
-    return json({ data: await startSessionValidation(env, repository, context, parts[0]) }, 202);
+    return json({ data: flowSummary(await startSessionValidation(env, repository, context, parts[0])) }, 202);
   }
 
   throw new HttpError(404, "not_found", "账号健康中心接口不存在。 ");
 }
 
-export const __test = { listOptions, mapHealthRow, batchAccountIds };
+export const __test = { listOptions, mapHealthRow, flowSummary, batchAccountIds };
