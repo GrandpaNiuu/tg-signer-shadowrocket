@@ -86,7 +86,7 @@ test("GitHub login preserves an existing custom display name", async () => {
   assert.equal(stored.display_name, "自定义管理员");
 });
 
-test("GitHub login does not treat the default login label as a custom name", () => {
+test("GitHub login does not treat provider names as custom profile names", () => {
   assert.equal(__test.customGithubDisplayName({
     display_name: "GrandpaNiuu",
     github_login: "GrandpaNiuu",
@@ -98,9 +98,20 @@ test("GitHub login does not treat the default login label as a custom name", () 
     github_name: "Grandpa Niu",
   }), "");
   assert.equal(__test.customGithubDisplayName({
+    display_name: "GrandpaNiuu",
+    github_login: null,
+    github_name: null,
+  }, {
+    github_login: "GrandpaNiuu",
+    github_name: "Grandpa Niu",
+  }), "");
+  assert.equal(__test.customGithubDisplayName({
     display_name: "平台昵称",
     github_login: "GrandpaNiuu",
     github_name: "Grandpa Niu",
+  }, {
+    github_login: "GrandpaNiuu",
+    github_name: "Updated GitHub Name",
   }), "平台昵称");
 });
 
