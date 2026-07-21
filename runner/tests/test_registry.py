@@ -9,12 +9,11 @@ class RegistryTests(unittest.TestCase):
         registry = build_registry()
         self.assertEqual(
             registry.names(),
-            ("bot_flow", "chat_snapshot", "send_media", "send_text", "tg_signer"),
+            ("send_media", "send_text", "tg_signer"),
         )
-        with self.assertRaises(KeyError):
-            registry.get("account_audit")
-        with self.assertRaises(KeyError):
-            registry.get("arbitrary_python")
+        for retired in ("account_audit", "bot_flow", "chat_snapshot", "arbitrary_python"):
+            with self.subTest(retired=retired), self.assertRaises(KeyError):
+                registry.get(retired)
 
     def test_send_text_validates_and_normalizes_parameters(self):
         skill = build_registry().get("send_text")
