@@ -23,8 +23,16 @@ function listOptions(url) {
   return { limit, offset };
 }
 
+function detectionBlockReason(account) {
+  if (!account) return "account_not_found";
+  if (account.owner_status === "disabled") return "owner_disabled";
+  if (!Boolean(account.enabled)) return "account_disabled";
+  if (!Boolean(account.session_configured)) return "account_credentials_incomplete";
+  return null;
+}
+
 function mapHealthRow(row) {
-  return {
+  const account = {
     id: row.id,
     user_id: row.user_id,
     owner_display_name: row.owner_display_name || "未命名用户",
@@ -45,6 +53,12 @@ function mapHealthRow(row) {
     validation_started_at: row.validation_started_at || null,
     created_at: row.created_at,
     updated_at: row.updated_at,
+  };
+  const blockReason = detectionBlockReason(account);
+  return {
+    ...account,
+    detectable: blockReason === null,
+    detection_block_reason: blockReason,
   };
 }
 
@@ -123,11 +137,27 @@ async function listPlatformAccounts(db, url) {
 }
 
 async function getPlatformAccount(db, id) {
-  return db.prepare(`SELECT a.id, a.user_id, a.name AS account_name, a.phone_masked,
+  const row = await db.prepare(`SELECT a.id, a.user_id, a.name AS account_name, a.phone_masked,
       a.status, a.enabled, CASE WHEN a.session_secret_id IS NOT NULL THEN 1 ELSE 0 END AS session_configured,
       u.display_name AS owner_display_name, u.email AS owner_email, u.github_login AS owner_github_login,
       u.status AS owner_status
     FROM accounts a LEFT JOIN users u ON u.id = a.user_id WHERE a.id = ?`).bind(id).first();
+  return row ? mapHealthRow(row) : null;
+}
+
+function assertAccountDetectable(account) {
+  const reason = detectionBlockReason(account);
+  if (!reason) return;
+  if (reason === "owner_disabled") {
+    throw new HttpError(409, reason, "该账号所属用户已停用，不能发起检测。");
+  }
+  if (reason === "account_disabled") {
+    throw new HttpError(409, reason, "该 Telegram 账号已停用，不能发起检测。");
+  }
+  if (reason === "account_credentials_incomplete") {
+    throw new HttpError(409, reason, "该账号尚未保存 Telegram Session。");
+  }
+  throw new HttpError(404, "account_not_found", "账号不存在。");
 }
 
 async function dispatchLoginFlow(env, context, flowId) {
@@ -138,11 +168,13 @@ async function dispatchLoginFlow(env, context, flowId) {
   if (!result.ok) throw new Error(`GitHub dispatch returned HTTP ${result.status}.`);
 }
 
-async function startSessionValidation(env, repository, context, accountId) {
+async function startSessionValidation(env, repository, context, account) {
+  assertAccountDetectable(account);
+  const accountId = account.id;
   const credentials = await repository.getAccountSecretRefs(accountId);
-  if (!credentials) throw new HttpError(404, "account_not_found", "账号不存在。 ");
+  if (!credentials) throw new HttpError(404, "account_not_found", "账号不存在。");
   if (!credentials.session_secret_id) {
-    throw new HttpError(409, "account_credentials_incomplete", "该账号尚未保存 Telegram Session。 ");
+    throw new HttpError(409, "account_credentials_incomplete", "该账号尚未保存 Telegram Session。");
   }
   const active = await repository.getActiveLoginFlowForAccount(accountId);
   if (active && ACTIVE_VALIDATION_STATUSES.has(active.status)) return active;
@@ -156,12 +188,12 @@ async function startSessionValidation(env, repository, context, accountId) {
     created_at: timestamp,
     updated_at: timestamp,
   });
-  if (!flow) throw new HttpError(409, "account_credentials_incomplete", "账号凭据不完整，无法检测。 ");
+  if (!flow) throw new HttpError(409, "account_credentials_incomplete", "账号凭据不完整，无法检测。");
   try {
     await dispatchLoginFlow(env, context, flowId);
   } catch {
     await repository.failSessionValidationDispatch(flowId, iso(context.now));
-    throw new HttpError(502, "validation_dispatch_failed", "账号检测执行器启动失败。 ");
+    throw new HttpError(502, "validation_dispatch_failed", "账号检测执行器启动失败。");
   }
   return flow;
 }
@@ -183,9 +215,9 @@ export async function handlePlatformAccountHealthApi(request, env, repository, c
   const prefix = "/api/v1/admin/account-health";
   if (url.pathname !== prefix && !url.pathname.startsWith(`${prefix}/`)) return null;
   if (context.identity?.role !== "admin") {
-    throw new HttpError(403, "administrator_required", "只有平台管理员可以查看全平台账号健康状态。 ");
+    throw new HttpError(403, "administrator_required", "只有平台管理员可以查看全平台账号健康状态。");
   }
-  if (!env.DB) throw new HttpError(503, "database_unavailable", "账号健康中心数据库不可用。 ");
+  if (!env.DB) throw new HttpError(503, "database_unavailable", "账号健康中心数据库不可用。");
 
   const suffix = url.pathname.slice(prefix.length);
   const parts = suffix.split("/").filter(Boolean).map(decodeURIComponent);
@@ -206,7 +238,7 @@ export async function handlePlatformAccountHealthApi(request, env, repository, c
         continue;
       }
       try {
-        flows.push(flowSummary(await startSessionValidation(env, repository, context, accountId)));
+        flows.push(flowSummary(await startSessionValidation(env, repository, context, account)));
       } catch (error) {
         failures.push({
           account_id: accountId,
@@ -221,11 +253,17 @@ export async function handlePlatformAccountHealthApi(request, env, repository, c
     if (request.method !== "POST") return methodNotAllowed(["POST"]);
     exactObject(await readJson(request, 1_000), []);
     const account = await getPlatformAccount(env.DB, parts[0]);
-    if (!account) throw new HttpError(404, "account_not_found", "账号不存在。 ");
-    return json({ data: flowSummary(await startSessionValidation(env, repository, context, parts[0])) }, 202);
+    if (!account) throw new HttpError(404, "account_not_found", "账号不存在。");
+    return json({ data: flowSummary(await startSessionValidation(env, repository, context, account)) }, 202);
   }
 
-  throw new HttpError(404, "not_found", "账号健康中心接口不存在。 ");
+  throw new HttpError(404, "not_found", "账号健康中心接口不存在。");
 }
 
-export const __test = { listOptions, mapHealthRow, flowSummary, batchAccountIds };
+export const __test = {
+  listOptions,
+  detectionBlockReason,
+  mapHealthRow,
+  flowSummary,
+  batchAccountIds,
+};
