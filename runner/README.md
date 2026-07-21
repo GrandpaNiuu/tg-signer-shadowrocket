@@ -13,41 +13,24 @@ The task workflow calls these authenticated endpoints under `/api/runner`:
 - `POST /runs/{run_id}/attempts`
 - `POST /runs/{run_id}/complete` (idempotent for a terminal run)
 
-The claim response schema is:
+The claim response uses canonical `task.params`. Legacy task columns (`bot`,
+`command`, `thread`, and `delete_after`) remain accepted for existing tasks, but
+new Skill implementations must use the nested parameter object.
+
+## Allowlisted Skills
+
+### `send_text`
 
 ```json
 {
-  "run": {
-    "id": "run_uuid",
-    "scheduled_for": "2026-07-18T08:00:00Z",
-    "trigger": "cron"
-  },
-  "task": {
-    "id": "task_uuid",
-    "skill": "send_text",
-    "params": {
-      "target": "@example_bot",
-      "text": "/checkin",
-      "message_thread_id": null,
-      "delete_after": null
-    },
-    "retry": 1,
-    "retry_delay_seconds": 2,
-    "timeout_seconds": 120
-  },
-  "account": {
-    "id": "account_uuid",
-    "secrets": {
-      "session_string": "decrypted only for this claim",
-      "api_id": 123456,
-      "api_hash": "decrypted only for this claim",
-      "proxy": "socks5://user:password@example.test:1080"
-    }
-  }
+  "target": "@example_bot",
+  "text": "/checkin",
+  "message_thread_id": null,
+  "delete_after": null
 }
 ```
 
-For `tg_signer`, `params` is:
+### `tg_signer`
 
 ```json
 {
@@ -58,15 +41,87 @@ For `tg_signer`, `params` is:
 }
 ```
 
-The legacy flat account fields and task columns (`bot`, `command`, `thread`,
-`delete_after`) are accepted during migration. For a legacy `tg_signer` task,
-`command` is also accepted as `task_name`, and the old encrypted import value may
-arrive as `secrets.tg_signer_import_base64`. The nested schema above is canonical.
-Unknown skills are rejected before execution.
+The existing platform-guided sign-in configuration and legacy tg-signer imports
+remain supported.
 
-Attempt callbacks include `attempt`, `status`, timestamps, `duration_ms`, and a
-sanitized error/log set. The terminal callback includes `status`, timestamps,
-`duration_ms`, total `attempts`, sanitized `error`, `result`, and `logs`.
+### `bot_flow`
+
+Runs a validated multi-step bot interaction. Supported actions are `send`,
+`wait_message`, `read_buttons`, and `click_button`.
+
+```json
+{
+  "target": "@points_bot",
+  "steps": [
+    { "action": "send", "text": "/start", "timeout": 20 },
+    { "action": "wait_message", "match": "签到", "timeout": 30 },
+    { "action": "click_button", "button": "签到", "timeout": 20 },
+    { "action": "wait_message", "match_any": ["成功", "完成"], "timeout": 30 }
+  ]
+}
+```
+
+The flow cannot execute Python, shell commands, expressions, Web Apps, login
+buttons, payment buttons, or URL buttons. It accepts at most 20 steps, requires a
+bounded timeout on every step, and returns a structured log for each step. A
+failure after a message or callback has been sent is marked `ambiguous` when the
+outcome cannot be proven.
+
+### `send_media`
+
+Sends media from a Worker-approved Telegram source message. The Runner reads the
+source message, extracts its Telegram-cached file identifier, and sends that cached
+media. It never accepts a server path or arbitrary URL.
+
+```json
+{
+  "target": "@channel",
+  "file_id": "worker-media-asset-id",
+  "media_type": "photo",
+  "caption": "Optional caption",
+  "message_thread_id": null,
+  "delete_after": null
+}
+```
+
+The Worker resolves `file_id` to an asset owned by the same workspace and injects
+the source chat/message reference only into the one-time claim. The Skill returns
+the created Telegram `message_id`.
+
+Media assets are registered through the authenticated workspace API:
+
+```text
+GET    /api/v1/media-assets
+POST   /api/v1/media-assets
+DELETE /api/v1/media-assets/{id}
+```
+
+A registration contains `name`, `media_type`, `source_chat_id`, and
+`source_message_id`.
+
+### `chat_snapshot`
+
+```json
+{
+  "target": "@group",
+  "limit": 20,
+  "keyword": "订单"
+}
+```
+
+This Skill only collects recent text/captions. It does not download attachments or
+call AI. Results contain `message_id`, `sender`, UTC `time`, and bounded `text`.
+
+### `account_audit`
+
+```json
+{}
+```
+
+Checks the in-memory Session with `get_me`, returns Telegram ID/username/display
+name, reports whether a proxy was configured and usable for this connection, and
+records any FloodWait observed during the probe. Proxy credentials are never
+returned.
 
 ## Login contract
 
@@ -77,16 +132,9 @@ The short-lived login workflow uses:
 - `POST /login-flows/{flow_id}/input/claim`
 - `POST /login-flows/{flow_id}/complete`
 
-Interactive claims use `flow.mode=interactive_login` and return an account with
-`phone`, `api_id`, `api_hash`, and optional `proxy`. The runner posts
-`code_required`, handles one-time code and resend controls, and returns invalid
-or expired codes to `code_required` instead of terminating the flow. Invalid
-2FA input similarly returns to `password_required`. A successful login calls
-Telegram `get_me` before exporting and returning the new Session.
-
-Validation claims use `flow.mode=session_validation` and include the existing
-`session_string`. The same short-lived runner opens that in-memory Session,
-calls `get_me`, and completes without replacing or returning the Session.
+Interactive claims use `flow.mode=interactive_login`. Validation claims use
+`flow.mode=session_validation`, open the existing in-memory Session, call
+`get_me`, and complete without replacing or returning the Session.
 
 ## Security properties
 
@@ -94,11 +142,13 @@ calls `get_me`, and completes without replacing or returning the Session.
 - Authentication uses a short-lived GitHub OIDC bearer; no shared runner token.
 - Every dynamically claimed secret is registered with GitHub `add-mask` before
   Telegram or tg-signer code runs; workflow-command data is safely escaped.
-- Session data enters the skill subprocess through stdin, never argv.
+- Session data enters the Skill subprocess through stdin, never argv.
 - Temporary Telegram/config files live in a random `0700` directory, use `0600`
   files, and are deleted on exit.
-- Timeouts are treated as ambiguous and are never blindly retried.
-- Skill names are registry allowlisted: `send_text`, `tg_signer`.
+- Timeouts after Telegram side effects are treated as ambiguous and are never
+  blindly retried.
+- Skill names are registry allowlisted: `send_text`, `tg_signer`, `bot_flow`,
+  `send_media`, `chat_snapshot`, and `account_audit`.
 - `tg-signer` is pinned to commit `95a98572...` (tag `0.9.0b2`).
 
 Run unit tests with:

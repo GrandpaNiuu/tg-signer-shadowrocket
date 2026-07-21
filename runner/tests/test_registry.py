@@ -7,7 +7,10 @@ from runner.skills.base import SkillValidationError
 class RegistryTests(unittest.TestCase):
     def test_only_expected_skills_are_registered(self):
         registry = build_registry()
-        self.assertEqual(registry.names(), ("send_text", "tg_signer"))
+        self.assertEqual(
+            registry.names(),
+            ("account_audit", "bot_flow", "chat_snapshot", "send_media", "send_text", "tg_signer"),
+        )
         with self.assertRaises(KeyError):
             registry.get("arbitrary_python")
 
