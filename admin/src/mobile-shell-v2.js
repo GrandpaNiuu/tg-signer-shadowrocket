@@ -1,3 +1,6 @@
+import "./profile-branding.js?v=20260721-2";
+import "./profile-branding-status.js?v=20260721-1";
+
 const MOBILE_QUERY = "(max-width: 760px)";
 const body = document.body;
 const sidebar = document.querySelector(".sidebar");
