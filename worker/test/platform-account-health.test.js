@@ -21,6 +21,7 @@ test("platform account health responses expose only support-safe account metadat
     user_id: "user-1",
     owner_display_name: "User",
     owner_email: "user@example.test",
+    owner_status: "active",
     account_name: "Telegram 账号",
     phone_masked: "+86****1234",
     status: "error",
@@ -35,8 +36,16 @@ test("platform account health responses expose only support-safe account metadat
   assert.equal(mapped.owner_login, "user@example.test");
   assert.equal(mapped.phone_masked, "+86****1234");
   assert.equal(mapped.session_configured, true);
+  assert.equal(mapped.detectable, true);
   assert.equal("session_secret_id" in mapped, false);
   assert.equal("proxy_secret_id" in mapped, false);
+});
+
+test("disabled users, disabled accounts, and accounts without Session cannot be detected", () => {
+  assert.equal(__test.detectionBlockReason({ owner_status: "disabled", enabled: true, session_configured: true }), "owner_disabled");
+  assert.equal(__test.detectionBlockReason({ owner_status: "active", enabled: false, session_configured: true }), "account_disabled");
+  assert.equal(__test.detectionBlockReason({ owner_status: "active", enabled: true, session_configured: false }), "account_credentials_incomplete");
+  assert.equal(__test.detectionBlockReason({ owner_status: "active", enabled: true, session_configured: true }), null);
 });
 
 test("batch validation accepts at most twenty unique account ids", () => {
