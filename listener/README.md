@@ -5,28 +5,45 @@
 - 用户端“自动识别机器人操作”；
 - 管理员账号连接检测；
 - 管理员 24 小时关键词自动回复；
-- 管理员全天候群消息监听。
+- 管理员全天候群消息监听；
+- 执行启用了实时规则的管理员账号自身的定时消息、签到和审核通过的 Skill。
 
-它不是 GitHub Actions 工作流。GitHub Actions 继续负责定时短任务、Telegram 登录和部署；Listener 需要在一台长期在线的 VPS 上运行。
+GitHub Actions 继续负责普通账号短任务、Telegram 手机号登录和部署；Listener 需要在一台长期在线的 VPS 上运行。实时账号的任务不会再派发给 GitHub Actions，从而避免两个执行器同时使用同一 Telegram Session。
+
+## 执行模型
+
+```text
+Cloudflare Cron 创建 task_run
+        │
+        ├── 普通账号 → GitHub Actions Runner
+        │
+        └── 启用实时规则的管理员账号 → VPS Listener
+                                        │
+                                        ├── 暂停该账号实时连接
+                                        ├── 执行定时任务并回写结果
+                                        └── 恢复关键词回复和群监听
+```
+
+同一个实时账号的 Telegram 操作保持串行。执行短任务期间，该账号会有短暂的实时监听空窗；任务完成后自动恢复。不同账号仍可以由各自的客户端并行保持连接。
 
 ## 安全边界
 
 - 用户只能识别自己工作区中已连接账号的机器人回复和按钮。
 - 用户识别只发送指定命令并读取结果，不会自动点击按钮。
-- 关键词回复、群监听和 Listener 状态只对平台管理员开放。
+- 关键词回复、群监听、实时账号定时执行和 Listener 状态只对平台管理员开放。
 - 实时规则只能使用管理员工作区内的账号。
-- 实时账号不能同时存在启用中的普通定时任务。
-- 机器人识别与已派发、领取或运行中的普通任务不能同时使用同一账号。
-- Worker 只向通过 `LISTENER_API_TOKEN` 验证的 Listener 返回加密数据解密后的运行时凭据。
+- Worker 不会把实时账号的任务派发给 GitHub Actions Runner。
+- 机器人识别与已领取或运行中的任务不能同时使用同一账号。
+- Worker 只向通过 `LISTENER_API_TOKEN` 验证的 Listener 返回解密后的短期运行数据。
 - Listener 使用内存 Session，容器文件系统只读，不持久化 Telegram Session。
-- 多个 Listener 同时在线时，Worker 只向一个主实例返回账号和规则；其他实例保持待命，主实例失联后自动接管。
+- 多个 Listener 同时在线时，Worker 只向一个主实例返回账号、规则和任务；其他实例保持待命，主实例失联后自动接管。
 
 ## 1. 生成共享 Token
 
 在本地或 VPS 执行：
 
 ```bash
-python -c "import secrets; print(secrets.token_urlsafe(48))"
+python3 -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
 
 不要把结果提交到仓库或发送到聊天。
@@ -51,11 +68,11 @@ LISTENER_API_TOKEN
 
 要求：
 
-- Ubuntu 22.04/24.04 或其他可运行 Docker 的 Linux；
+- Debian 12、Ubuntu 22.04/24.04 或其他可运行 Docker 的现代 Linux；
 - Docker Engine 与 Docker Compose 插件；
-- VPS 能访问 Telegram 和你的 Cloudflare Worker；
+- VPS 能访问 Telegram、Cloudflare Worker、PyPI 和 GitHub；
 - 部署用户可以直接执行 `docker`，不依赖交互式 `sudo`；
-- 建议至少 1 核 CPU、1 GB 内存；账号较多时需要增加资源。
+- 建议至少 1 核 CPU、1 GB 内存；账号或任务较多时需要增加资源。
 
 手工部署：
 
@@ -69,9 +86,13 @@ cp .env.example .env
 
 ```text
 WORKER_URL=https://你的-worker-域名
-LISTENER_API_TOKEN=与GitHub Secret完全相同的随机值
+LISTENER_API_TOKEN=与Worker Secret完全相同的随机值
 LISTENER_INSTANCE_ID=listener-vps-1
 LISTENER_LABEL=主监听服务器
+LISTENER_SYNC_SECONDS=30
+LISTENER_HEARTBEAT_SECONDS=60
+LISTENER_INSPECTION_SECONDS=4
+LISTENER_TASK_SECONDS=2
 ```
 
 每个同时在线的 Listener 必须使用不同且稳定的 `LISTENER_INSTANCE_ID`。不要在容器重启时随机生成实例编号。
@@ -86,7 +107,7 @@ docker compose up -d --build
 
 ```bash
 docker compose ps
-docker compose logs --tail=100 -f
+docker compose logs --tail=100 -f telegram-listener
 ```
 
 更新：
@@ -104,7 +125,7 @@ docker compose down
 
 ## 3. 使用 GitHub Actions 一键部署
 
-仓库中的 `.github/workflows/deploy-listener.yml` 会先运行 Listener 测试，再通过 SSH 上传一个不可变发布目录并执行 Docker Compose。GitHub Actions 只负责部署，Telegram 长连接仍由 VPS 容器长期维持。
+仓库中的 `.github/workflows/deploy-listener.yml` 会先运行 Listener 测试，再通过 SSH 上传不可变发布目录并执行 Docker Compose。GitHub Actions 只负责部署，Telegram 长连接与实时账号任务仍由 VPS 容器维持。
 
 在仓库 Settings → Secrets and variables → Actions 中配置：
 
@@ -114,15 +135,23 @@ docker compose down
 LISTENER_API_TOKEN
 LISTENER_VPS_HOST
 LISTENER_VPS_USER
-LISTENER_VPS_SSH_KEY
+LISTENER_VPS_SSH_KEY_B64
 LISTENER_VPS_KNOWN_HOSTS
 ```
 
 其中：
 
-- `LISTENER_VPS_SSH_KEY` 是仅用于部署的 SSH 私钥；对应公钥加入 VPS 用户的 `~/.ssh/authorized_keys`。
-- `LISTENER_VPS_KNOWN_HOSTS` 必须是经过核对的 VPS 主机公钥记录，工作流不会关闭主机密钥检查。
+- `LISTENER_VPS_SSH_KEY_B64` 是部署私钥文件的单行 Base64。对应公钥必须加入 VPS 用户的 `~/.ssh/authorized_keys`。
+- 工作流仍兼容旧的多行 `LISTENER_VPS_SSH_KEY`，但推荐使用 Base64 版本，避免网页复制破坏换行。
+- `LISTENER_VPS_KNOWN_HOSTS` 必须是经过核对的 VPS 主机公钥记录；工作流不会关闭主机密钥检查。
 - `LISTENER_API_TOKEN` 必须与 Cloudflare Worker 中的同名 Secret 完全一致。
+
+生成部署私钥 Base64：
+
+```bash
+base64 -w 0 /root/listener_actions_key
+echo
+```
 
 从可信终端生成 known_hosts 内容：
 
@@ -159,22 +188,31 @@ LISTENER_VPS_PORT=22
 
 管理员登录后打开“设置”，查看“24 小时实时服务”。
 
-Listener 心跳正常时会显示“在线”。创建实时规则前，需要准备一个专用 Telegram 账号：
+Listener 心跳正常时会显示“在线”。创建实时规则前，账号需要满足：
 
-1. 账号已经通过手机号登录并显示“已连接”；
+1. 已经通过手机号登录并显示“已连接”；
 2. 账号处于启用状态；
-3. 这个账号没有任何启用中的普通定时任务。
+3. 账号属于管理员工作区。
+
+现在可以对同一个管理员账号同时：
+
+- 创建关键词自动回复或群消息监听规则；
+- 创建并启用普通定时消息、签到或 Skill 任务。
+
+只要该账号存在至少一条启用中的实时规则，Worker 就会把它的排队任务交给 Listener。停用该账号的全部实时规则后，后续普通任务会重新走 GitHub Actions Runner。
 
 普通用户创建“机器人按钮签到”时，可以点击“自动识别机器人操作”。Listener 会发送任务表单中的命令，读取机器人回复和按钮，用户选择按钮后再保存任务。
 
 ## 运维说明
 
 - Listener 心跳超过约 150 秒未更新时，后台显示离线。
-- 主实例失联约两分钟后，健康的待命实例会获得账号和规则并接管处理。
-- 配置默认每 30 秒同步一次；待命实例不会建立 Telegram 实时账号连接，也不会领取识别任务。
+- 主实例失联约两分钟后，健康的待命实例会获得账号、规则和任务并接管处理。
+- 配置默认每 30 秒同步一次；待命实例不会建立 Telegram 实时账号连接，也不会领取识别任务或定时任务。
 - 识别任务默认每 4 秒轮询一次。
+- 实时账号排队任务默认每 2 秒检查一次，但只会领取接近计划时间的运行。
 - 规则更新后通常在 30 秒内生效。
-- Listener 重启期间不会处理新消息；恢复后不会补处理离线期间所有历史消息。
+- 定时任务执行期间，该账号的实时连接会短暂停止，执行完成后自动恢复。
+- Listener 重启期间不会处理新消息；恢复后不会补处理离线期间所有历史消息。未过期的排队任务仍可继续领取。
 - 关键词回复是固定文本匹配，不执行任意代码、脚本或外部命令。
 - 自动回复忽略自己发出的消息和机器人发送者，并有单会话冷却与每小时数量限制。
 - 群消息预览会经过 Worker 截断和日志清理后写入 D1。
