@@ -1,4 +1,4 @@
-// Profile and platform avatar API.
+// Profile and platform avatar API routes.
 import { HttpError, json, methodNotAllowed, readJson } from "./http.js";
 
 const MAX_AVATAR_BYTES = 96 * 1024;
