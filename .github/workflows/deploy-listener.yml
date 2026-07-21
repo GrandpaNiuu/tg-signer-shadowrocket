@@ -95,39 +95,66 @@ jobs:
           if [ -n "${VPS_SSH_KEY_B64:-}" ]; then
             python - <<'PY'
           import base64
+          import binascii
           import os
           import re
           from pathlib import Path
 
-          raw = os.environ.get("VPS_SSH_KEY_B64", "")
-          candidates = []
+          raw = os.environ.get("VPS_SSH_KEY_B64", "").replace("\r", "")
+          candidates: list[str] = []
 
-          for token in re.findall(r"[A-Za-z0-9+/]+={0,2}", raw):
-              if len(token) >= 100:
-                  candidates.append(token)
+          # Preferred copy format: everything between explicit markers.
+          marker_match = re.search(
+              r"KEY_B64_BEGIN\s*(.*?)\s*KEY_B64_END",
+              raw,
+              flags=re.DOTALL,
+          )
+          if marker_match:
+              candidates.append("".join(marker_match.group(1).split()))
 
+          # Accept a clean one-line value.
           compact = "".join(raw.split())
-          if compact and re.fullmatch(r"[A-Za-z0-9+/]+={0,2}", compact):
+          if re.fullmatch(r"[A-Za-z0-9+/]+={0,2}", compact or ""):
               candidates.append(compact)
 
-          seen = set()
-          key = None
+          # Accept terminal-wrapped Base64 where each line only contains Base64.
+          current: list[str] = []
+          for line in raw.splitlines():
+              stripped = line.strip()
+              if re.fullmatch(r"[A-Za-z0-9+/]+={0,2}", stripped or ""):
+                  current.append(stripped)
+              elif current:
+                  candidates.append("".join(current))
+                  current = []
+          if current:
+              candidates.append("".join(current))
+
+          # Last fallback: long Base64-looking tokens.
+          candidates.extend(
+              token
+              for token in re.findall(r"[A-Za-z0-9+/]+={0,2}", raw)
+              if len(token) >= 100
+          )
+
+          seen: set[str] = set()
+          key: bytes | None = None
           for candidate in sorted(candidates, key=len, reverse=True):
-              if candidate in seen:
+              if candidate in seen or len(candidate) < 100:
                   continue
               seen.add(candidate)
               try:
                   decoded = base64.b64decode(candidate, validate=True)
-              except (ValueError, base64.binascii.Error):
+              except (ValueError, binascii.Error):
                   continue
-              if b"PRIVATE KEY" in decoded:
+              if decoded.startswith(b"-----BEGIN ") and b"PRIVATE KEY-----" in decoded[:80]:
                   key = decoded
                   break
 
           if key is None:
               raise SystemExit(
-                  "LISTENER_VPS_SSH_KEY_B64 does not contain a valid Base64-encoded private key. "
-                  "Paste only the output of: base64 -w 0 /root/listener_actions_key"
+                  "LISTENER_VPS_SSH_KEY_B64 is not a complete Base64 private key. "
+                  "On the VPS run: echo KEY_B64_BEGIN; base64 -w 0 /root/listener_actions_key; "
+                  "echo; echo KEY_B64_END. Paste that complete output into the Secret."
               )
 
           target = Path.home() / ".ssh" / "listener_deploy_key"
