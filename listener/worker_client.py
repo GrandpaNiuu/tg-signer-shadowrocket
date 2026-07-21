@@ -26,7 +26,7 @@ class ListenerWorkerClient:
         headers = {
             "authorization": f"Bearer {api_token}",
             "accept": "application/json",
-            "user-agent": "telegram-realtime-listener/0.2",
+            "user-agent": "telegram-realtime-listener/0.3",
         }
         if self.instance_id:
             headers["x-listener-instance-id"] = self.instance_id
@@ -61,6 +61,30 @@ class ListenerWorkerClient:
 
     async def heartbeat(self, payload: dict[str, Any]) -> dict[str, Any]:
         value = await self._request("POST", "/api/listener/v1/heartbeat", json=payload)
+        return value if isinstance(value, dict) else {}
+
+    async def claim_task(self, instance_id: str) -> dict[str, Any] | None:
+        value = await self._request(
+            "POST",
+            "/api/listener/v1/runs/claim",
+            json={"instance_id": instance_id},
+        )
+        return value if isinstance(value, dict) else None
+
+    async def report_task_attempt(self, run_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        value = await self._request(
+            "POST",
+            f"/api/listener/v1/runs/{run_id}/attempts",
+            json=payload,
+        )
+        return value if isinstance(value, dict) else {}
+
+    async def complete_task(self, run_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        value = await self._request(
+            "POST",
+            f"/api/listener/v1/runs/{run_id}/complete",
+            json=payload,
+        )
         return value if isinstance(value, dict) else {}
 
     async def claim_inspection(self, instance_id: str) -> dict[str, Any] | None:
