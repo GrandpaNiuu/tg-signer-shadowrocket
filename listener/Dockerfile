@@ -15,6 +15,7 @@ COPY runner/requirements.txt /app/runner/requirements.txt
 COPY listener/requirements.txt /app/listener/requirements.txt
 RUN python -m pip install --no-cache-dir --requirement /app/listener/requirements.txt
 
+COPY runner /app/runner
 COPY listener /app/listener
 
 USER listener
