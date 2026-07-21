@@ -7,7 +7,7 @@ function apply(sqlite, filename) {
   sqlite.exec(readFileSync(new URL(`../migrations/${filename}`, import.meta.url), "utf8"));
 }
 
-test("Telegram Skill expansion adds canonical params, run snapshots, media assets, and active Skill rows", () => {
+test("Telegram Skill migrations keep media sending and retire duplicate capabilities", () => {
   const sqlite = new DatabaseSync(":memory:");
   for (const filename of [
     "0001_initial.sql",
@@ -41,17 +41,20 @@ test("Telegram Skill expansion adds canonical params, run snapshots, media asset
     "run-flow", "task-flow", timestamp, "manual:run-flow", timestamp, timestamp,
   );
 
-  const run = sqlite.prepare("SELECT params_json_snapshot FROM task_runs WHERE id = ?").get("run-flow");
-  assert.equal(JSON.parse(run.params_json_snapshot).steps[0].action, "send");
+  const before = sqlite.prepare("SELECT params_json_snapshot FROM task_runs WHERE id = ?").get("run-flow");
+  assert.equal(JSON.parse(before.params_json_snapshot).steps[0].action, "send");
+
+  apply(sqlite, "0013_retire_overlapping_skills.sql");
+
   assert.deepEqual(
     sqlite.prepare("SELECT skill_key FROM skills WHERE enabled = 1 AND skill_key IN ('bot_flow','send_media','chat_snapshot','account_audit') ORDER BY skill_key")
       .all().map((row) => row.skill_key),
-    ["bot_flow", "chat_snapshot", "send_media"],
+    ["send_media"],
   );
-  assert.equal(
-    sqlite.prepare("SELECT enabled FROM skills WHERE skill_key = 'account_audit'").get().enabled,
-    0,
-  );
+  assert.equal(sqlite.prepare("SELECT enabled FROM tasks WHERE id = 'task-flow'").get().enabled, 0);
+  const retiredRun = sqlite.prepare("SELECT status, error_code FROM task_runs WHERE id = 'run-flow'").get();
+  assert.equal(retiredRun.status, "cancelled");
+  assert.equal(retiredRun.error_code, "skill_retired");
 
   sqlite.prepare(`INSERT INTO media_assets
     (id, user_id, name, media_type, source_chat_id, source_message_id, created_at, updated_at)

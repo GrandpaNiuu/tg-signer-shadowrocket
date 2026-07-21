@@ -7,29 +7,36 @@
   background: var(--panel-soft, #f8fafc);
 }
 
-.skill-flow-list {
+.skill-purpose {
   display: grid;
-  gap: .8rem;
+  gap: .45rem;
+  padding: .85rem .95rem;
+  border: 1px solid #b9ddf4;
+  border-radius: 12px;
+  background: #eef8ff;
+  color: var(--text, #172b3a);
 }
 
-.skill-flow-step {
-  display: grid;
-  gap: .75rem;
-  padding: .9rem;
+.skill-purpose p {
+  margin: 0;
+  color: var(--muted, #667085);
+  line-height: 1.55;
+}
+
+.skill-media-register {
+  padding: .75rem .85rem;
   border: 1px solid var(--line, #dbe3ea);
   border-radius: 12px;
   background: #fff;
 }
 
-.skill-flow-step > header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: .75rem;
+.skill-media-register summary {
+  cursor: pointer;
+  font-weight: 700;
 }
 
-.skill-media-register {
-  padding-top: .25rem;
+.skill-media-register[open] summary {
+  margin-bottom: .75rem;
 }
 
 .skill-expansion-status {
@@ -45,41 +52,9 @@
   color: #067647;
 }
 
-.skill-usage {
-  margin-top: 1rem;
-  padding: .8rem .9rem;
-  border: 1px solid var(--line, #dbe3ea);
-  border-radius: 12px;
-  background: var(--panel-soft, #f8fafc);
-}
-
-.skill-usage summary {
-  cursor: pointer;
-  font-weight: 700;
-}
-
-.skill-usage-body {
-  display: grid;
-  gap: .65rem;
-  padding-top: .75rem;
-  color: var(--muted, #667085);
-}
-
-.skill-usage-body p,
-.skill-usage-body ol {
-  margin: 0;
-}
-
-.skill-usage-body ol {
-  padding-left: 1.25rem;
-}
-
-.skill-usage-body li + li {
-  margin-top: .35rem;
-}
-
 @media (max-width: 720px) {
-  .skill-flow-step {
+  .skill-expansion-builder,
+  .skill-media-register {
     padding: .75rem;
   }
 }
