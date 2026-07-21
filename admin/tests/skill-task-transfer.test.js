@@ -13,7 +13,6 @@ const skills = [
   { key: "bot_flow", enabled: true },
   { key: "send_media", enabled: true },
   { key: "chat_snapshot", enabled: true },
-  { key: "account_audit", enabled: true },
 ];
 
 function task(skillKey, params, overrides = {}) {
@@ -77,7 +76,11 @@ test("media task copies keep the Worker asset reference but never inherit task i
 });
 
 test("expanded import rejects malformed and oversized params", () => {
-  const source = buildTaskExport([task("account_audit", {})], [account]);
+  const source = buildTaskExport([task("chat_snapshot", {
+    target: "@example_group",
+    limit: 20,
+    keyword: null,
+  })], [account]);
   source.tasks[0].params = ["not-an-object"];
   assert.throws(
     () => parseTaskImport(source, { accounts: [account], skills }),

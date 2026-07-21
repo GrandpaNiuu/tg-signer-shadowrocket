@@ -9,8 +9,10 @@ class RegistryTests(unittest.TestCase):
         registry = build_registry()
         self.assertEqual(
             registry.names(),
-            ("account_audit", "bot_flow", "chat_snapshot", "send_media", "send_text", "tg_signer"),
+            ("bot_flow", "chat_snapshot", "send_media", "send_text", "tg_signer"),
         )
+        with self.assertRaises(KeyError):
+            registry.get("account_audit")
         with self.assertRaises(KeyError):
             registry.get("arbitrary_python")
 

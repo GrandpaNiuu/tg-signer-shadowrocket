@@ -49,6 +49,17 @@ test("legacy admin fields can create new skills without arbitrary server paths",
   );
 });
 
+test("retired account audit is rejected by the Worker allowlist", () => {
+  assert.throws(
+    () => normalizeSkillParams("account_audit", {}),
+    (error) => error.status === 422 && error.code === "validation_failed",
+  );
+  assert.throws(
+    () => taskPresentation("account_audit", {}),
+    (error) => error.status === 422 && error.code === "validation_failed",
+  );
+});
+
 test("task presentation keeps canonical params separate from human summaries", () => {
   const presentation = taskPresentation("chat_snapshot", {
     target: "@group_name",

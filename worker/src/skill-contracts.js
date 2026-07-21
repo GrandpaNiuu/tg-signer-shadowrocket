@@ -2,7 +2,7 @@ import { HttpError } from "./http.js";
 
 const TARGET = /^(?:@[A-Za-z][A-Za-z0-9_]{4,31}|-?\d{1,20})$/;
 const ASSET_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,159}$/;
-const SKILLS = new Set(["send_text", "tg_signer", "bot_flow", "send_media", "chat_snapshot", "account_audit"]);
+const SKILLS = new Set(["send_text", "tg_signer", "bot_flow", "send_media", "chat_snapshot"]);
 const FLOW_ACTIONS = new Set(["send", "wait_message", "read_buttons", "click_button"]);
 
 function fail(fields) {
@@ -142,8 +142,7 @@ export function normalizeSkillParams(skillKey, rawParams = {}, legacy = {}) {
       keyword: input.keyword === undefined || input.keyword === null || input.keyword === "" ? null : text(input.keyword, "params.keyword", { max: 200 }),
     };
   }
-  exact(params, [], "params");
-  return {};
+  fail(["skill_key"]);
 }
 
 export function taskPresentation(skillKey, params) {
@@ -152,7 +151,7 @@ export function taskPresentation(skillKey, params) {
   if (skillKey === "bot_flow") return { bot: String(params.target), command: `通用机器人流程 · ${params.steps.length} 步`, thread_id: params.message_thread_id, delete_after_seconds: null };
   if (skillKey === "send_media") return { bot: String(params.target), command: `[${params.media_type}] ${params.file_id}${params.caption ? ` · ${params.caption}` : ""}`.slice(0, 2000), thread_id: params.message_thread_id, delete_after_seconds: params.delete_after };
   if (skillKey === "chat_snapshot") return { bot: String(params.target), command: params.keyword ? `采集最近 ${params.limit} 条 · 关键词：${params.keyword}` : `采集最近 ${params.limit} 条消息`, thread_id: null, delete_after_seconds: null };
-  return { bot: "", command: "账号健康检查", thread_id: null, delete_after_seconds: null };
+  fail(["skill_key"]);
 }
 
 export function paramsJson(params) {

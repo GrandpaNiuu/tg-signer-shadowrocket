@@ -41,13 +41,12 @@ test("claim enrichment resolves only workspace-owned media assets", async () => 
   assert.equal(payload.task.params._source_message_id, 77);
 });
 
-test("account audit replaces the legacy send_text-shaped claim with empty params", async () => {
+test("retired Skills are not treated as native claim enrichment targets", async () => {
   const repository = {
     async getExecution() { return { user_id: "user-1", skill_key: "account_audit", params_json_snapshot: "{}" }; },
   };
-  const payload = await __test.enrichClaim({
-    task: { skill: "account_audit", params: { target: "", text: "账号健康检查" } },
-  }, "run-1", repository);
+  const original = { task: { skill: "account_audit", params: {} } };
+  const payload = await __test.enrichClaim(original, "run-1", repository);
   assert.deepEqual(payload.task.params, {});
 });
 

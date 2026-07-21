@@ -46,8 +46,7 @@ test("builds legacy-compatible params without accepting paths or URLs", () => {
   }), /媒体资产/);
 });
 
-test("account audit accepts no parameters and snapshot limit is bounded", () => {
-  assert.deepEqual(validateExpandedParams("account_audit", {}), {});
+test("chat snapshot limit is bounded", () => {
   assert.throws(() => validateExpandedParams("chat_snapshot", {
     target: "@example_group",
     limit: 51,

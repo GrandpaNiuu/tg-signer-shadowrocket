@@ -112,16 +112,8 @@ A registration contains `name`, `media_type`, `source_chat_id`, and
 This Skill only collects recent text/captions. It does not download attachments or
 call AI. Results contain `message_id`, `sender`, UTC `time`, and bounded `text`.
 
-### `account_audit`
-
-```json
-{}
-```
-
-Checks the in-memory Session with `get_me`, returns Telegram ID/username/display
-name, reports whether a proxy was configured and usable for this connection, and
-records any FloodWait observed during the probe. Proxy credentials are never
-returned.
+Account connectivity remains available through the existing account validation
+workflow and is deliberately not exposed as a scheduled Skill.
 
 ## Login contract
 
@@ -148,7 +140,7 @@ Interactive claims use `flow.mode=interactive_login`. Validation claims use
 - Timeouts after Telegram side effects are treated as ambiguous and are never
   blindly retried.
 - Skill names are registry allowlisted: `send_text`, `tg_signer`, `bot_flow`,
-  `send_media`, `chat_snapshot`, and `account_audit`.
+  `send_media`, and `chat_snapshot`.
 - `tg-signer` is pinned to commit `95a98572...` (tag `0.9.0b2`).
 
 Run unit tests with:

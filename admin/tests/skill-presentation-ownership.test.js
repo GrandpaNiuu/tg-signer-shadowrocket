@@ -6,9 +6,9 @@ import { __test } from "../src/skill-guidance.js";
 
 const sourceUrl = new URL("../src/skill-guidance.js", import.meta.url);
 
-const expandedSkills = ["bot_flow", "send_media", "chat_snapshot", "account_audit"];
+const expandedSkills = ["bot_flow", "send_media", "chat_snapshot"];
 
-test("expanded Skills have a single DOM presentation owner", async () => {
+test("active expanded Skills have a single DOM presentation owner", async () => {
   for (const skill of expandedSkills) {
     assert.equal(__test.EXTERNALLY_PRESENTED_SKILLS.has(skill), true);
   }
