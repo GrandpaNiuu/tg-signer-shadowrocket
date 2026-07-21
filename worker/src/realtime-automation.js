@@ -1,6 +1,7 @@
 import { decryptSecret, rootKeyForVersion } from "./crypto.js";
 import { HttpError, json, methodNotAllowed, readJson } from "./http.js";
 import { sanitizeLogText } from "./redaction.js";
+import { assertRealtimeTransitionAllowed } from "./realtime-repository.js";
 import { resolveTelegramApplicationCredentialRefs } from "./telegram-application.js";
 
 const INSPECTION_STATUSES = new Set(["queued", "running", "success", "failed", "expired", "cancelled"]);
@@ -197,17 +198,13 @@ function ruleInput(body, { patch = false } = {}) {
   return output;
 }
 
-async function ensureDedicatedAdminAccount(repository, context, accountId) {
+async function ensureRealtimeAdminAccountAvailable(repository, context, accountId) {
   const userId = context.identity?.user_id;
   const account = await ownedConnectedAccount(repository, userId, accountId);
   if (!account) {
     throw new HttpError(422, "account_unavailable", "请选择管理员工作区中已连接并启用的 Telegram 账号。", { fields: ["account_id"] });
   }
-  const tasks = await repository.db.prepare("SELECT COUNT(*) AS total FROM tasks WHERE account_id = ? AND enabled = 1")
-    .bind(accountId).first();
-  if (Number(tasks?.total || 0) > 0) {
-    throw new HttpError(409, "listener_account_has_tasks", "实时监听账号不能同时运行普通定时任务。请使用一个专用 Telegram 账号，或先停用这个账号的全部任务。" );
-  }
+  await assertRealtimeTransitionAllowed(repository, accountId);
   return account;
 }
 
@@ -225,7 +222,7 @@ async function realtimeRules(request, repository, context, parts) {
     }
     if (request.method !== "POST") return methodNotAllowed(["GET", "POST"]);
     const input = ruleInput(await readJson(request, 32_000));
-    await ensureDedicatedAdminAccount(repository, context, input.account_id);
+    await ensureRealtimeAdminAccountAvailable(repository, context, input.account_id);
     const timestamp = nowIso(context);
     const rule = {
       id: context.uuid(),
@@ -252,7 +249,7 @@ async function realtimeRules(request, repository, context, parts) {
   if (request.method !== "PATCH") return methodNotAllowed(["PATCH", "DELETE"]);
   const input = ruleInput(await readJson(request, 32_000), { patch: true });
   const finalAccountId = input.account_id ?? current.account_id;
-  await ensureDedicatedAdminAccount(repository, context, finalAccountId);
+  await ensureRealtimeAdminAccountAvailable(repository, context, finalAccountId);
   const finalKind = input.kind ?? current.kind;
   const finalKeyword = input.keyword ?? current.keyword;
   const finalResponse = input.response_text === undefined ? current.response_text : input.response_text;
@@ -539,6 +536,7 @@ export async function handleListenerApi(request, env, repository) {
 }
 
 export const __test = {
+  ensureRealtimeAdminAccountAvailable,
   normalizeTelegramTarget,
   ruleInput,
   secureEqual,

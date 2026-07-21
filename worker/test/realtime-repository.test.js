@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { withInspectionDispatchGuard, withRealtimeTaskGuard } from "../src/realtime-repository.js";
+import {
+  assertRealtimeTransitionAllowed,
+  findRealtimeTransitionBlockingRun,
+  withInspectionDispatchGuard,
+} from "../src/realtime-repository.js";
 
 function repositoryWithGuards({ inspection = false, realtime = false } = {}) {
   const calls = { reserve: 0, list: 0 };
@@ -33,31 +37,26 @@ function repositoryWithGuards({ inspection = false, realtime = false } = {}) {
   return { repository, calls };
 }
 
-function repositoryForTaskCompatibility() {
-  const calls = { create: 0, update: 0 };
-  const repository = {
+function repositoryForRealtimeTransition(activeRun = null) {
+  const calls = [];
+  return {
+    userId: "admin-1",
+    calls,
     db: {
-      prepare() {
+      prepare(sql) {
+        calls.push(String(sql));
         return {
-          bind() {
-            return { async first() { return { total: 9 }; } };
+          bind(...bindings) {
+            assert.deepEqual(bindings, ["account-1", "admin-1"]);
+            return { async first() { return activeRun; } };
           },
         };
       },
     },
-    async createTask(task) {
-      calls.create += 1;
-      return task;
-    },
-    async updateTask(id, values) {
-      calls.update += 1;
-      return { id, ...values };
-    },
   };
-  return { repository, calls };
 }
 
-test("active inspection blocks reservation for the same Telegram account", async () => {
+test("active inspection blocks ordinary account task reservation", async () => {
   const { repository, calls } = repositoryWithGuards({ inspection: true });
   const guarded = withInspectionDispatchGuard(repository);
   assert.equal(await guarded.reserveNextDispatch("account-1", new Date().toISOString()), null);
@@ -66,7 +65,7 @@ test("active inspection blocks reservation for the same Telegram account", async
   assert.equal(calls.list, 1);
 });
 
-test("realtime accounts stay queued for the Listener instead of GitHub Actions", async () => {
+test("realtime account tasks stay queued for the Listener instead of GitHub Actions", async () => {
   const { repository, calls } = repositoryWithGuards({ realtime: true });
   const guarded = withInspectionDispatchGuard(repository);
   assert.equal(await guarded.reserveNextDispatch("account-1", new Date().toISOString()), null);
@@ -83,17 +82,33 @@ test("normal task dispatch continues when no inspection or realtime rule is acti
   assert.deepEqual(await guarded.listDispatchableAccountIds(new Date().toISOString(), 20), ["account-1", "account-2"]);
 });
 
-test("realtime accounts may create and enable ordinary scheduled tasks", async () => {
-  const { repository, calls } = repositoryForTaskCompatibility();
-  const compatible = withRealtimeTaskGuard(repository);
+test("ordinary scheduled tasks and queued pending Listener tasks do not block realtime transitions", async () => {
+  const repository = repositoryForRealtimeTransition(null);
+  assert.equal(await findRealtimeTransitionBlockingRun(repository, "account-1"), null);
+  await assert.doesNotReject(() => assertRealtimeTransitionAllowed(repository, "account-1"));
+  assert.equal(repository.calls.length, 2);
+  assert.match(repository.calls[0], /dispatch_status IN \('dispatching', 'dispatched'\)/);
+  assert.doesNotMatch(repository.calls[0], /COUNT\(\*\).*FROM tasks/i);
+});
 
-  await compatible.createTask({ id: "task-1", account_id: "realtime-account", enabled: 1 });
-  await compatible.updateTask("task-1", { enabled: 1 });
-  const dedicatedCheck = await compatible.db.prepare(
-    "SELECT COUNT(*) AS total FROM tasks WHERE account_id = ? AND enabled = 1",
-  ).bind("realtime-account").first();
+test("dispatching, dispatched, claimed, and running task runs block realtime transitions", async () => {
+  const activeRuns = [
+    { id: "run-dispatching", status: "queued", dispatch_status: "dispatching" },
+    { id: "run-dispatched", status: "queued", dispatch_status: "dispatched" },
+    { id: "run-claimed", status: "claimed", dispatch_status: "dispatched" },
+    { id: "run-running", status: "running", dispatch_status: "dispatched" },
+  ];
+  for (const run of activeRuns) {
+    const repository = repositoryForRealtimeTransition(run);
+    await assert.rejects(
+      () => assertRealtimeTransitionAllowed(repository, "account-1"),
+      (error) => error?.status === 409 && error?.code === "listener_account_task_active",
+      `${run.status}/${run.dispatch_status} should block the realtime transition`,
+    );
+  }
+});
 
-  assert.equal(calls.create, 1);
-  assert.equal(calls.update, 1);
-  assert.equal(dedicatedCheck.total, 0);
+test("completed task runs allow realtime rules to be created, enabled, or modified", async () => {
+  const repository = repositoryForRealtimeTransition(null);
+  await assert.doesNotReject(() => assertRealtimeTransitionAllowed(repository, "account-1"));
 });
