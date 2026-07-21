@@ -8,9 +8,7 @@ ALLOWED_SKILLS = frozenset(
     {
         "send_text",
         "tg_signer",
-        "bot_flow",
         "send_media",
-        "chat_snapshot",
     }
 )
 
@@ -116,7 +114,6 @@ class TaskSpec:
             "message_thread_id",
             "delete_after",
             "num_of_dialogs",
-            "limit",
             "_source_message_id",
         ):
             if params.get(key) not in (None, ""):
