@@ -22,7 +22,7 @@ async function enrichClaim(payload, runId, repository) {
   if (!execution) return payload;
   const skillKey = String(payload?.task?.skill || execution.skill_key || "");
   const stored = safeParams(execution.params_json_snapshot);
-  const nativeSkill = ["bot_flow", "send_media", "chat_snapshot"].includes(skillKey);
+  const nativeSkill = skillKey === "send_media";
   const baseParams = nativeSkill || Object.keys(stored).length
     ? normalizeSkillParams(skillKey, stored)
     : { ...(payload?.task?.params || {}) };
