@@ -56,21 +56,26 @@ async function existingGithubUser(repository, input) {
   return null;
 }
 
-async function upsertGithubUserPreservingDisplayName(repository, input) {
-  const existing = await existingGithubUser(repository, input);
-  const preservedName = String(existing?.display_name || "").trim();
-  let user = await repository.upsertGithubUser(input);
-  if (!existing || !preservedName || !repository.db?.prepare || user?.display_name === preservedName) return user;
-  await repository.db.prepare("UPDATE users SET display_name = ?, updated_at = ? WHERE id = ?")
-    .bind(preservedName, input.timestamp, user.id).run();
-  return typeof repository.getUser === "function"
-    ? repository.getUser(user.id)
-    : { ...user, display_name: preservedName };
+function customGithubDisplayName(user) {
+  const displayName = String(user?.display_name || "").trim();
+  if (!displayName) return "";
+  const githubName = String(user?.github_name || "").trim();
+  const githubLogin = String(user?.github_login || "").trim();
+  return displayName !== githubName && displayName !== githubLogin ? displayName : "";
 }
 
-function preferPlatformDisplayName(session) {
-  if (!session?.display_name) return session;
-  return { ...session, github_name: session.display_name };
+async function upsertGithubUserPreservingDisplayName(repository, input) {
+  const existing = await existingGithubUser(repository, input);
+  const preservedName = customGithubDisplayName(existing);
+  let user = await repository.upsertGithubUser(input);
+  if (!preservedName || !repository.db?.prepare
+    || (user?.display_name === preservedName && user?.github_name === preservedName)) return user;
+  await repository.db.prepare(`UPDATE users SET display_name = ?, github_name = ?, updated_at = ?
+    WHERE id = ?`)
+    .bind(preservedName, preservedName, input.timestamp, user.id).run();
+  return typeof repository.getUser === "function"
+    ? repository.getUser(user.id)
+    : { ...user, display_name: preservedName, github_name: preservedName };
 }
 
 export function withEmailVerificationLifecycle(repository) {
@@ -94,13 +99,11 @@ export function withEmailVerificationLifecycle(repository) {
 
 export function withGithubProfilePersistence(repository) {
   const target = requiredRepository(repository);
+  if (typeof target.upsertGithubUser !== "function") return target;
   return new Proxy(target, {
     get(current, property) {
-      if (property === "upsertGithubUser" && typeof current.upsertGithubUser === "function") {
+      if (property === "upsertGithubUser") {
         return async (input) => upsertGithubUserPreservingDisplayName(current, input);
-      }
-      if (property === "getUserSession" && typeof current.getUserSession === "function") {
-        return async (...args) => preferPlatformDisplayName(await current.getUserSession(...args));
       }
       return bindRepositoryMember(current, property);
     },
@@ -115,7 +118,7 @@ export function authenticationRepository(repository, now = () => new Date()) {
 export const __test = {
   consumeVerificationToken,
   createVerificationToken,
+  customGithubDisplayName,
   existingGithubUser,
-  preferPlatformDisplayName,
   upsertGithubUserPreservingDisplayName,
 };
