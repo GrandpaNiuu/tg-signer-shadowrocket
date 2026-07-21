@@ -136,6 +136,17 @@ class ListenerService:
         secrets = dict(account.pop("secrets", {}) or {})
         return {**account, **secrets}
 
+    async def _retry_pending_completion(self, run_id: str, result: dict[str, Any]) -> None:
+        if not result.get("callback_pending"):
+            return
+        try:
+            await self.worker.complete_task(run_id, result)
+            result["callback_pending"] = False
+            LOGGER.info("Recovered completion callback for scheduled run %s", run_id)
+        except Exception as exc:
+            self.manager.last_error = f"task_callback:{run_id}:{type(exc).__name__}"
+            LOGGER.warning("Scheduled run %s completion callback remains pending: %s", run_id, type(exc).__name__)
+
     async def _execute_task(self, claim: dict[str, Any]) -> None:
         run_id = str((claim.get("run") or {}).get("id") or "")
         account = self._runtime_account(claim)
@@ -152,6 +163,7 @@ class ListenerService:
             try:
                 loop = asyncio.get_running_loop()
                 result = await asyncio.to_thread(execute_claimed_task, claim, self.worker, loop)
+                await self._retry_pending_completion(run_id, result)
                 LOGGER.info("Scheduled run %s completed with status %s", run_id, result.get("status"))
             finally:
                 try:
@@ -163,9 +175,12 @@ class ListenerService:
                         name=str(account.get("name") or account_id),
                         client=client,
                     )
+                    if self.manager.last_error and self.manager.last_error.startswith(("task_resume:", "task_callback:")):
+                        self.manager.last_error = None
                     LOGGER.info("Resumed realtime account %s after scheduled run %s", account_id, run_id)
                 except Exception as exc:
                     self.manager.last_error = f"task_resume:{account_id}:{type(exc).__name__}"
+                    self.manager.config_signature = None
                     LOGGER.warning("Could not resume realtime account %s: %s", account_id, type(exc).__name__)
 
     async def task_loop(self) -> None:
