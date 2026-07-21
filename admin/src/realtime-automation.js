@@ -137,7 +137,7 @@ function listenerStatusMarkup(status) {
   return `<div class="service-list">
     <div class="service-row"><div><strong>常驻 Listener</strong><small>${configured ? "VPS 长期运行服务" : "需要先配置 LISTENER_API_TOKEN 并部署 VPS 服务"}</small></div><span class="badge ${badge}">${label}</span></div>
     <div class="service-row"><div><strong>最近心跳</strong><small>${escapeHtml(status?.instance?.label || "尚无实例")}</small></div><span>${escapeHtml(formatDate(status?.instance?.last_heartbeat_at))}</span></div>
-    <div class="service-row"><div><strong>运行规模</strong><small>仅管理员专用 Telegram 账号</small></div><span>${Number(status?.active_accounts || 0)} 个账号 · ${Number(status?.active_rules || 0)} 条规则</span></div>
+    <div class="service-row"><div><strong>运行规模</strong><small>管理员实时 Telegram 账号</small></div><span>${Number(status?.active_accounts || 0)} 个账号 · ${Number(status?.active_rules || 0)} 条规则</span></div>
   </div>`;
 }
 
@@ -158,29 +158,26 @@ function eventListMarkup(events) {
 async function renderAdminRealtimeSection(section) {
   section.dataset.loading = "true";
   try {
-    const [status, rules, events, accountsPayload, tasksPayload] = await Promise.all([
+    const [status, rules, events, accountsPayload] = await Promise.all([
       request("/api/v1/admin/listener-status"),
       request("/api/v1/admin/realtime-rules"),
       request("/api/v1/admin/listener-events"),
       request("/api/v1/accounts?limit=100"),
-      request("/api/v1/tasks?limit=100"),
     ]);
     const accounts = Array.isArray(accountsPayload) ? accountsPayload : accountsPayload?.items || accountsPayload?.data || [];
-    const tasks = Array.isArray(tasksPayload) ? tasksPayload : tasksPayload?.items || tasksPayload?.data || [];
-    const busy = new Set(tasks.filter((task) => task.enabled).map((task) => String(task.account_id)));
-    const eligible = accounts.filter((account) => account.enabled && account.status === "connected" && !busy.has(String(account.id)));
-    section.innerHTML = `<div class="card-head"><div><h2>24 小时实时服务</h2><p>仅平台管理员可配置。GitHub Actions 不承担长期连接。</p></div><button class="button small ghost" type="button" data-realtime-action="refresh-admin-realtime">刷新</button></div>
+    const eligible = accounts.filter((account) => account.enabled && account.status === "connected");
+    section.innerHTML = `<div class="card-head"><div><h2>24 小时实时服务</h2><p>仅平台管理员可配置。实时账号的定时任务由 VPS Listener 统一执行。</p></div><button class="button small ghost" type="button" data-realtime-action="refresh-admin-realtime">刷新</button></div>
       <div class="card-body">${listenerStatusMarkup(status)}
-        <div class="notice warning mt-md"><span aria-hidden="true">!</span><span><strong>必须使用专用账号</strong><br>实时监听账号不能同时启用普通定时任务，避免同一 Session 被两个执行器同时使用。</span></div>
+        <div class="notice warning mt-md"><span aria-hidden="true">i</span><span><strong>实时与定时可以共用同一账号</strong><br>执行定时任务时，Listener 会暂时暂停该账号的实时连接，任务完成后自动恢复，避免同一 Session 被两个执行器同时使用。</span></div>
         <form id="realtime-rule-form" class="mt-md"><div class="form-grid">
           <div class="field"><label class="required" for="realtime-rule-name">规则名称</label><input id="realtime-rule-name" name="name" maxlength="100" required placeholder="例如：客服关键词回复"></div>
-          <div class="field"><label class="required" for="realtime-rule-account">专用 Telegram 账号</label><select id="realtime-rule-account" name="account_id" required><option value="">请选择</option>${eligible.map((account) => `<option value="${escapeHtml(account.id)}">${escapeHtml(account.name)}</option>`).join("")}</select><p class="field-help">这里只显示已连接且没有启用普通任务的账号。</p></div>
+          <div class="field"><label class="required" for="realtime-rule-account">Telegram 账号</label><select id="realtime-rule-account" name="account_id" required><option value="">请选择</option>${eligible.map((account) => `<option value="${escapeHtml(account.id)}">${escapeHtml(account.name)}</option>`).join("")}</select><p class="field-help">显示管理员工作区中已连接并启用的账号；已有定时任务不会影响选择。</p></div>
           <div class="field"><label class="required" for="realtime-rule-kind">功能</label><select id="realtime-rule-kind" name="kind"><option value="keyword_reply">24 小时关键词自动回复</option><option value="group_monitor">全天候群消息监听</option></select></div>
           <div class="field"><label class="required" for="realtime-rule-chat">监听范围</label><input id="realtime-rule-chat" name="chat_selector" value="*" maxlength="128" required placeholder="*、@群组用户名或数字 Chat ID"><p class="field-help">填写 * 表示该账号收到的所有适用会话。</p></div>
           <div class="field"><label for="realtime-rule-keyword">关键词</label><input id="realtime-rule-keyword" name="keyword" maxlength="200" placeholder="例如：价格、客服；群监听可留空"></div>
           <div class="field span-2" data-realtime-response-field><label for="realtime-rule-response">自动回复内容</label><textarea id="realtime-rule-response" name="response_text" maxlength="2000" placeholder="命中关键词后发送的固定回复"></textarea></div>
         </div><div data-realtime-form-feedback hidden></div><div class="actions mt-md"><button class="button primary" type="submit" ${eligible.length ? "" : "disabled"}>创建实时规则</button><button class="button" type="button" data-realtime-action="validate-listener-account">检测所选账号</button></div></form>
-        ${eligible.length ? "" : '<div class="notice warning mt-md"><span aria-hidden="true">!</span><span>没有可用的专用账号。请新增或连接一个 Telegram 账号，并确保它没有启用普通定时任务。</span></div>'}
+        ${eligible.length ? "" : '<div class="notice warning mt-md"><span aria-hidden="true">!</span><span>没有可用账号。请先在 Telegram 账号页面完成手机号登录，并确认账号处于启用状态。</span></div>'}
         <div class="settings-section mt-md"><h3>已配置规则</h3><div data-realtime-rule-list>${ruleListMarkup(Array.isArray(rules) ? rules : [])}</div></div>
         <div class="settings-section"><h3>最近实时事件</h3>${eventListMarkup(Array.isArray(events) ? events : [])}</div>
       </div>`;
@@ -237,7 +234,7 @@ async function submitRule(form) {
         enabled: true,
       },
     });
-    feedback(feedbackBox, "实时规则已保存，Listener 会在下一次同步时加载。", "success");
+    feedback(feedbackBox, "实时规则已保存，Listener 会在下一次同步时加载；这个账号的定时任务也会自动切换到 Listener。", "success");
     const section = form.closest("[data-admin-realtime-section]");
     await renderAdminRealtimeSection(section);
   } catch (error) {
@@ -268,7 +265,7 @@ async function validateListenerAccount(button) {
   const section = button.closest("[data-admin-realtime-section]");
   const accountId = section.querySelector("#realtime-rule-account")?.value;
   const feedbackBox = section.querySelector("[data-realtime-form-feedback]");
-  if (!accountId) return feedback(feedbackBox, "请先选择专用 Telegram 账号。", "error");
+  if (!accountId) return feedback(feedbackBox, "请先选择 Telegram 账号。", "error");
   button.disabled = true;
   try {
     await request(`/api/v1/accounts/${encodeURIComponent(accountId)}/validate`, { method: "POST", body: {} });
