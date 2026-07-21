@@ -38,7 +38,7 @@ function signerCard() {
 
 function hideStandaloneInspectionCard() {
   const card = document.querySelector('[data-skill-hub-capability="bot_inspection"]');
-  if (!card) return;
+  if (!card || card.dataset.mergedIntoSigner === "true") return;
   card.hidden = true;
   card.setAttribute("aria-hidden", "true");
   card.dataset.mergedIntoSigner = "true";
@@ -52,18 +52,19 @@ function mergeSignerCard() {
   const actions = card?.querySelector("[data-skill-hub-existing-action]");
   const manualButton = actions?.querySelector('[data-skill-hub-action="create-scheduled"][data-skill-key="tg_signer"]');
   if (!card || !actions || !manualButton) return;
+  if (actions.dataset.signerSkillMerged === "true") return;
+
+  // Mark before mutating descendants so the MutationObserver cannot re-enter this work.
+  actions.dataset.signerSkillMerged = "true";
 
   const description = card.querySelector(":scope > p");
-  if (description) {
-    description.textContent = "向机器人发送命令并点击指定按钮。可以让系统先识别机器人回复和按钮，也可以直接手动填写。";
-  }
-  const noticeText = card.querySelector(":scope > .notice span:last-child");
-  if (noticeText) {
-    noticeText.textContent = "适合：需要发送命令后点击“签到”“领取”等按钮的机器人。首次配置建议使用自动识别。";
-  }
+  const descriptionText = "向机器人发送命令并点击指定按钮。可以让系统先识别机器人回复和按钮，也可以直接手动填写。";
+  if (description && description.textContent !== descriptionText) description.textContent = descriptionText;
 
-  if (actions.dataset.signerSkillMerged === "true") return;
-  actions.dataset.signerSkillMerged = "true";
+  const noticeText = card.querySelector(":scope > .notice span:last-child");
+  const noticeValue = "适合：需要发送命令后点击“签到”“领取”等按钮的机器人。首次配置建议使用自动识别。";
+  if (noticeText && noticeText.textContent !== noticeValue) noticeText.textContent = noticeValue;
+
   manualButton.textContent = "手动配置";
   manualButton.classList.remove("primary");
   manualButton.classList.add("ghost");
@@ -89,10 +90,13 @@ function alignInspectionControls() {
   if (!select || !controls) return;
 
   const signerSelected = select.value === "tg_signer";
-  controls.hidden = !signerSelected;
-  controls.setAttribute("aria-hidden", signerSelected ? "false" : "true");
-  if (!signerSelected) return;
+  if (controls.hidden === signerSelected) controls.hidden = !signerSelected;
+  const ariaHidden = signerSelected ? "false" : "true";
+  if (controls.getAttribute("aria-hidden") !== ariaHidden) controls.setAttribute("aria-hidden", ariaHidden);
+  if (!signerSelected || controls.dataset.signerInspectionAligned === "true") return;
 
+  // Mark before changing text nodes to prevent observer-driven recursion.
+  controls.dataset.signerInspectionAligned = "true";
   const title = controls.querySelector("h3");
   const description = controls.querySelector(".card-head p");
   const inspectButton = controls.querySelector('[data-bot-inspection-action="inspect"]');
