@@ -26,6 +26,9 @@ test("protected profile must exist and reject anonymous requests", () => {
   assert.throws(() => validateProtectedProfile(result(500, {
     error: { code: "internal_error" },
   })), /reached the Worker but failed/);
+  assert.throws(() => validateProtectedProfile(result(200, {
+    data: { profile: null },
+  })), /unexpected response/);
 });
 
 test("live audit checks the Pages service binding and Worker routes", async () => {
