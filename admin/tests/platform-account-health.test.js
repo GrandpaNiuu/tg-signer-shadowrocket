@@ -24,8 +24,8 @@ test("account connection Skill opens the health center instead of a private-acco
   assert.match(source, /打开健康中心/);
 });
 
-test("security bootstrap loads the health center asset", async () => {
+test("security bootstrap remains independent from optional health-center UI", async () => {
   const source = await readFile(bootstrapUrl, "utf8");
-  assert.match(source, /import\("\.\/platform-account-health\.js"\)/);
+  assert.doesNotMatch(source, /import\("\.\/platform-account-health\.js"\)/);
   assert.match(source, /tg-checkin-admin/);
 });
