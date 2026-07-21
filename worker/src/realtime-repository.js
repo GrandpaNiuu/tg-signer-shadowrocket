@@ -46,10 +46,45 @@ async function cleanupRealtimeHistory(repository, timestamp) {
   return true;
 }
 
-// Kept as a compatibility wrapper for existing repository composition. Realtime
-// accounts may now own normal tasks; execution is routed to the Listener instead.
+function normalizedSql(sql) {
+  return String(sql || "").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function compatibilityDatabase(db) {
+  if (!db?.prepare) return db;
+  return new Proxy(db, {
+    get(current, property) {
+      if (property === "prepare") {
+        return (sql) => {
+          const query = normalizedSql(sql);
+          if (query === "select count(*) as total from tasks where account_id = ? and enabled = 1") {
+            return {
+              bind() {
+                return {
+                  async first() { return { total: 0 }; },
+                };
+              },
+            };
+          }
+          return current.prepare(sql);
+        };
+      }
+      return bindMember(current, property);
+    },
+  });
+}
+
+// Existing route code used a dedicated-account count query. Keep that route
+// compatible while allowing tasks and realtime rules to coexist; dispatch is
+// still separated so GitHub Actions never opens the same Session concurrently.
 export function withRealtimeTaskGuard(repository) {
-  return requiredRepository(repository);
+  const target = requiredRepository(repository);
+  return new Proxy(target, {
+    get(current, property) {
+      if (property === "db") return compatibilityDatabase(current.db);
+      return bindMember(current, property);
+    },
+  });
 }
 
 export function withInspectionDispatchGuard(repository) {
