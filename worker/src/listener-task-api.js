@@ -1,6 +1,6 @@
 import { HttpError, json, methodNotAllowed, readJson } from "./http.js";
 import { withInspectionDispatchGuard } from "./realtime-repository.js";
-import { handleRunnerApi } from "./runner-api.js";
+import { handleRunnerApi } from "./runner-api-v2.js";
 
 function objectBody(value) {
   if (!value || Array.isArray(value) || typeof value !== "object") {

@@ -4,7 +4,6 @@ import asyncio
 import base64
 import binascii
 import json
-import re
 from collections.abc import Mapping
 from typing import Any
 
@@ -22,51 +21,18 @@ from runner.skills.telegram_adapter import (
     classify_telegram_exception,
     telegram_environment,
 )
+from runner.skills.telegram_primitives import (
+    button_texts,
+    contains_any,
+    message_id,
+    message_text,
+    normalize_target,
+    recent_messages,
+)
 from runner.workspace import SecretWorkspace
 
 _GUIDED_FLOW_KIND = "telegram_guided_signin"
 _GUIDED_FLOW_VERSION = 1
-
-
-def _target(value: Any) -> str | int:
-    raw = required_text(value, "target", maximum=128)
-    username_match = re.search(r"\busername:\s*([A-Za-z0-9_]+)", raw)
-    id_match = re.search(r"\bid:\s*(-?\d+)", raw)
-    if username_match:
-        raw = username_match.group(1)
-    elif id_match:
-        raw = id_match.group(1)
-    if raw.startswith("@"):
-        return raw
-    if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{4,31}", raw):
-        return "@" + raw
-    try:
-        return int(raw)
-    except ValueError as exc:
-        raise SkillValidationError("target must be @username or a numeric chat id") from exc
-
-
-def _message_text(message: Any) -> str:
-    return str(getattr(message, "text", None) or getattr(message, "caption", None) or "")
-
-
-def _button_texts(message: Any) -> list[str]:
-    markup = getattr(message, "reply_markup", None)
-    rows = getattr(markup, "inline_keyboard", None)
-    if not rows:
-        return []
-    values: list[str] = []
-    for row in rows:
-        for button in row:
-            text = str(getattr(button, "text", "") or "").strip()
-            if text:
-                values.append(text)
-    return values
-
-
-def _contains_any(text: str, keywords: list[str]) -> bool:
-    normalized = text.casefold()
-    return any(keyword.casefold() in normalized for keyword in keywords)
 
 
 class TgSignerSkill(Skill):
@@ -143,20 +109,9 @@ class TgSignerSkill(Skill):
             "message_thread_id": thread_id,
         }
 
-    @staticmethod
-    async def _recent_messages(signer, target: str | int, after_id: int) -> list[Any]:
-        messages: list[Any] = []
-        async for message in signer.app.get_chat_history(target, limit=20):
-            message_id = int(getattr(message, "id", 0) or 0)
-            if message_id <= after_id:
-                break
-            messages.append(message)
-        messages.reverse()
-        return messages
-
     async def _execute_guided(self, signer, flow: dict[str, Any]) -> dict[str, Any]:
         await signer.login(num_of_dialogs=1, print_chat=False)
-        target = _target(flow["target"])
+        target = normalize_target(flow["target"])
         text = flow["text"]
         button_text = flow["button_text"]
         success_keywords = flow["success_keywords"]
@@ -168,7 +123,7 @@ class TgSignerSkill(Skill):
                 text,
                 message_thread_id=flow["message_thread_id"],
             )
-            sent_id = int(getattr(sent, "id", 0) or 0)
+            sent_id = message_id(sent)
             if not button_text and not success_keywords:
                 return {"sent": True, "button_clicked": False, "success_confirmed": False}
 
@@ -177,19 +132,19 @@ class TgSignerSkill(Skill):
             last_seen_id = sent_id
             clicked = False
             while loop.time() < deadline:
-                for message in await self._recent_messages(signer, target, last_seen_id):
-                    message_id = int(getattr(message, "id", 0) or 0)
-                    last_seen_id = max(last_seen_id, message_id)
-                    message_text = _message_text(message)
-                    if success_keywords and _contains_any(message_text, success_keywords):
+                for message in await recent_messages(signer.app, target, last_seen_id, limit=20):
+                    current_id = message_id(message)
+                    last_seen_id = max(last_seen_id, current_id)
+                    current_text = message_text(message)
+                    if success_keywords and contains_any(current_text, success_keywords):
                         return {
                             "sent": True,
                             "button_clicked": clicked,
                             "success_confirmed": True,
-                            "matched_reply": message_text[:240],
+                            "matched_reply": current_text[:240],
                         }
                     if button_text and not clicked:
-                        for actual_text in _button_texts(message):
+                        for actual_text in button_texts(message):
                             if button_text.casefold() in actual_text.casefold():
                                 await message.click(actual_text)
                                 clicked = True
@@ -207,7 +162,6 @@ class TgSignerSkill(Skill):
             f"等待{waiting_for}超时，请检查按钮文字或成功关键词。",
             code="guided_signin_timeout",
             retryable=False,
-            # The initial command was already sent. Retrying could duplicate a sign-in or message.
             ambiguous=True,
         )
 
@@ -236,7 +190,6 @@ class TgSignerSkill(Skill):
                         )
                         return SkillResult(data={"task_name": values["task_name"], **result})
                     if import_text is not None:
-                        # Existing tg-signer JSON/Base64 tasks continue to use the legacy importer.
                         signer.import_(import_text)
                     signer.app_run(signer.run_once(values["num_of_dialogs"]))
             return SkillResult(data={"task_name": values["task_name"], "completed": True})

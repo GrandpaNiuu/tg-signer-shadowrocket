@@ -1,5 +1,7 @@
 const FORMAT = "telegram-checkin-tasks";
 const VERSION = 1;
+const PARAMS_LIMIT_BYTES = 200_000;
+const EXPANDED_SKILLS = new Set(["bot_flow", "send_media", "chat_snapshot", "account_audit"]);
 
 export class TaskTransferError extends Error {
   constructor(message, { unresolvedAccounts = [] } = {}) {
@@ -17,12 +19,36 @@ function nullableInteger(value) {
   return Number.isInteger(value) ? value : null;
 }
 
+function plainObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value);
+}
+
+function cloneParams(value, index = null) {
+  if (value === undefined || value === null) return null;
+  if (!plainObject(value)) {
+    const prefix = index === null ? "任务" : `第 ${index + 1} 个任务`;
+    throw new TaskTransferError(`${prefix}的 Skill 参数无效。`);
+  }
+  let serialized;
+  try {
+    serialized = JSON.stringify(value);
+  } catch {
+    serialized = "";
+  }
+  if (!serialized || new TextEncoder().encode(serialized).length > PARAMS_LIMIT_BYTES) {
+    const prefix = index === null ? "任务" : `第 ${index + 1} 个任务`;
+    throw new TaskTransferError(`${prefix}的 Skill 参数过大或无法序列化。`);
+  }
+  return JSON.parse(serialized);
+}
+
 function portableTask(task, accountNames, accountRefs) {
   const sourceAccountId = String(task.account_id || "");
   const accountName = text(task.account_name).trim()
     || text(accountNames.get(sourceAccountId)).trim();
   if (!accountName) throw new TaskTransferError(`任务“${text(task.name, "未命名任务")}”找不到账号名称，无法导出。`);
   if (!accountRefs.has(sourceAccountId)) accountRefs.set(sourceAccountId, `account-${accountRefs.size + 1}`);
+  const params = cloneParams(task.params);
   return {
     name: text(task.name).trim(),
     account_ref: accountRefs.get(sourceAccountId),
@@ -31,6 +57,7 @@ function portableTask(task, accountNames, accountRefs) {
     skill_key: text(task.skill_key || task.skill).trim(),
     bot: text(task.bot).trim(),
     command: text(task.command),
+    ...(params ? { params } : {}),
     cron: text(task.cron || task.cron_expr).trim(),
     timezone: text(task.timezone, "Asia/Shanghai").trim(),
     retry: Number.isInteger(task.retry) ? task.retry : Number(task.retry_count || 0),
@@ -71,6 +98,12 @@ function requiredText(value, label, index, max) {
   if (!result || result.length > max) {
     throw new TaskTransferError(`第 ${index + 1} 个任务的${label}无效。`);
   }
+  return result;
+}
+
+function optionalText(value, label, index, max) {
+  const result = text(value);
+  if (result.length > max) throw new TaskTransferError(`第 ${index + 1} 个任务的${label}无效。`);
   return result;
 }
 
@@ -159,12 +192,15 @@ export function parseTaskImport(raw, { accounts = [], skills = [], accountMappin
     if (timeout * (retry + 1) + retryDelayBudget > 900) {
       throw new TaskTransferError(`第 ${index + 1} 个任务的重试与超时总预算超过 900 秒。`);
     }
+    const params = cloneParams(item.params, index);
+    const expanded = EXPANDED_SKILLS.has(skillKey) && params !== null;
     return {
       name: requiredText(item.name, "名称", index, 100),
       account_id: String(account.id),
       skill_key: skillKey,
-      bot: requiredText(item.bot, "Bot / Chat", index, 128),
-      command: requiredText(item.command, "Command", index, 2000),
+      bot: expanded ? optionalText(item.bot, "Bot / Chat", index, 128) : requiredText(item.bot, "Bot / Chat", index, 128),
+      command: expanded ? optionalText(item.command, "Command", index, 2000) : requiredText(item.command, "Command", index, 2000),
+      ...(params ? { params } : {}),
       cron: requiredText(item.cron, "Cron", index, 96),
       timezone: requiredText(item.timezone || "Asia/Shanghai", "时区", index, 64),
       retry,
@@ -180,20 +216,59 @@ export function parseTaskImport(raw, { accounts = [], skills = [], accountMappin
   return { tasks, warnings };
 }
 
+function copyLegacyFields(task, skillKey, params) {
+  if (!params || !EXPANDED_SKILLS.has(skillKey)) {
+    return {
+      bot: text(task.bot),
+      command: text(task.command),
+      thread_id: task.thread_id ?? task.message_thread_id ?? null,
+      delete_after_seconds: task.delete_after_seconds ?? null,
+    };
+  }
+  if (skillKey === "bot_flow") {
+    return {
+      bot: text(params.target),
+      command: JSON.stringify({ steps: params.steps || [] }),
+      thread_id: params.message_thread_id ?? null,
+      delete_after_seconds: null,
+    };
+  }
+  if (skillKey === "send_media") {
+    return {
+      bot: text(params.target),
+      command: JSON.stringify({ file_id: params.file_id, media_type: params.media_type, caption: params.caption ?? null }),
+      thread_id: params.message_thread_id ?? null,
+      delete_after_seconds: params.delete_after ?? null,
+    };
+  }
+  if (skillKey === "chat_snapshot") {
+    return {
+      bot: text(params.target),
+      command: JSON.stringify({ limit: params.limit ?? 20, keyword: params.keyword ?? null }),
+      thread_id: null,
+      delete_after_seconds: null,
+    };
+  }
+  return { bot: "", command: "", thread_id: null, delete_after_seconds: null };
+}
+
 export function copyTaskDraft(task) {
+  const skillKey = task.skill_key || task.skill || "send_text";
+  const params = cloneParams(task.params);
+  const legacy = copyLegacyFields(task, skillKey, params);
   return {
     name: `${text(task.name, "任务")}（副本）`.slice(0, 100),
     account_id: task.account_id || "",
-    skill_key: task.skill_key || task.skill || "send_text",
-    bot: text(task.bot),
-    command: text(task.command),
+    skill_key: skillKey,
+    ...legacy,
+    ...(params ? { params } : {}),
     cron: text(task.cron || task.cron_expr, "0 0 * * *"),
     timezone: text(task.timezone, "Asia/Shanghai"),
     retry: Number.isInteger(task.retry) ? task.retry : Number(task.retry_count || 0),
     timeout_seconds: Number.isInteger(task.timeout_seconds) ? task.timeout_seconds : 120,
-    thread_id: task.thread_id ?? task.message_thread_id ?? null,
-    delete_after_seconds: task.delete_after_seconds ?? null,
     has_tg_signer_import: false,
     enabled: false,
   };
 }
+
+export const __test = { cloneParams, copyLegacyFields, EXPANDED_SKILLS, PARAMS_LIMIT_BYTES };

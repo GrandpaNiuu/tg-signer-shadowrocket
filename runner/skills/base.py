@@ -18,12 +18,14 @@ class SkillError(RuntimeError):
         retryable: bool = False,
         ambiguous: bool = False,
         retry_after_seconds: int | None = None,
+        logs: list[dict[str, Any]] | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.retryable = retryable
         self.ambiguous = ambiguous
         self.retry_after_seconds = retry_after_seconds
+        self.logs = logs or []
 
 
 @dataclass(slots=True)

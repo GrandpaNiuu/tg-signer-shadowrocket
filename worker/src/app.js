@@ -13,8 +13,9 @@ import {
   schedulerRepository,
 } from "./repository-facade.js";
 import { handleListenerApi, handleWorkspaceRealtimeApi } from "./realtime-automation.js";
-import { handleRunnerApi } from "./runner-api.js";
+import { handleRunnerApi } from "./runner-api-v2.js";
 import { runScheduler } from "./scheduler.js";
+import { handleSkillTaskApi } from "./skill-task-api.js";
 
 const REQUIRED_READY_CONFIG = Object.freeze([
   "GITHUB_OWNER",
@@ -204,6 +205,8 @@ export function createWorker(dependencies = {}) {
           const userRepository = adminWorkspaceRepository(repository, identity);
           const realtimeResponse = await handleWorkspaceRealtimeApi(request, env, userRepository, context);
           if (realtimeResponse) return await withRequestId(realtimeResponse, requestId);
+          const skillTaskResponse = await handleSkillTaskApi(request, env, userRepository, context);
+          if (skillTaskResponse) return await withRequestId(skillTaskResponse, requestId);
           return await withRequestId(await handleAdminApi(request, env, userRepository, context), requestId);
         }
         if (url.pathname.startsWith("/api/runner/")) {

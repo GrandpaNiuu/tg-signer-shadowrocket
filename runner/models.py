@@ -4,7 +4,16 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 
-ALLOWED_SKILLS = frozenset({"send_text", "tg_signer"})
+ALLOWED_SKILLS = frozenset(
+    {
+        "send_text",
+        "tg_signer",
+        "bot_flow",
+        "send_media",
+        "chat_snapshot",
+        "account_audit",
+    }
+)
 
 
 class ValidationError(ValueError):
@@ -104,7 +113,13 @@ class TaskSpec:
             # During migration the generic Command column carries the old
             # TG_SIGNER_TASK_NAME. Canonical claims should set params.task_name.
             params["task_name"] = task.get("command", params.get("text"))
-        for key in ("message_thread_id", "delete_after", "num_of_dialogs"):
+        for key in (
+            "message_thread_id",
+            "delete_after",
+            "num_of_dialogs",
+            "limit",
+            "_source_message_id",
+        ):
             if params.get(key) not in (None, ""):
                 try:
                     params[key] = int(params[key])

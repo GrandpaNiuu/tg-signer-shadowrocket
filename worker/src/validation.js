@@ -96,16 +96,25 @@ export function accountInput(body, { patch = false, sessionOptional = patch } = 
 }
 
 export function taskInput(body, { patch = false, defaultTimezone = "Asia/Shanghai" } = {}) {
-  const allowed = ["name", "account_id", "skill_key", "bot", "command", "cron", "timezone", "retry", "timeout_seconds", "thread_id", "delete_after_seconds", "enabled", "tg_signer_import"];
-  exactObject(body, allowed, patch ? [] : ["name", "account_id", "skill_key", "bot", "command", "cron"]);
+  const allowed = ["name", "account_id", "skill_key", "params", "bot", "command", "cron", "timezone", "retry", "timeout_seconds", "thread_id", "delete_after_seconds", "enabled", "tg_signer_import"];
+  exactObject(body, allowed, patch ? [] : ["name", "account_id", "skill_key", "cron"]);
   if (patch && Object.keys(body).length === 0) fail(["body"]);
   const output = {};
   const optional = patch;
-  for (const field of ["name", "account_id", "skill_key", "bot", "command"]) {
-    const max = field === "command" ? 2_000 : field === "name" ? 100 : 128;
+  for (const field of ["name", "account_id", "skill_key"]) {
+    const max = field === "name" ? 100 : 128;
     const pattern = field === "skill_key" ? /^[a-z][a-z0-9_]{1,63}$/ : undefined;
     const value = stringField(body[field], field, { max, pattern, optional });
     if (value !== undefined) output[field] = value;
+  }
+  for (const field of ["bot", "command"]) {
+    const max = field === "command" ? 2_000 : 128;
+    const value = stringField(body[field], field, { min: 0, max, optional: true });
+    if (value !== undefined) output[field] = value;
+  }
+  if (body.params !== undefined) {
+    if (!body.params || Array.isArray(body.params) || typeof body.params !== "object") fail(["params"]);
+    output.params = body.params;
   }
   const timezone = stringField(body.timezone, "timezone", { max: 64, optional: true }) ?? (patch ? undefined : defaultTimezone);
   const cron = stringField(body.cron, "cron", { max: 100, optional });
@@ -150,7 +159,7 @@ export function validateTaskRuntime(input, current = {}) {
   const deleteAfter = input.delete_after_seconds !== undefined
     ? input.delete_after_seconds
     : current.delete_after_seconds;
-  if (skillKey === "send_text" && deleteAfter !== null && deleteAfter !== undefined
+  if (["send_text", "send_media"].includes(skillKey) && deleteAfter !== null && deleteAfter !== undefined
     && deleteAfter >= timeout - 10) {
     fail(["delete_after_seconds"]);
   }

@@ -1,0 +1,52 @@
+.skill-expansion-builder {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--line, #dbe3ea);
+  border-radius: 14px;
+  background: var(--panel-soft, #f8fafc);
+}
+
+.skill-flow-list {
+  display: grid;
+  gap: .8rem;
+}
+
+.skill-flow-step {
+  display: grid;
+  gap: .75rem;
+  padding: .9rem;
+  border: 1px solid var(--line, #dbe3ea);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.skill-flow-step > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+}
+
+.skill-media-register {
+  padding-top: .25rem;
+}
+
+.skill-expansion-status {
+  min-height: 1.25rem;
+  margin: 0;
+}
+
+.skill-expansion-status.error {
+  color: #b42318;
+}
+
+.skill-expansion-status.success {
+  color: #067647;
+}
+
+@media (max-width: 720px) {
+  .skill-flow-step {
+    padding: .75rem;
+  }
+}
