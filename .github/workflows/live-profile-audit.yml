@@ -49,7 +49,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          node tools/live-profile-audit.mjs | tee "${RUNNER_TEMP}/live-profile-audit.log"
+          node tools/live-profile-audit.mjs 2>&1 | tee "${RUNNER_TEMP}/live-profile-audit.log"
       - name: Upload sanitized audit result
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
