@@ -1,10 +1,17 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 const hubUrl = new URL("../src/automation-skill-hub.js", import.meta.url);
 const realtimeUrl = new URL("../src/realtime-automation.js", import.meta.url);
 const indexUrl = new URL("../index.html", import.meta.url);
+
+test("Skill task hub JavaScript passes Node syntax validation", () => {
+  const result = spawnSync(process.execPath, ["--check", fileURLToPath(hubUrl)], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+});
 
 test("all business automation capabilities are presented through Skills", async () => {
   const source = await readFile(hubUrl, "utf8");
