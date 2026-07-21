@@ -124,9 +124,10 @@ export async function handleProfileBrandingApi(request, repository, context) {
       throw new HttpError(422, "validation_failed", "没有需要保存的个人资料。", { fields: ["display_name", "avatar_data_url"] });
     }
     const timestamp = context.now().toISOString();
-    await repository.db.prepare(
-      "UPDATE users SET display_name = ?, avatar_data_url = ?, updated_at = ? WHERE id = ?",
-    ).bind(displayName, avatar, timestamp, userId).run();
+    await repository.db.prepare(`UPDATE users SET display_name = ?, avatar_data_url = ?,
+      github_name = CASE WHEN github_user_id IS NOT NULL THEN ? ELSE github_name END,
+      updated_at = ? WHERE id = ?`)
+      .bind(displayName, avatar, displayName, timestamp, userId).run();
     return json({ data: await currentProfile(repository, userId) });
   }
 
