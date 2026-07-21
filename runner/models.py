@@ -11,7 +11,6 @@ ALLOWED_SKILLS = frozenset(
         "bot_flow",
         "send_media",
         "chat_snapshot",
-        "account_audit",
     }
 )
 
