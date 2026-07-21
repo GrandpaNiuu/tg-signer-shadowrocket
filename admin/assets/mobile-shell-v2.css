@@ -1,0 +1,113 @@
+@media (max-width: 760px) {
+  html,
+  body {
+    width: 100%;
+    height: 100%;
+    min-height: 0 !important;
+    overflow: hidden !important;
+    overscroll-behavior: none;
+  }
+
+  body {
+    padding-bottom: 0 !important;
+  }
+
+  .app-shell {
+    width: 100%;
+    height: 100dvh;
+    min-height: 0 !important;
+    overflow: hidden;
+  }
+
+  .workspace {
+    width: 100%;
+    height: 100dvh;
+    min-height: 0 !important;
+    margin-left: 0 !important;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .topbar {
+    position: relative;
+    top: auto;
+    flex: 0 0 64px;
+    width: 100%;
+  }
+
+  main {
+    flex: 1 1 auto;
+    width: 100%;
+    min-height: 0 !important;
+    height: auto !important;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: calc(108px + env(safe-area-inset-bottom, 0px)) !important;
+  }
+
+  #view {
+    width: 100%;
+    min-height: 0 !important;
+    height: auto !important;
+  }
+
+  .mobile-tabbar {
+    position: fixed !important;
+    top: auto !important;
+    right: 12px !important;
+    bottom: calc(10px + env(safe-area-inset-bottom, 0px)) !important;
+    left: 12px !important;
+    z-index: 40 !important;
+  }
+
+  .mobile-nav-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 45;
+    display: none;
+    padding: 0;
+    border: 0;
+    background: rgba(0, 0, 0, 0.62);
+    backdrop-filter: blur(3px);
+    -webkit-backdrop-filter: blur(3px);
+    cursor: default;
+  }
+
+  body.nav-open .mobile-nav-backdrop {
+    display: block;
+  }
+
+  body.nav-open::after {
+    content: none !important;
+    display: none !important;
+  }
+
+  .sidebar {
+    z-index: 50 !important;
+    max-height: 100dvh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  #menu-toggle {
+    transition: left 0.2s ease, transform 0.2s ease, background 0.2s ease;
+  }
+
+  body.nav-open #menu-toggle {
+    position: fixed;
+    top: calc(14px + env(safe-area-inset-top, 0px));
+    left: min(calc(88vw - 54px), 256px);
+    z-index: 60;
+    border-color: rgba(255, 255, 255, 0.15);
+    background: rgba(42, 43, 50, 0.96);
+  }
+
+  body.nav-open .mobile-tabbar {
+    visibility: hidden;
+    pointer-events: none;
+  }
+}
