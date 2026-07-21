@@ -82,7 +82,7 @@ test("failed run notification identifies user, Telegram account, content, and pr
   assert.match(captured.body.text, /任务执行失败/);
   assert.match(captured.body.text, /任务：<\/b>音乐积分签到/);
   assert.match(captured.body.text, /用户：<\/b>小明/);
-  assert.match(captured.body.text, /账号：<\/b>主账号（@xiaoming_tg）/);
+  assert.match(captured.body.text, /Telegram：<\/b>主账号（@xiaoming_tg）/);
   assert.doesNotMatch(captured.body.text, /执行编号|run-1-audit-20260721/);
   assert.match(captured.body.text, /目标：<\/b>@music_points_bot/);
   assert.match(captured.body.text, /任务消息：<\/b><code>\/checkin<\/code>/);
@@ -147,7 +147,7 @@ test("successful task broadcasts show the Telegram account instead of an executi
   assert.match(message.text, /任务执行成功/);
   assert.match(message.text, /任务：<\/b>开户积分签到/);
   assert.match(message.text, /用户：<\/b>小红/);
-  assert.match(message.text, /账号：<\/b>备用账号（\+86\*{7}5678）/);
+  assert.match(message.text, /Telegram：<\/b>备用账号（\+86\*{7}5678）/);
   assert.doesNotMatch(message.text, /执行编号|run-2-audit-20260721/);
   assert.match(message.text, /目标：<\/b>@points_bot/);
   assert.match(message.text, /任务消息：<\/b><code>领取今日积分<\/code>/);
