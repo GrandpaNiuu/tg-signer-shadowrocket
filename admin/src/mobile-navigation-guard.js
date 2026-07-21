@@ -19,8 +19,11 @@ function closeNavigation() {
 function resetRouteScroll() {
   if (!isMobile()) return;
   requestAnimationFrame(() => {
-    globalThis.scrollTo({ top: 0, left: 0, behavior: "instant" });
-    document.scrollingElement?.scrollTo?.({ top: 0, left: 0, behavior: "instant" });
+    globalThis.scrollTo(0, 0);
+    if (document.scrollingElement) {
+      document.scrollingElement.scrollTop = 0;
+      document.scrollingElement.scrollLeft = 0;
+    }
   });
 }
 
