@@ -6,7 +6,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN useradd --create-home --uid 10001 listener
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends ca-certificates git \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --uid 10001 listener
 
 COPY runner/requirements.txt /app/runner/requirements.txt
 COPY listener/requirements.txt /app/listener/requirements.txt
