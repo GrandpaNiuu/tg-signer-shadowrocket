@@ -32,9 +32,10 @@ test("authentication boundary preserves repository method binding", async () => 
   assert.equal(wrapped.boundValue(), "bound");
 });
 
-test("authentication boundary remains optional for non-email repositories", () => {
+test("authentication boundary remains optional for unrelated repositories", () => {
   const repository = { value: 1 };
   assert.equal(withEmailVerificationLifecycle(repository), repository);
+  assert.equal(withGithubProfilePersistence(repository), repository);
   assert.throws(() => authenticationRepository(null), /Repository is unavailable/);
 });
 
@@ -42,17 +43,18 @@ test("GitHub login preserves an existing custom display name", async () => {
   let stored = {
     id: "legacy-admin",
     display_name: "自定义管理员",
+    github_login: "GrandpaNiuu",
     github_name: "Original GitHub Name",
   };
   const repository = {
     db: {
       prepare(sql) {
-        assert.match(sql, /UPDATE users SET display_name/);
+        assert.match(sql, /UPDATE users SET display_name = \?, github_name = \?/);
         return {
-          bind(name, timestamp, id) {
+          bind(displayName, githubName, timestamp, id) {
             return {
               async run() {
-                stored = { ...stored, id, display_name: name, updated_at: timestamp };
+                stored = { ...stored, id, display_name: displayName, github_name: githubName, updated_at: timestamp };
               },
             };
           },
@@ -62,7 +64,12 @@ test("GitHub login preserves an existing custom display name", async () => {
     async getUser() { return { ...stored }; },
     async getUserByGithubId() { return { ...stored }; },
     async upsertGithubUser(input) {
-      stored = { ...stored, display_name: input.github_name, github_name: input.github_name };
+      stored = {
+        ...stored,
+        display_name: input.github_name,
+        github_name: input.github_name,
+        github_login: input.github_login || stored.github_login,
+      };
       return { ...stored };
     },
   };
@@ -70,23 +77,31 @@ test("GitHub login preserves an existing custom display name", async () => {
   const result = await wrapped.upsertGithubUser({
     is_admin: true,
     github_user_id: "123",
+    github_login: "GrandpaNiuu",
     github_name: "New GitHub Name",
     timestamp: "2026-07-21T00:00:00.000Z",
   });
   assert.equal(result.display_name, "自定义管理员");
+  assert.equal(result.github_name, "自定义管理员");
   assert.equal(stored.display_name, "自定义管理员");
 });
 
-test("authenticated sessions prefer the platform display name", async () => {
-  const repository = {
-    async getUserSession() {
-      return { display_name: "平台昵称", github_name: "GitHub Name" };
-    },
-  };
-  const wrapped = withGithubProfilePersistence(repository);
-  const session = await wrapped.getUserSession("hash", "timestamp");
-  assert.equal(session.github_name, "平台昵称");
-  assert.equal(__test.preferPlatformDisplayName(null), null);
+test("GitHub login does not treat the default login label as a custom name", () => {
+  assert.equal(__test.customGithubDisplayName({
+    display_name: "GrandpaNiuu",
+    github_login: "GrandpaNiuu",
+    github_name: "Grandpa Niu",
+  }), "");
+  assert.equal(__test.customGithubDisplayName({
+    display_name: "Grandpa Niu",
+    github_login: "GrandpaNiuu",
+    github_name: "Grandpa Niu",
+  }), "");
+  assert.equal(__test.customGithubDisplayName({
+    display_name: "平台昵称",
+    github_login: "GrandpaNiuu",
+    github_name: "Grandpa Niu",
+  }), "平台昵称");
 });
 
 test("generic repository facade delegates authentication logic to the domain module", async () => {
