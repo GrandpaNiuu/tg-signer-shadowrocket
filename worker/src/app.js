@@ -3,6 +3,7 @@ import { createAdminAuth } from "./admin-auth.js";
 import { verifyRunnerRequest } from "./auth.js";
 import { errorResponse, json } from "./http.js";
 import { handleListenerTaskApi } from "./listener-task-api.js";
+import { handlePlatformAccountHealthApi } from "./platform-account-health.js";
 import { createD1Repository } from "./repository.js";
 import {
   adminWorkspaceRepository,
@@ -185,13 +186,15 @@ export function createWorker(dependencies = {}) {
               },
             }, 503), requestId);
           }
-          const userRepository = adminWorkspaceRepository(repository, identity);
           const context = {
             uuid,
             now,
             fetch: fetchImpl,
             identity,
           };
+          const platformHealthResponse = await handlePlatformAccountHealthApi(request, env, repository, context);
+          if (platformHealthResponse) return await withRequestId(platformHealthResponse, requestId);
+          const userRepository = adminWorkspaceRepository(repository, identity);
           const realtimeResponse = await handleWorkspaceRealtimeApi(request, env, userRepository, context);
           if (realtimeResponse) return await withRequestId(realtimeResponse, requestId);
           return await withRequestId(await handleAdminApi(request, env, userRepository, context), requestId);
