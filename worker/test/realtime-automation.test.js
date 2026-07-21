@@ -8,6 +8,7 @@ import { __test } from "../src/realtime-automation.js";
 const migrationUrl = new URL("../migrations/0100_realtime_automation.sql", import.meta.url);
 const appUrl = new URL("../src/app.js", import.meta.url);
 const apiUrl = new URL("../src/realtime-automation.js", import.meta.url);
+const taskApiUrl = new URL("../src/listener-task-api.js", import.meta.url);
 
 test("Telegram targets accept usernames and numeric ids but wildcard is admin-only", () => {
   assert.equal(__test.normalizeTelegramTarget("@example_bot"), "@example_bot");
@@ -85,11 +86,13 @@ test("realtime migration keeps user inspections and administrator rules separate
   assert.match(sql, /user_id TEXT NOT NULL REFERENCES users\(id\) ON DELETE CASCADE/);
 });
 
-test("Worker routes listener traffic before browser workspace APIs", async () => {
+test("Worker routes Listener task traffic before other Listener APIs", async () => {
   const app = await readFile(appUrl, "utf8");
+  const taskIndex = app.indexOf('url.pathname.startsWith("/api/listener/v1/runs")');
   const listenerIndex = app.indexOf('url.pathname.startsWith("/api/listener/v1/")');
   const workspaceIndex = app.indexOf('url.pathname.startsWith("/api/v1/")');
-  assert.ok(listenerIndex > 0 && workspaceIndex > listenerIndex);
+  assert.ok(taskIndex > 0 && listenerIndex > taskIndex && workspaceIndex > listenerIndex);
+  assert.match(app, /handleListenerTaskApi/);
   assert.match(app, /handleWorkspaceRealtimeApi/);
   assert.match(app, /realtime_listener/);
   assert.match(app, /listener_not_configured/);
@@ -97,10 +100,12 @@ test("Worker routes listener traffic before browser workspace APIs", async () =>
 
 test("only administrators can configure continuous monitoring and account validation", async () => {
   const source = await readFile(apiUrl, "utf8");
+  const taskSource = await readFile(taskApiUrl, "utf8");
   assert.match(source, /只有平台管理员可以使用实时监听功能/);
   assert.match(source, /只有平台管理员可以运行账号连接检测/);
-  assert.match(source, /listener_account_has_tasks/);
-  assert.match(source, /实时监听账号不能同时运行普通定时任务/);
   assert.match(source, /每天最多识别 20 次机器人操作/);
-  assert.doesNotMatch(source, /child_process|eval\(|new Function/);
+  assert.match(taskSource, /u\.role = 'admin'/);
+  assert.match(taskSource, /realtime_rules/);
+  assert.match(taskSource, /listener:/);
+  assert.doesNotMatch(source + taskSource, /child_process|eval\(|new Function/);
 });
