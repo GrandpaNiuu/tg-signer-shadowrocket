@@ -21,6 +21,13 @@ export const SKILL_PRESENTATIONS = Object.freeze({
   }),
 });
 
+const EXTERNALLY_PRESENTED_SKILLS = new Set([
+  "bot_flow",
+  "send_media",
+  "chat_snapshot",
+  "account_audit",
+]);
+
 const GUIDED_FLOW_KIND = "telegram_guided_signin";
 const GUIDED_FLOW_VERSION = 1;
 
@@ -159,14 +166,17 @@ function updateTaskForm() {
   if (!form) return;
 
   for (const option of select.options) {
+    if (EXTERNALLY_PRESENTED_SKILLS.has(option.value)) continue;
     const presentation = skillPresentation(option.value);
     const suffix = option.disabled ? "（已停用）" : "";
     const label = `${presentation.name}${option.value === "send_text" ? "（推荐）" : ""}${suffix}`;
     if (option.textContent !== label) option.textContent = label;
   }
 
-  const presentation = skillPresentation(select.value);
-  ensureSkillHelp(select).textContent = presentation.formHelp;
+  if (!EXTERNALLY_PRESENTED_SKILLS.has(select.value)) {
+    const presentation = skillPresentation(select.value);
+    ensureSkillHelp(select).textContent = presentation.formHelp;
+  }
 
   const skillLabel = document.querySelector('label[for="task-skill"]');
   if (skillLabel) skillLabel.textContent = "任务类型";
@@ -213,10 +223,10 @@ function updateTaskTable() {
 
 function updateDashboardSkillLabels() {
   for (const details of document.querySelectorAll(".service-row small")) {
-    const text = details.textContent;
+    const detailText = details.textContent;
     for (const key of Object.keys(SKILL_PRESENTATIONS)) {
-      if (text.endsWith(` · ${key}`)) {
-        details.textContent = `${text.slice(0, -key.length)}${skillPresentation(key).shortName}`;
+      if (detailText.endsWith(` · ${key}`)) {
+        details.textContent = `${detailText.slice(0, -key.length)}${skillPresentation(key).shortName}`;
         break;
       }
     }
@@ -227,17 +237,17 @@ function updateSkillCards() {
   for (const card of document.querySelectorAll(".skill-card")) {
     const keyElement = card.querySelector(".skill-meta strong.mono");
     const key = keyElement?.textContent.trim();
-    if (!key) continue;
+    if (!key || EXTERNALLY_PRESENTED_SKILLS.has(key)) continue;
     const presentation = skillPresentation(key);
 
     const title = card.querySelector("h2");
-    if (title) title.textContent = presentation.name;
+    if (title && title.textContent !== presentation.name) title.textContent = presentation.name;
     const icon = card.querySelector(".skill-icon");
-    if (icon) icon.textContent = presentation.icon;
+    if (icon && icon.textContent !== presentation.icon) icon.textContent = presentation.icon;
     const status = card.querySelector(".skill-card-head .badge");
-    if (status && !status.classList.contains("disabled")) status.textContent = presentation.badge;
+    if (status && !status.classList.contains("disabled") && status.textContent !== presentation.badge) status.textContent = presentation.badge;
     const description = card.querySelector(":scope > p");
-    if (description) description.textContent = presentation.description;
+    if (description && description.textContent !== presentation.description) description.textContent = presentation.description;
 
     let suitable = card.querySelector("[data-skill-suitable]");
     if (!suitable) {
@@ -246,7 +256,8 @@ function updateSkillCards() {
       suitable.dataset.skillSuitable = "true";
       card.querySelector(".skill-meta")?.insertAdjacentElement("beforebegin", suitable);
     }
-    suitable.textContent = `适合：${presentation.suitableFor}`;
+    const suitableText = `适合：${presentation.suitableFor}`;
+    if (suitable.textContent !== suitableText) suitable.textContent = suitableText;
 
     const meta = [...card.querySelectorAll(".skill-meta > span")];
     const labels = ["内部标识（无需修改）", "执行程序版本", "配置格式版本", "需要填写"];
@@ -254,7 +265,7 @@ function updateSkillCards() {
       if (labels[index]) replaceTextNode(item, labels[index]);
     });
     const required = meta[3]?.querySelector("strong");
-    if (required) required.textContent = presentation.requiredFields;
+    if (required && required.textContent !== presentation.requiredFields) required.textContent = presentation.requiredFields;
   }
 }
 
@@ -266,12 +277,14 @@ function updatePageCopy() {
   if (heading?.textContent.trim() === "Skills") heading.textContent = "任务类型";
   const pageDescription = view.querySelector(".page-head p");
   if (heading?.textContent.trim() === "任务类型" && pageDescription) {
-    pageDescription.textContent = "选择任务实际要做的事情；普通消息选第一项，需要点击机器人按钮时选第二项。";
+    const value = "选择任务实际要做的事情；普通消息选第一项，需要点击机器人按钮时选第二项。";
+    if (pageDescription.textContent !== value) pageDescription.textContent = value;
   }
 
   const registryNotice = view.querySelector(".notice.mb-md span:last-child");
   if (heading?.textContent.trim() === "任务类型" && registryNotice) {
-    registryNotice.textContent = "任务类型是平台预先审核并部署的执行方式，用户不能上传代码。按照中文用途选择即可。";
+    const value = "任务类型是平台预先审核并部署的执行方式，用户不能上传代码。按照中文用途选择即可。";
+    if (registryNotice.textContent !== value) registryNotice.textContent = value;
   }
 
   for (const paragraph of view.querySelectorAll(".empty-state p")) {
@@ -342,3 +355,7 @@ if (typeof document !== "undefined") {
   window.addEventListener("hashchange", applySkillGuidance);
   applySkillGuidance();
 }
+
+export const __test = {
+  EXTERNALLY_PRESENTED_SKILLS,
+};
