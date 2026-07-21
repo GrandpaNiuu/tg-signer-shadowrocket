@@ -79,7 +79,7 @@
     display: none;
     padding: 0;
     border: 0;
-    background: rgba(0, 0, 0, 0.62);
+    background: rgba(29, 48, 61, 0.42);
     backdrop-filter: blur(3px);
     -webkit-backdrop-filter: blur(3px);
     cursor: default;
@@ -109,10 +109,12 @@
   body.nav-open #menu-toggle {
     position: fixed;
     top: calc(14px + env(safe-area-inset-top, 0px));
-    left: min(calc(88vw - 54px), 256px);
+    left: min(calc(84vw - 54px), 222px);
     z-index: 60;
-    border-color: rgba(255, 255, 255, 0.15);
-    background: rgba(42, 43, 50, 0.96);
+    border-color: #dbe5eb;
+    background: rgba(255, 255, 255, 0.97);
+    color: #516573;
+    box-shadow: 0 8px 22px rgba(44, 72, 92, 0.14);
   }
 
   body.nav-open .mobile-tabbar {
