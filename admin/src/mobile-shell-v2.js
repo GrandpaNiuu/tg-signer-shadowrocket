@@ -1,5 +1,3 @@
-import "./profile-branding.js";
-
 const MOBILE_QUERY = "(max-width: 760px)";
 const body = document.body;
 const sidebar = document.querySelector(".sidebar");
