@@ -2,6 +2,7 @@ import { handleAdminApi } from "./admin-api.js";
 import { createAdminAuth } from "./admin-auth.js";
 import { verifyRunnerRequest } from "./auth.js";
 import { errorResponse, json } from "./http.js";
+import { handleListenerTaskApi } from "./listener-task-api.js";
 import { createD1Repository } from "./repository.js";
 import {
   adminWorkspaceRepository,
@@ -153,6 +154,14 @@ export function createWorker(dependencies = {}) {
         if (url.pathname.startsWith("/api/auth/")) {
           const repository = authenticationRepository(repositoryFactory(env), now);
           return await withRequestId(await adminAuth.handle(request, env, repository), requestId);
+        }
+        if (url.pathname.startsWith("/api/listener/v1/runs")) {
+          const repository = runnerRepository(repositoryFactory(env), now);
+          return await withRequestId(await handleListenerTaskApi(request, env, repository, {
+            uuid,
+            now,
+            fetch: fetchImpl,
+          }), requestId);
         }
         if (url.pathname.startsWith("/api/listener/v1/")) {
           const repository = repositoryFactory(env);
