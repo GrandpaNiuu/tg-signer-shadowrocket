@@ -1,3 +1,4 @@
+// “自动识别机器人操作”已迁移到任务类型与创建任务流程；本文件只管理 Listener 基础设施状态。
 function isAdministrator() {
   const marker = document.querySelector("[data-admin-only]");
   return Boolean(marker && !marker.hidden);
