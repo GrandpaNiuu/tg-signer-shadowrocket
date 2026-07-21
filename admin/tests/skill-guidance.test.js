@@ -77,5 +77,5 @@ test("task forms use a guided builder and keep legacy imports only as a collapse
 test("production page loads Chinese task type guidance", async () => {
   const index = await readFile(indexUrl, "utf8");
   assert.match(index, /data-route="skills"><span[^>]*>◇<\/span>任务类型<\/a>/);
-  assert.match(index, /\/src\/skill-guidance\.js\?v=20260721-2/);
+  assert.match(index, /\/src\/skill-guidance\.js\?v=20260722-3/);
 });
