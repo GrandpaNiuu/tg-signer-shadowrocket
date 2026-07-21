@@ -99,6 +99,16 @@ function userLabel(user, run) {
   return user?.display_name || user?.email || user?.github_login || run.user_id || "未知用户";
 }
 
+function telegramAccountLabel(account, run) {
+  const name = String(run?.account_name || account?.name || "").trim();
+  const username = String(account?.telegram_username || "").trim().replace(/^@/, "");
+  const phone = String(account?.phone_masked || "").trim();
+  const displayName = String(account?.telegram_display_name || "").trim();
+  const identity = username ? `@${username}` : phone || displayName;
+  if (name && identity && name !== identity) return `${name}（${identity}）`;
+  return name || identity || "未记录";
+}
+
 function compactAuditText(value, secrets, maxLength = 160) {
   const text = sanitizeLogText(redactKnownSecrets(value, secrets), {
     maxLines: 1,
@@ -136,17 +146,21 @@ export async function sendRunNotification(env, repository, fetchImpl, runId) {
   ]);
   if (!token || !chatId || !run) return { sent: false, reason: "not_configured" };
 
-  const user = run.user_id && typeof repository.getUser === "function"
-    ? await repository.getUser(run.user_id)
-    : null;
+  const [user, account] = await Promise.all([
+    run.user_id && typeof repository.getUser === "function"
+      ? repository.getUser(run.user_id)
+      : null,
+    run.account_id && typeof repository.getAccount === "function"
+      ? repository.getAccount(run.account_id)
+      : null,
+  ]);
   const knownSecrets = [token, chatId];
   const presentation = statusPresentation(run.status);
   const actionsUrl = githubActionsUrl(env, run);
   const taskName = compactAuditText(run.task_name || run.task_id || "已删除任务", knownSecrets, 160);
-  const executionId = compactAuditText(run.id || runId, knownSecrets, 128);
   const target = compactAuditText(run.bot, knownSecrets, 180);
   const taskMessage = taskMessageAudit(run.command, knownSecrets);
-  const accountName = redactKnownSecrets(run.account_name || "未记录", knownSecrets);
+  const accountName = compactAuditText(telegramAccountLabel(account, run), knownSecrets, 180);
   const errorMessage = run.error_message ? redactKnownSecrets(run.error_message, knownSecrets) : null;
   const logTail = run.status === "success" ? null : sanitizedLogTail(run.logs, knownSecrets);
   const attempts = Number(run.attempt_count || 0);
@@ -158,13 +172,12 @@ export async function sendRunNotification(env, repository, fetchImpl, runId) {
     "",
     `<b>任务：</b>${escapeHtml(taskName)}`,
     `<b>用户：</b>${escapeHtml(userLabel(user, run))}`,
-    `<b>执行编号：</b><code>${escapeHtml(executionId)}</code>`,
+    `<b>Telegram：</b>${escapeHtml(accountName)}`,
     `<b>目标：</b>${escapeHtml(target)}`,
     `<b>任务消息：</b><code>${escapeHtml(taskMessage.text)}</code>`,
     ...(taskMessage.truncated ? [`<b>消息长度：</b>${taskMessage.length} 字符（已显示首尾）`] : []),
     `<b>耗时：</b>${durationLabel(run.duration_ms)}`,
     ...(!isSuccess ? [
-      `<b>账号：</b>${escapeHtml(accountName)}`,
       `<b>方式：</b>${trigger}`,
       ...(attempts > 1 ? [`<b>尝试：</b>${attempts} 次`] : []),
       ...(errorMessage ? ["", `<b>原因：</b>${escapeHtml(sanitizeLogText(errorMessage, { maxLines: 1, maxLength: 240 }))}`] : []),
@@ -246,7 +259,7 @@ export async function sendTestNotification(env, repository, fetchImpl) {
   if (!token || !chatId) return { sent: false, reason: "not_configured" };
   const response = await telegramBotRequest(fetchImpl, token, "sendMessage", {
     chat_id: chatId,
-    text: "✅ <b>通知配置成功</b>\n\n以后所有用户的任务结果都会统一发送到这里，并包含用户、任务、目标、任务消息摘要和执行编号，方便管理员审计异常内容。消息会先脱敏，超长内容只显示首尾。",
+    text: "✅ <b>通知配置成功</b>\n\n以后所有用户的任务结果都会统一发送到这里，并包含用户、Telegram 账号、任务、目标和任务消息摘要，方便管理员快速识别是哪一个账号执行。消息会先脱敏，超长内容只显示首尾。",
     parse_mode: "HTML",
     disable_web_page_preview: true,
   });
@@ -262,4 +275,5 @@ export const __test = {
   sanitizedLogTail,
   statusPresentation,
   taskMessageAudit,
+  telegramAccountLabel,
 };
