@@ -4,6 +4,7 @@ import { verifyRunnerRequest } from "./auth.js";
 import { errorResponse, json } from "./http.js";
 import { handleListenerTaskApi } from "./listener-task-api.js";
 import { handlePlatformAccountHealthApi } from "./platform-account-health.js";
+import { handleProfileBrandingApi, handlePublicBrandingApi } from "./profile-branding.js";
 import { createD1Repository } from "./repository.js";
 import {
   adminWorkspaceRepository,
@@ -152,6 +153,10 @@ export function createWorker(dependencies = {}) {
           const readiness = await checkReadiness(env);
           return await withRequestId(json(readiness.payload, readiness.status), requestId);
         }
+        if (url.pathname === "/api/branding") {
+          const repository = repositoryFactory(env);
+          return await withRequestId(await handlePublicBrandingApi(request, repository), requestId);
+        }
         if (url.pathname.startsWith("/api/auth/")) {
           const repository = authenticationRepository(repositoryFactory(env), now);
           return await withRequestId(await adminAuth.handle(request, env, repository), requestId);
@@ -192,6 +197,8 @@ export function createWorker(dependencies = {}) {
             fetch: fetchImpl,
             identity,
           };
+          const profileResponse = await handleProfileBrandingApi(request, repository, context);
+          if (profileResponse) return await withRequestId(profileResponse, requestId);
           const platformHealthResponse = await handlePlatformAccountHealthApi(request, env, repository, context);
           if (platformHealthResponse) return await withRequestId(platformHealthResponse, requestId);
           const userRepository = adminWorkspaceRepository(repository, identity);
