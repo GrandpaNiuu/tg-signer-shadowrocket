@@ -40,7 +40,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m unittest discover -s listener/tests -p 'test_*.py' -v
-          python -m compileall -q listener
+          python -m compileall -q listener runner
           cp listener/.env.example listener/.env
           trap 'rm -f listener/.env' EXIT
           docker compose -f listener/docker-compose.yml config >/dev/null
@@ -103,7 +103,6 @@ jobs:
           raw = os.environ.get("VPS_SSH_KEY_B64", "").replace("\r", "")
           candidates: list[str] = []
 
-          # Preferred copy format: everything between explicit markers.
           marker_match = re.search(
               r"KEY_B64_BEGIN\s*(.*?)\s*KEY_B64_END",
               raw,
@@ -112,12 +111,10 @@ jobs:
           if marker_match:
               candidates.append("".join(marker_match.group(1).split()))
 
-          # Accept a clean one-line value.
           compact = "".join(raw.split())
           if re.fullmatch(r"[A-Za-z0-9+/]+={0,2}", compact or ""):
               candidates.append(compact)
 
-          # Accept terminal-wrapped Base64 where each line only contains Base64.
           current: list[str] = []
           for line in raw.splitlines():
               stripped = line.strip()
@@ -129,7 +126,6 @@ jobs:
           if current:
               candidates.append("".join(current))
 
-          # Last fallback: long Base64-looking tokens.
           candidates.extend(
               token
               for token in re.findall(r"[A-Za-z0-9+/]+={0,2}", raw)
@@ -180,8 +176,9 @@ jobs:
             --exclude='listener/__pycache__' \
             --exclude='listener/tests/__pycache__' \
             --exclude='runner/__pycache__' \
+            --exclude='runner/tests/__pycache__' \
             -czf "${RUNNER_TEMP}/listener-deploy/source.tar.gz" \
-            listener runner/requirements.txt
+            listener runner
           python - <<'PY'
           import json
           import os
@@ -195,6 +192,7 @@ jobs:
               "LISTENER_SYNC_SECONDS": "30",
               "LISTENER_HEARTBEAT_SECONDS": "60",
               "LISTENER_INSPECTION_SECONDS": "4",
+              "LISTENER_TASK_SECONDS": "2",
               "LOG_LEVEL": "INFO",
           }
           for name, value in values.items():
