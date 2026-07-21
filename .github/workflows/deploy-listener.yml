@@ -54,6 +54,7 @@ jobs:
       VPS_USER: ${{ secrets.LISTENER_VPS_USER }}
       VPS_PORT: ${{ vars.LISTENER_VPS_PORT || '22' }}
       VPS_SSH_KEY: ${{ secrets.LISTENER_VPS_SSH_KEY }}
+      VPS_SSH_KEY_B64: ${{ secrets.LISTENER_VPS_SSH_KEY_B64 }}
       VPS_KNOWN_HOSTS: ${{ secrets.LISTENER_VPS_KNOWN_HOSTS }}
       WORKER_URL: ${{ vars.WORKER_URL }}
       LISTENER_API_TOKEN: ${{ secrets.LISTENER_API_TOKEN }}
@@ -72,7 +73,10 @@ jobs:
           set -euo pipefail
           [ -n "${VPS_HOST:-}" ] || { echo "Missing GitHub Secret: LISTENER_VPS_HOST"; exit 1; }
           [ -n "${VPS_USER:-}" ] || { echo "Missing GitHub Secret: LISTENER_VPS_USER"; exit 1; }
-          [ -n "${VPS_SSH_KEY:-}" ] || { echo "Missing GitHub Secret: LISTENER_VPS_SSH_KEY"; exit 1; }
+          if [ -z "${VPS_SSH_KEY_B64:-}" ] && [ -z "${VPS_SSH_KEY:-}" ]; then
+            echo "Missing GitHub Secret: LISTENER_VPS_SSH_KEY_B64 or LISTENER_VPS_SSH_KEY"
+            exit 1
+          fi
           [ -n "${VPS_KNOWN_HOSTS:-}" ] || { echo "Missing GitHub Secret: LISTENER_VPS_KNOWN_HOSTS"; exit 1; }
           [ -n "${WORKER_URL:-}" ] || { echo "Missing GitHub Variable: WORKER_URL"; exit 1; }
           [ "${#LISTENER_API_TOKEN}" -ge 32 ] || { echo "LISTENER_API_TOKEN must contain at least 32 characters"; exit 1; }
@@ -87,9 +91,18 @@ jobs:
         run: |
           set -euo pipefail
           install -d -m 700 "$HOME/.ssh"
-          printf '%s\n' "$VPS_SSH_KEY" > "$HOME/.ssh/listener_deploy_key"
-          printf '%s\n' "$VPS_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
-          chmod 600 "$HOME/.ssh/listener_deploy_key" "$HOME/.ssh/known_hosts"
+          key_file="$HOME/.ssh/listener_deploy_key"
+          if [ -n "${VPS_SSH_KEY_B64:-}" ]; then
+            printf '%s' "$VPS_SSH_KEY_B64" | tr -d '[:space:]' | base64 --decode > "$key_file"
+          else
+            printf '%s\n' "$VPS_SSH_KEY" | sed 's/\r$//' > "$key_file"
+          fi
+          printf '%s\n' "$VPS_KNOWN_HOSTS" | sed 's/\r$//' > "$HOME/.ssh/known_hosts"
+          chmod 600 "$key_file" "$HOME/.ssh/known_hosts"
+          ssh-keygen -y -f "$key_file" >/dev/null || {
+            echo "The configured Listener SSH private key is invalid. Use LISTENER_VPS_SSH_KEY_B64."
+            exit 1
+          }
 
       - name: Build deployment bundle
         shell: bash
@@ -196,7 +209,6 @@ jobs:
           ln -sfn "$release_dir" "$root/current"
           docker compose ps
 
-          # Retain the newest five releases. The active release is always the newest one here.
           mapfile -t stale < <(find "$root/releases" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -nr | tail -n +6 | cut -d' ' -f2-)
           if [ "${#stale[@]}" -gt 0 ]; then
             rm -rf -- "${stale[@]}"
