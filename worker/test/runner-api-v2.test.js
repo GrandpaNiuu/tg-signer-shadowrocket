@@ -41,14 +41,13 @@ test("claim enrichment resolves only workspace-owned media assets", async () => 
   assert.equal(payload.task.params._source_message_id, 77);
 });
 
-test("removed account audit claims are rejected before runner execution", async () => {
+test("retired Skills are not treated as native claim enrichment targets", async () => {
   const repository = {
     async getExecution() { return { user_id: "user-1", skill_key: "account_audit", params_json_snapshot: "{}" }; },
   };
-  await assert.rejects(
-    () => __test.enrichClaim({ task: { skill: "account_audit", params: {} } }, "run-1", repository),
-    (error) => error?.status === 422 && error?.code === "validation_failed",
-  );
+  const original = { task: { skill: "account_audit", params: {} } };
+  const payload = await __test.enrichClaim(original, "run-1", repository);
+  assert.deepEqual(payload.task.params, {});
 });
 
 test("missing media assets become a terminal Skill input error instead of breaking claim transport", async () => {
