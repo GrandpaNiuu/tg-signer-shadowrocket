@@ -26,18 +26,29 @@ async function realtimeRuleActive(repository, accountId) {
   return Boolean(row?.active);
 }
 
-async function dispatchedTaskActive(db, accountId) {
-  if (!db?.prepare || !accountId) return false;
-  const row = await db.prepare(`SELECT 1 AS active
+export async function findRealtimeTransitionBlockingRun(repository, accountId) {
+  const target = requiredRepository(repository);
+  if (!target.db?.prepare || !accountId) return null;
+  return target.db.prepare(`SELECT r.id, r.status, r.dispatch_status
     FROM task_runs r
     LEFT JOIN tasks t ON t.id = r.task_id
     WHERE COALESCE(r.account_id_snapshot, t.account_id) = ?
+      ${target.userId ? "AND r.user_id = ?" : ""}
       AND (
         r.status IN ('claimed', 'running')
         OR (r.status = 'queued' AND r.dispatch_status IN ('dispatching', 'dispatched'))
       )
-    LIMIT 1`).bind(accountId).first();
-  return Boolean(row?.active);
+    LIMIT 1`).bind(accountId, ...(target.userId ? [target.userId] : [])).first();
+}
+
+export async function assertRealtimeTransitionAllowed(repository, accountId) {
+  const activeRun = await findRealtimeTransitionBlockingRun(repository, accountId);
+  if (!activeRun) return;
+  throw new HttpError(
+    409,
+    "listener_account_task_active",
+    "这个账号当前已有任务交给 GitHub Runner 或正在执行。请等待该任务结束后再启用 24 小时实时规则。",
+  );
 }
 
 function cutoff(timestamp, days) {
@@ -60,56 +71,6 @@ async function cleanupRealtimeHistory(repository, timestamp) {
       .bind(cutoff(timestamp, 7)),
   ]);
   return true;
-}
-
-function normalizedSql(sql) {
-  return String(sql || "").replace(/\s+/g, " ").trim().toLowerCase();
-}
-
-function compatibilityDatabase(db) {
-  if (!db?.prepare) return db;
-  return new Proxy(db, {
-    get(current, property) {
-      if (property === "prepare") {
-        return (sql) => {
-          const query = normalizedSql(sql);
-          if (query === "select count(*) as total from tasks where account_id = ? and enabled = 1") {
-            return {
-              bind(accountId) {
-                return {
-                  async first() {
-                    if (await dispatchedTaskActive(current, accountId)) {
-                      throw new HttpError(
-                        409,
-                        "listener_account_task_active",
-                        "这个账号当前已有任务交给 GitHub Runner 或正在执行。请等待该任务结束后再启用 24 小时实时规则。",
-                      );
-                    }
-                    return { total: 0 };
-                  },
-                };
-              },
-            };
-          }
-          return current.prepare(sql);
-        };
-      }
-      return bindMember(current, property);
-    },
-  });
-}
-
-// Existing route code used a dedicated-account count query. Keep that route
-// compatible while allowing tasks and realtime rules to coexist; dispatch is
-// still separated so GitHub Actions never opens the same Session concurrently.
-export function withRealtimeTaskGuard(repository) {
-  const target = requiredRepository(repository);
-  return new Proxy(target, {
-    get(current, property) {
-      if (property === "db") return compatibilityDatabase(current.db);
-      return bindMember(current, property);
-    },
-  });
 }
 
 export function withInspectionDispatchGuard(repository) {
@@ -162,7 +123,6 @@ export function withRealtimeMaintenance(repository) {
 export const __test = {
   cleanupRealtimeHistory,
   cutoff,
-  dispatchedTaskActive,
   inspectionActive,
   realtimeRuleActive,
 };
