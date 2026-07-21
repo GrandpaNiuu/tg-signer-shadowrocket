@@ -1,36 +1,132 @@
-const MAX_DIMENSION = 512;
-const TARGET_BYTES = 280_000;
+const PROFILE_ENDPOINT = "/api/v1/profile";
+const PLATFORM_ENDPOINT = "/api/v1/admin/platform-branding";
+const MAX_SOURCE_BYTES = 8 * 1024 * 1024;
+const MAX_RESULT_BYTES = 92 * 1024;
+const ACCEPTED_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 
-let profile = null;
-let branding = null;
-let profileAvatarChange;
-let brandingAvatarChange;
-let loadingPromise = null;
+const state = {
+  loaded: false,
+  loading: null,
+  profile: null,
+  platform: { avatar_data_url: null },
+  personalAvatar: null,
+  platformAvatar: null,
+};
 
 function escapeHtml(value) {
-  return String(value ?? "").replace(/[&<>'"]/g, (character) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;",
-  })[character]);
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }
 
-function dataUrlBytes(value) {
-  const base64 = String(value || "").split(",")[1] || "";
-  return Math.floor(base64.length * 0.75);
+function errorMessage(error) {
+  return error instanceof Error && error.message ? error.message : "操作失败，请稍后再试。";
 }
 
 async function request(path, options = {}) {
   const response = await fetch(path, {
-    credentials: "include",
+    credentials: "same-origin",
     cache: "no-store",
     ...options,
     headers: {
+      accept: "application/json",
       ...(options.body ? { "content-type": "application/json" } : {}),
       ...(options.headers || {}),
     },
   });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload?.error?.message || `请求失败（${response.status}）`);
-  return payload.data;
+  const payload = response.status === 204 ? null : await response.json().catch(() => null);
+  if (!response.ok) throw new Error(payload?.error?.message || `请求失败（HTTP ${response.status}）`);
+  return payload?.data ?? payload;
+}
+
+function initials(name, fallback = "U") {
+  const text = String(name || "").trim();
+  if (!text) return fallback;
+  return Array.from(text)[0].toUpperCase();
+}
+
+function applyAvatar(element, dataUrl, fallback) {
+  if (!element) return;
+  if (dataUrl) {
+    element.style.backgroundImage = `url(${JSON.stringify(dataUrl).slice(1, -1)})`;
+    element.style.backgroundSize = "cover";
+    element.style.backgroundPosition = "center";
+    element.textContent = "";
+    element.classList.add("has-custom-avatar");
+  } else {
+    element.style.removeProperty("background-image");
+    element.style.removeProperty("background-size");
+    element.style.removeProperty("background-position");
+    element.textContent = fallback;
+    element.classList.remove("has-custom-avatar");
+  }
+}
+
+function applyPlatformBranding(platform = state.platform) {
+  state.platform = platform || { avatar_data_url: null };
+  const avatar = state.platform.avatar_data_url || null;
+  document.querySelectorAll(".brand-mark").forEach((element) => applyAvatar(element, avatar, "T"));
+  let favicon = document.querySelector('link[rel="icon"][data-platform-avatar]');
+  if (avatar) {
+    if (!favicon) {
+      favicon = document.createElement("link");
+      favicon.rel = "icon";
+      favicon.dataset.platformAvatar = "true";
+      document.head.append(favicon);
+    }
+    favicon.href = avatar;
+  } else {
+    favicon?.remove();
+  }
+}
+
+function applyPersonalProfile(profile = state.profile) {
+  if (!profile) return;
+  state.profile = profile;
+  const name = profile.display_name || "用户";
+  const nameElement = document.querySelector("#identity-name");
+  if (nameElement && nameElement.textContent !== name) nameElement.textContent = name;
+  applyAvatar(document.querySelector(".topbar .avatar"), profile.avatar_data_url, initials(name, "U"));
+  if (location.hash.startsWith("#/dashboard")) {
+    const title = document.querySelector("#view .page-head h1");
+    if (title && /工作区/.test(title.textContent || "")) title.textContent = `${name} 的工作区`;
+  }
+}
+
+async function loadPublicBranding() {
+  try {
+    const platform = await request("/api/branding");
+    applyPlatformBranding(platform || { avatar_data_url: null });
+  } catch {
+    applyPlatformBranding({ avatar_data_url: null });
+  }
+}
+
+async function loadProfile({ force = false } = {}) {
+  if (state.loaded && !force) return state;
+  if (state.loading && !force) return state.loading;
+  state.loading = (async () => {
+    const data = await request(PROFILE_ENDPOINT);
+    state.profile = data.profile;
+    state.platform = data.platform || { avatar_data_url: null };
+    state.personalAvatar = state.profile?.avatar_data_url || null;
+    state.platformAvatar = state.platform.avatar_data_url || null;
+    state.loaded = true;
+    applyPersonalProfile();
+    applyPlatformBranding();
+    return state;
+  })().finally(() => { state.loading = null; });
+  return state.loading;
+}
+
+function dataUrlBytes(dataUrl) {
+  if (!dataUrl) return 0;
+  const base64 = dataUrl.split(",", 2)[1] || "";
+  const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
+  return Math.floor(base64.length * 3 / 4) - padding;
 }
 
 function loadImage(file) {
@@ -43,250 +139,218 @@ function loadImage(file) {
     };
     image.onerror = () => {
       URL.revokeObjectURL(url);
-      reject(new Error("无法读取图片。"));
+      reject(new Error("无法读取这张图片。"));
     };
     image.src = url;
   });
 }
 
-async function compressAvatar(file) {
-  if (!/^image\/(png|jpeg|webp)$/i.test(file.type)) {
-    throw new Error("仅支持 PNG、JPEG 或 WebP 图片。");
-  }
+function renderSquare(image, size, mimeType, quality) {
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const context = canvas.getContext("2d", { alpha: true });
+  if (!context) throw new Error("当前浏览器无法处理头像图片。");
+  const sourceSize = Math.min(image.naturalWidth, image.naturalHeight);
+  const sourceX = Math.floor((image.naturalWidth - sourceSize) / 2);
+  const sourceY = Math.floor((image.naturalHeight - sourceSize) / 2);
+  context.clearRect(0, 0, size, size);
+  context.drawImage(image, sourceX, sourceY, sourceSize, sourceSize, 0, 0, size, size);
+  return canvas.toDataURL(mimeType, quality);
+}
+
+async function prepareAvatar(file) {
+  if (!file || !ACCEPTED_TYPES.has(file.type)) throw new Error("请选择 PNG、JPEG 或 WebP 图片。");
+  if (file.size > MAX_SOURCE_BYTES) throw new Error("原始图片不能超过 8 MB。");
   const image = await loadImage(file);
-  const scale = Math.min(1, MAX_DIMENSION / Math.max(image.naturalWidth, image.naturalHeight));
-  let width = Math.max(1, Math.round(image.naturalWidth * scale));
-  let height = Math.max(1, Math.round(image.naturalHeight * scale));
-  let quality = 0.86;
-  let output = "";
+  if (!image.naturalWidth || !image.naturalHeight) throw new Error("图片尺寸无效。");
 
-  for (let attempt = 0; attempt < 7; attempt += 1) {
-    const canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-    const context = canvas.getContext("2d", { alpha: false });
-    context.fillStyle = "#ffffff";
-    context.fillRect(0, 0, width, height);
-    context.drawImage(image, 0, 0, width, height);
-    output = canvas.toDataURL("image/jpeg", quality);
-    if (dataUrlBytes(output) <= TARGET_BYTES) return output;
-    quality = Math.max(0.55, quality - 0.08);
-    if (attempt >= 3) {
-      width = Math.max(128, Math.round(width * 0.85));
-      height = Math.max(128, Math.round(height * 0.85));
+  for (const size of [256, 224, 192, 160]) {
+    for (const quality of [0.86, 0.74, 0.62, 0.5]) {
+      let output = renderSquare(image, size, "image/webp", quality);
+      if (!output.startsWith("data:image/webp")) output = renderSquare(image, size, "image/jpeg", quality);
+      if (dataUrlBytes(output) <= MAX_RESULT_BYTES) return output;
     }
   }
-  if (dataUrlBytes(output) > 300_000) throw new Error("图片压缩后仍然过大，请选择更小的图片。");
-  return output;
+  throw new Error("图片压缩后仍然过大，请换一张更简单的图片。");
 }
 
-function setVisualAvatar(element, image, fallback) {
+function previewMarkup(id, avatar, fallback) {
+  const style = avatar ? ` style="background-image:url('${escapeHtml(avatar)}')"` : "";
+  return `<span id="${id}" class="profile-avatar-preview ${avatar ? "has-image" : ""}"${style}>${avatar ? "" : escapeHtml(fallback)}</span>`;
+}
+
+function setStatus(form, message, type = "info") {
+  const target = form.querySelector("[data-profile-status]");
+  if (!target) return;
+  target.textContent = message || "";
+  target.dataset.status = type;
+}
+
+function updatePreview(kind) {
+  const isPlatform = kind === "platform";
+  const avatar = isPlatform ? state.platformAvatar : state.personalAvatar;
+  const fallback = isPlatform ? "T" : initials(state.profile?.display_name, "U");
+  const element = document.querySelector(isPlatform ? "#platform-avatar-preview" : "#personal-avatar-preview");
   if (!element) return;
-  if (image) {
-    element.textContent = "";
-    element.style.backgroundImage = `url(${JSON.stringify(image).slice(1, -1)})`;
-    element.style.backgroundSize = "cover";
-    element.style.backgroundPosition = "center";
-  } else {
-    element.style.backgroundImage = "none";
-    element.textContent = fallback;
-  }
+  applyAvatar(element, avatar, fallback);
+  element.classList.toggle("has-image", Boolean(avatar));
 }
 
-function applyBranding() {
-  if (!branding) return;
-  const name = branding.platform_name || "Telegram 自动消息";
-  document.title = name;
-  document.querySelectorAll(".brand strong").forEach((node) => { node.textContent = name; });
-  const authTitle = document.querySelector("#auth-title");
-  if (authTitle) authTitle.textContent = name;
-  document.querySelectorAll(".brand-mark").forEach((node) => {
-    setVisualAvatar(node, branding.platform_avatar_data_url, name.trim().charAt(0).toUpperCase() || "T");
-  });
-}
-
-function applyProfile() {
-  if (!profile) return;
-  const nameNode = document.querySelector("#identity-name");
-  const detailNode = document.querySelector("#identity-email");
-  if (nameNode) nameNode.textContent = profile.display_name || (profile.role === "admin" ? "管理员" : "用户");
-  if (detailNode) detailNode.textContent = profile.email || (profile.login ? `@${profile.login}` : profile.role === "admin" ? "管理员" : "用户");
-  document.querySelectorAll(".avatar").forEach((node) => {
-    setVisualAvatar(node, profile.avatar_data_url, (profile.display_name || "U").trim().charAt(0).toUpperCase());
-  });
-}
-
-function avatarPreview(image, fallback, id) {
-  return `<div class="profile-avatar-preview" id="${id}" ${image ? `style="background-image:url('${escapeHtml(image)}')"` : ""}>${image ? "" : escapeHtml(fallback)}</div>`;
-}
-
-function renderPanels() {
-  if (!profile || !branding || !location.hash.startsWith("#/settings")) return;
-  const view = document.querySelector("#view");
-  if (!view || view.querySelector("[data-profile-branding-panel]")) return;
-
-  const wrapper = document.createElement("section");
-  wrapper.dataset.profileBrandingPanel = "true";
-  wrapper.className = "profile-branding-grid";
-  wrapper.innerHTML = `
-    <article class="card profile-branding-card">
-      <div class="card-head"><div><h2>个人资料</h2><p>修改当前账号在平台内显示的用户名和头像。</p></div></div>
-      <div class="card-body">
-        <form id="profile-settings-form" class="profile-branding-form">
-          <div class="profile-avatar-editor">
-            ${avatarPreview(profile.avatar_data_url, (profile.display_name || "U").charAt(0), "profile-avatar-preview")}
-            <div><label class="button small" for="profile-avatar-file">选择头像</label><input id="profile-avatar-file" type="file" accept="image/png,image/jpeg,image/webp" hidden><button class="button small ghost" type="button" data-clear-avatar="profile">移除头像</button><p>系统会自动压缩为适合平台显示的尺寸。</p></div>
-          </div>
-          <div class="field"><label for="profile-display-name">显示用户名</label><input id="profile-display-name" maxlength="40" value="${escapeHtml(profile.display_name)}" required></div>
-          <div class="profile-branding-actions"><span class="profile-form-status" id="profile-form-status"></span><button class="button primary" type="submit">保存个人资料</button></div>
-        </form>
+function profilePanel() {
+  const profile = state.profile;
+  const personal = `<article class="card profile-settings-card">
+    <div class="card-head"><div><h2>个人资料</h2><p>管理员和普通用户都可以修改自己的用户名与头像。</p></div></div>
+    <form id="personal-profile-form" class="card-body profile-settings-form">
+      <div class="profile-avatar-editor">
+        ${previewMarkup("personal-avatar-preview", state.personalAvatar, initials(profile.display_name, "U"))}
+        <div><strong>个人头像</strong><p>系统会自动居中裁剪并压缩，不保存原始照片。</p><div class="actions"><button class="button small" type="button" data-pick-avatar="personal">选择图片</button><button class="button small ghost" type="button" data-remove-avatar="personal">移除头像</button></div></div>
+        <input type="file" accept="image/png,image/jpeg,image/webp" data-avatar-input="personal" hidden>
       </div>
-    </article>
-    ${profile.role === "admin" ? `
-    <article class="card profile-branding-card">
-      <div class="card-head"><div><h2>平台品牌</h2><p>修改侧栏、登录区域和浏览器标题显示的平台名称与头像。</p></div></div>
-      <div class="card-body">
-        <form id="branding-settings-form" class="profile-branding-form">
-          <div class="profile-avatar-editor">
-            ${avatarPreview(branding.platform_avatar_data_url, (branding.platform_name || "T").charAt(0), "branding-avatar-preview")}
-            <div><label class="button small" for="branding-avatar-file">选择平台头像</label><input id="branding-avatar-file" type="file" accept="image/png,image/jpeg,image/webp" hidden><button class="button small ghost" type="button" data-clear-avatar="branding">恢复文字头像</button><p>建议使用正方形 Logo，图片会自动压缩。</p></div>
-          </div>
-          <div class="field"><label for="platform-name">平台名称</label><input id="platform-name" maxlength="40" value="${escapeHtml(branding.platform_name)}" required></div>
-          <div class="profile-branding-actions"><span class="profile-form-status" id="branding-form-status"></span><button class="button primary" type="submit">保存平台品牌</button></div>
-        </form>
+      <div class="field"><label for="profile-display-name">用户名</label><input id="profile-display-name" name="display_name" maxlength="60" required value="${escapeHtml(profile.display_name)}" autocomplete="nickname"><p class="field-help">1–60 个字符，保存后会显示在顶部和工作区标题中。</p></div>
+      <div class="profile-form-footer"><span data-profile-status aria-live="polite"></span><button class="button primary" type="submit">保存个人资料</button></div>
+    </form>
+  </article>`;
+
+  const platform = profile.role === "admin" ? `<article class="card profile-settings-card">
+    <div class="card-head"><div><h2>平台头像</h2><p>仅管理员可修改，保存后替换侧栏、登录页和浏览器图标中的默认 T。</p></div><span class="badge enabled">管理员</span></div>
+    <form id="platform-branding-form" class="card-body profile-settings-form">
+      <div class="profile-avatar-editor">
+        ${previewMarkup("platform-avatar-preview", state.platformAvatar, "T")}
+        <div><strong>平台品牌头像</strong><p>建议使用简洁的正方形 Logo，头像会同步到所有用户界面。</p><div class="actions"><button class="button small" type="button" data-pick-avatar="platform">选择图片</button><button class="button small ghost" type="button" data-remove-avatar="platform">恢复默认 T</button></div></div>
+        <input type="file" accept="image/png,image/jpeg,image/webp" data-avatar-input="platform" hidden>
       </div>
-    </article>` : ""}`;
-  view.prepend(wrapper);
+      <div class="profile-form-footer"><span data-profile-status aria-live="polite"></span><button class="button primary" type="submit">保存平台头像</button></div>
+    </form>
+  </article>` : "";
+
+  const section = document.createElement("section");
+  section.id = "profile-branding-settings";
+  section.className = "profile-branding-grid mb-md";
+  section.innerHTML = personal + platform;
+  return section;
 }
 
-function setPreview(id, image, fallback) {
-  const node = document.querySelector(`#${id}`);
-  if (!node) return;
-  setVisualAvatar(node, image, fallback);
-}
+function bindPanel(panel) {
+  panel.querySelectorAll("[data-pick-avatar]").forEach((button) => {
+    button.addEventListener("click", () => panel.querySelector(`[data-avatar-input="${button.dataset.pickAvatar}"]`)?.click());
+  });
+  panel.querySelectorAll("[data-remove-avatar]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const kind = button.dataset.removeAvatar;
+      if (kind === "platform") state.platformAvatar = null;
+      else state.personalAvatar = null;
+      updatePreview(kind);
+    });
+  });
+  panel.querySelectorAll("[data-avatar-input]").forEach((input) => {
+    input.addEventListener("change", async () => {
+      const kind = input.dataset.avatarInput;
+      const form = input.closest("form");
+      const [file] = input.files || [];
+      input.value = "";
+      if (!file) return;
+      setStatus(form, "正在处理图片…");
+      try {
+        const avatar = await prepareAvatar(file);
+        if (kind === "platform") state.platformAvatar = avatar;
+        else state.personalAvatar = avatar;
+        updatePreview(kind);
+        setStatus(form, "图片已处理，请点击保存。", "success");
+      } catch (error) {
+        setStatus(form, errorMessage(error), "error");
+      }
+    });
+  });
 
-function setStatus(id, message, error = false) {
-  const node = document.querySelector(`#${id}`);
-  if (!node) return;
-  node.textContent = message;
-  node.dataset.error = error ? "true" : "false";
-}
-
-async function loadData(force = false) {
-  if (loadingPromise && !force) return loadingPromise;
-  loadingPromise = (async () => {
+  const personalForm = panel.querySelector("#personal-profile-form");
+  personalForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const button = personalForm.querySelector('button[type="submit"]');
+    button.disabled = true;
+    setStatus(personalForm, "正在保存…");
     try {
-      [profile, branding] = await Promise.all([
-        request("/api/v1/profile"),
-        request("/api/v1/platform-branding"),
-      ]);
-      profileAvatarChange = undefined;
-      brandingAvatarChange = undefined;
-      applyProfile();
-      applyBranding();
-      renderPanels();
-    } catch {
-      // The login screen may still be active. A later app visibility change retries safely.
+      const data = await request(PROFILE_ENDPOINT, {
+        method: "PATCH",
+        body: JSON.stringify({
+          display_name: personalForm.elements.display_name.value,
+          avatar_data_url: state.personalAvatar,
+        }),
+      });
+      state.profile = data;
+      state.personalAvatar = data.avatar_data_url || null;
+      applyPersonalProfile(data);
+      updatePreview("personal");
+      setStatus(personalForm, "个人资料已保存。", "success");
+    } catch (error) {
+      setStatus(personalForm, errorMessage(error), "error");
     } finally {
-      loadingPromise = null;
+      button.disabled = false;
     }
-  })();
-  return loadingPromise;
+  });
+
+  const platformForm = panel.querySelector("#platform-branding-form");
+  platformForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const button = platformForm.querySelector('button[type="submit"]');
+    button.disabled = true;
+    setStatus(platformForm, "正在保存…");
+    try {
+      const data = await request(PLATFORM_ENDPOINT, {
+        method: "PATCH",
+        body: JSON.stringify({ avatar_data_url: state.platformAvatar }),
+      });
+      state.platform = data;
+      state.platformAvatar = data.avatar_data_url || null;
+      applyPlatformBranding(data);
+      updatePreview("platform");
+      setStatus(platformForm, "平台头像已保存。", "success");
+    } catch (error) {
+      setStatus(platformForm, errorMessage(error), "error");
+    } finally {
+      button.disabled = false;
+    }
+  });
 }
 
-function installStyles() {
-  if (document.querySelector("#profile-branding-styles")) return;
-  const style = document.createElement("style");
-  style.id = "profile-branding-styles";
-  style.textContent = `
-    .profile-branding-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;margin-bottom:20px}
-    .profile-branding-card{min-width:0}.profile-branding-form{display:grid;gap:18px}
-    .profile-avatar-editor{display:flex;align-items:center;gap:16px}.profile-avatar-editor>div:last-child{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.profile-avatar-editor p{width:100%;margin:0;color:var(--muted);font-size:12px}
-    .profile-avatar-preview{display:grid;place-items:center;flex:0 0 76px;width:76px;height:76px;border:1px solid var(--line);border-radius:50%;background:linear-gradient(145deg,#58c5f5,#2aabee);background-size:cover;background-position:center;color:#fff;font-size:28px;font-weight:700;box-shadow:0 8px 22px rgba(42,171,238,.18)}
-    .profile-branding-actions{display:flex;align-items:center;justify-content:space-between;gap:12px}.profile-form-status{font-size:12px;color:var(--success)}.profile-form-status[data-error="true"]{color:var(--red)}
-    .brand-mark,.avatar{background-size:cover!important;background-position:center!important}
-    @media(max-width:900px){.profile-branding-grid{grid-template-columns:1fr}}
-    @media(max-width:520px){.profile-avatar-editor{align-items:flex-start}.profile-avatar-editor>div:last-child{align-items:flex-start}.profile-branding-actions{align-items:stretch;flex-direction:column}.profile-branding-actions .button{width:100%}}
-  `;
-  document.head.append(style);
-}
-
-async function handleFile(input, kind) {
-  const file = input.files?.[0];
-  input.value = "";
-  if (!file) return;
-  const statusId = kind === "profile" ? "profile-form-status" : "branding-form-status";
+async function injectSettingsPanel() {
+  if (!location.hash.startsWith("#/settings")) return;
+  const view = document.querySelector("#view");
+  if (!view || view.querySelector("#profile-branding-settings")) return;
   try {
-    setStatus(statusId, "正在处理图片…");
-    const dataUrl = await compressAvatar(file);
-    if (kind === "profile") {
-      profileAvatarChange = dataUrl;
-      setPreview("profile-avatar-preview", dataUrl, (profile?.display_name || "U").charAt(0));
-    } else {
-      brandingAvatarChange = dataUrl;
-      setPreview("branding-avatar-preview", dataUrl, (branding?.platform_name || "T").charAt(0));
-    }
-    setStatus(statusId, "头像已处理，点击保存后生效。");
-  } catch (error) {
-    setStatus(statusId, error.message, true);
+    await loadProfile();
+  } catch {
+    return;
   }
+  if (!location.hash.startsWith("#/settings") || view.querySelector("#profile-branding-settings")) return;
+  const panel = profilePanel();
+  const pageHead = view.querySelector(".page-head");
+  if (pageHead) pageHead.insertAdjacentElement("afterend", panel);
+  else view.prepend(panel);
+  bindPanel(panel);
 }
 
-document.addEventListener("change", (event) => {
-  if (event.target?.id === "profile-avatar-file") handleFile(event.target, "profile");
-  if (event.target?.id === "branding-avatar-file") handleFile(event.target, "branding");
-});
-
-document.addEventListener("click", (event) => {
-  const button = event.target instanceof Element ? event.target.closest("[data-clear-avatar]") : null;
-  if (!button) return;
-  const kind = button.dataset.clearAvatar;
-  if (kind === "profile") {
-    profileAvatarChange = null;
-    setPreview("profile-avatar-preview", null, (profile?.display_name || "U").charAt(0));
-    setStatus("profile-form-status", "保存后将移除个人头像。");
-  } else {
-    brandingAvatarChange = null;
-    setPreview("branding-avatar-preview", null, (branding?.platform_name || "T").charAt(0));
-    setStatus("branding-form-status", "保存后将恢复文字头像。");
-  }
-});
-
-document.addEventListener("submit", async (event) => {
-  if (event.target?.id === "profile-settings-form") {
-    event.preventDefault();
-    try {
-      setStatus("profile-form-status", "正在保存…");
-      const body = { display_name: document.querySelector("#profile-display-name").value.trim() };
-      if (profileAvatarChange !== undefined) body.avatar_data_url = profileAvatarChange;
-      profile = await request("/api/v1/profile", { method: "PATCH", body: JSON.stringify(body) });
-      profileAvatarChange = undefined;
-      applyProfile();
-      setStatus("profile-form-status", "个人资料已保存。");
-    } catch (error) {
-      setStatus("profile-form-status", error.message, true);
+function scheduleSync() {
+  queueMicrotask(() => {
+    applyPlatformBranding();
+    applyPersonalProfile();
+    if (!state.loaded) {
+      loadProfile().then(() => injectSettingsPanel()).catch(() => {});
+    } else {
+      injectSettingsPanel();
     }
-  }
-  if (event.target?.id === "branding-settings-form") {
-    event.preventDefault();
-    try {
-      setStatus("branding-form-status", "正在保存…");
-      const body = { platform_name: document.querySelector("#platform-name").value.trim() };
-      if (brandingAvatarChange !== undefined) body.platform_avatar_data_url = brandingAvatarChange;
-      branding = await request("/api/v1/platform-branding", { method: "PATCH", body: JSON.stringify(body) });
-      brandingAvatarChange = undefined;
-      applyBranding();
-      setStatus("branding-form-status", "平台品牌已保存。");
-    } catch (error) {
-      setStatus("branding-form-status", error.message, true);
-    }
-  }
-});
+  });
+}
 
-installStyles();
-loadData();
-window.addEventListener("hashchange", () => setTimeout(() => { applyProfile(); applyBranding(); renderPanels(); }, 0));
+loadPublicBranding();
+loadProfile().catch(() => {});
+window.addEventListener("hashchange", scheduleSync);
+window.addEventListener("pageshow", scheduleSync);
+
 const view = document.querySelector("#view");
-if (view) new MutationObserver(() => { applyProfile(); applyBranding(); renderPanels(); }).observe(view, { childList: true });
-const app = document.querySelector("#app");
-if (app) new MutationObserver(() => { if (!app.hidden) loadData(true); }).observe(app, { attributes: true, attributeFilter: ["hidden"] });
+if (view) new MutationObserver(scheduleSync).observe(view, { childList: true });
+
+const identityName = document.querySelector("#identity-name");
+if (identityName) new MutationObserver(() => applyPersonalProfile()).observe(identityName, { childList: true, characterData: true, subtree: true });
