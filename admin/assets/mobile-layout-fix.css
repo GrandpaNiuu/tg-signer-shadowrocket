@@ -1,0 +1,73 @@
+/* Emergency mobile layout correction for the Telegram-inspired theme. */
+@media (max-width: 760px) {
+  html,
+  body {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  .app-shell,
+  .workspace,
+  main,
+  #view {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .workspace {
+    margin-left: 0 !important;
+  }
+
+  main {
+    margin: 0;
+    padding-left: 13px;
+    padding-right: 13px;
+  }
+
+  #view,
+  .page-head,
+  .skill-grid,
+  .card,
+  .skill-card,
+  .stats-grid,
+  .dashboard-grid,
+  .settings-layout {
+    min-width: 0;
+  }
+
+  .skill-grid,
+  .dashboard-grid,
+  .settings-layout {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .skill-card,
+  .card,
+  .stat-card {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .skill-card h2,
+  .skill-card p,
+  .page-head h1,
+  .page-head p,
+  .notice,
+  .skill-meta span,
+  .skill-meta strong {
+    overflow-wrap: anywhere;
+    word-break: normal;
+  }
+
+  .topbar {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .topbar-actions {
+    margin-left: auto;
+    min-width: 0;
+  }
+}
