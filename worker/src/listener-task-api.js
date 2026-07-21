@@ -50,6 +50,7 @@ function listenerOwner(instanceId) {
 }
 
 async function nextListenerRunId(repository, timestamp) {
+  const dueThrough = new Date(Date.parse(timestamp) + 5_000).toISOString();
   const row = await repository.db.prepare(`SELECT r.id
     FROM task_runs r
     JOIN tasks t ON t.id = r.task_id
@@ -58,6 +59,7 @@ async function nextListenerRunId(repository, timestamp) {
     JOIN skills current_skill ON current_skill.id = t.skill_id
     JOIN skills execution_skill ON execution_skill.skill_key = COALESCE(r.skill_key_snapshot, current_skill.skill_key)
     WHERE r.status = 'queued' AND r.dispatch_status = 'pending'
+      AND r.scheduled_for <= ?
       AND t.enabled = 1 AND a.enabled = 1 AND a.status = 'connected' AND execution_skill.enabled = 1
       AND (r.next_dispatch_at IS NULL OR r.next_dispatch_at <= ?)
       AND EXISTS (
@@ -81,7 +83,7 @@ async function nextListenerRunId(repository, timestamp) {
             OR (active.status = 'queued' AND active.dispatch_status IN ('dispatching', 'dispatched')))
       )
     ORDER BY r.scheduled_for, r.created_at, r.id
-    LIMIT 1`).bind(timestamp, timestamp, timestamp).first();
+    LIMIT 1`).bind(dueThrough, timestamp, timestamp, timestamp).first();
   return row?.id || null;
 }
 
