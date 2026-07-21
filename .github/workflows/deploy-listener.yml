@@ -93,7 +93,46 @@ jobs:
           install -d -m 700 "$HOME/.ssh"
           key_file="$HOME/.ssh/listener_deploy_key"
           if [ -n "${VPS_SSH_KEY_B64:-}" ]; then
-            printf '%s' "$VPS_SSH_KEY_B64" | tr -d '[:space:]' | base64 --decode > "$key_file"
+            python - <<'PY'
+          import base64
+          import os
+          import re
+          from pathlib import Path
+
+          raw = os.environ.get("VPS_SSH_KEY_B64", "")
+          candidates = []
+
+          for token in re.findall(r"[A-Za-z0-9+/]+={0,2}", raw):
+              if len(token) >= 100:
+                  candidates.append(token)
+
+          compact = "".join(raw.split())
+          if compact and re.fullmatch(r"[A-Za-z0-9+/]+={0,2}", compact):
+              candidates.append(compact)
+
+          seen = set()
+          key = None
+          for candidate in sorted(candidates, key=len, reverse=True):
+              if candidate in seen:
+                  continue
+              seen.add(candidate)
+              try:
+                  decoded = base64.b64decode(candidate, validate=True)
+              except (ValueError, base64.binascii.Error):
+                  continue
+              if b"PRIVATE KEY" in decoded:
+                  key = decoded
+                  break
+
+          if key is None:
+              raise SystemExit(
+                  "LISTENER_VPS_SSH_KEY_B64 does not contain a valid Base64-encoded private key. "
+                  "Paste only the output of: base64 -w 0 /root/listener_actions_key"
+              )
+
+          target = Path.home() / ".ssh" / "listener_deploy_key"
+          target.write_bytes(key)
+          PY
           else
             printf '%s\n' "$VPS_SSH_KEY" | sed 's/\r$//' > "$key_file"
           fi
