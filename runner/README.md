@@ -14,12 +14,13 @@ The task workflow calls these authenticated endpoints under `/api/runner`:
 - `POST /runs/{run_id}/complete` (idempotent for a terminal run)
 
 The claim response uses canonical `task.params`. Legacy task columns (`bot`,
-`command`, `thread`, and `delete_after`) remain accepted for existing tasks, but
-new Skill implementations must use the nested parameter object.
+`command`, `thread`, and `delete_after`) remain accepted for existing tasks.
 
 ## Allowlisted Skills
 
 ### `send_text`
+
+Sends one text message or command and optionally deletes it later.
 
 ```json
 {
@@ -32,6 +33,10 @@ new Skill implementations must use the nested parameter object.
 
 ### `tg_signer`
 
+Runs the existing guided button-sign-in flow or a registered legacy tg-signer
+configuration. This remains the single task type for bot flows that send a command,
+wait for a reply, find a button, click it, and confirm success.
+
 ```json
 {
   "task_name": "my_sign",
@@ -40,32 +45,6 @@ new Skill implementations must use the nested parameter object.
   "num_of_dialogs": 50
 }
 ```
-
-The existing platform-guided sign-in configuration and legacy tg-signer imports
-remain supported.
-
-### `bot_flow`
-
-Runs a validated multi-step bot interaction. Supported actions are `send`,
-`wait_message`, `read_buttons`, and `click_button`.
-
-```json
-{
-  "target": "@points_bot",
-  "steps": [
-    { "action": "send", "text": "/start", "timeout": 20 },
-    { "action": "wait_message", "match": "签到", "timeout": 30 },
-    { "action": "click_button", "button": "签到", "timeout": 20 },
-    { "action": "wait_message", "match_any": ["成功", "完成"], "timeout": 30 }
-  ]
-}
-```
-
-The flow cannot execute Python, shell commands, expressions, Web Apps, login
-buttons, payment buttons, or URL buttons. It accepts at most 20 steps, requires a
-bounded timeout on every step, and returns a structured log for each step. A
-failure after a message or callback has been sent is marked `ambiguous` when the
-outcome cannot be proven.
 
 ### `send_media`
 
@@ -99,21 +78,9 @@ DELETE /api/v1/media-assets/{id}
 A registration contains `name`, `media_type`, `source_chat_id`, and
 `source_message_id`.
 
-### `chat_snapshot`
-
-```json
-{
-  "target": "@group",
-  "limit": 20,
-  "keyword": "订单"
-}
-```
-
-This Skill only collects recent text/captions. It does not download attachments or
-call AI. Results contain `message_id`, `sender`, UTC `time`, and bounded `text`.
-
-Account connectivity remains available through the existing account validation
-workflow and is deliberately not exposed as a scheduled Skill.
+Long-running keyword/group monitoring remains exclusively in Listener. Account
+connectivity remains in the existing account validation workflow. Neither is
+exposed as a duplicate scheduled Skill.
 
 ## Login contract
 
@@ -139,8 +106,7 @@ Interactive claims use `flow.mode=interactive_login`. Validation claims use
   files, and are deleted on exit.
 - Timeouts after Telegram side effects are treated as ambiguous and are never
   blindly retried.
-- Skill names are registry allowlisted: `send_text`, `tg_signer`, `bot_flow`,
-  `send_media`, and `chat_snapshot`.
+- Skill names are registry allowlisted: `send_text`, `tg_signer`, and `send_media`.
 - `tg-signer` is pinned to commit `95a98572...` (tag `0.9.0b2`).
 
 Run unit tests with:
