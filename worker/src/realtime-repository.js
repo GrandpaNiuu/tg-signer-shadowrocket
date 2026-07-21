@@ -24,6 +24,20 @@ async function realtimeRuleActive(repository, accountId) {
   return Boolean(row?.active);
 }
 
+async function dispatchedTaskActive(db, accountId) {
+  if (!db?.prepare || !accountId) return false;
+  const row = await db.prepare(`SELECT 1 AS active
+    FROM task_runs r
+    LEFT JOIN tasks t ON t.id = r.task_id
+    WHERE COALESCE(r.account_id_snapshot, t.account_id) = ?
+      AND (
+        r.status IN ('claimed', 'running')
+        OR (r.status = 'queued' AND r.dispatch_status IN ('dispatching', 'dispatched'))
+      )
+    LIMIT 1`).bind(accountId).first();
+  return Boolean(row?.active);
+}
+
 function cutoff(timestamp, days) {
   const value = Date.parse(timestamp);
   if (!Number.isFinite(value)) throw new Error("Invalid realtime cleanup timestamp.");
@@ -59,9 +73,14 @@ function compatibilityDatabase(db) {
           const query = normalizedSql(sql);
           if (query === "select count(*) as total from tasks where account_id = ? and enabled = 1") {
             return {
-              bind() {
+              bind(accountId) {
                 return {
-                  async first() { return { total: 0 }; },
+                  async first() {
+                    // The old route used this query to prohibit all tasks. It now only
+                    // blocks switching an account into realtime mode while a Runner has
+                    // already been dispatched or is actively using that Session.
+                    return { total: await dispatchedTaskActive(current, accountId) ? 1 : 0 };
+                  },
                 };
               },
             };
@@ -137,6 +156,7 @@ export function withRealtimeMaintenance(repository) {
 export const __test = {
   cleanupRealtimeHistory,
   cutoff,
+  dispatchedTaskActive,
   inspectionActive,
   realtimeRuleActive,
 };
