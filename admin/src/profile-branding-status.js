@@ -5,6 +5,8 @@ const DIRECT_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 const DIRECT_SOURCE_BYTES = 8 * 1024 * 1024;
 const ALBUM_SOURCE_BYTES = 32 * 1024 * 1024;
 const ALBUM_EXTENSIONS = /\.(avif|bmp|gif|heic|heif|jpe?g|png|webp)$/i;
+const ALBUM_PICKER_LABEL = "从手机相册选择";
+const ALBUM_HELP_TEXT = "直接选择手机相册图片，系统会参照 Telegram 头像方式自动居中裁剪和压缩。";
 
 function removeFallback() {
   document.querySelector(`#${FALLBACK_ID}`)?.remove();
@@ -126,14 +128,16 @@ async function normalizeAlbumImage(file) {
 
 function configureAlbumInputs(root = document) {
   root.querySelectorAll?.("input[data-avatar-input]").forEach((input) => {
-    input.setAttribute("accept", "image/*,.heic,.heif");
-    input.removeAttribute("capture");
+    if (input.getAttribute("accept") !== "image/*,.heic,.heif") {
+      input.setAttribute("accept", "image/*,.heic,.heif");
+    }
+    if (input.hasAttribute("capture")) input.removeAttribute("capture");
   });
   root.querySelectorAll?.("button[data-pick-avatar]").forEach((button) => {
-    button.textContent = "从手机相册选择";
+    if (button.textContent !== ALBUM_PICKER_LABEL) button.textContent = ALBUM_PICKER_LABEL;
   });
   root.querySelectorAll?.(".profile-avatar-editor p").forEach((paragraph) => {
-    paragraph.textContent = "直接选择手机相册图片，系统会参照 Telegram 头像方式自动居中裁剪和压缩。";
+    if (paragraph.textContent !== ALBUM_HELP_TEXT) paragraph.textContent = ALBUM_HELP_TEXT;
   });
 }
 
@@ -184,6 +188,6 @@ if (view) new MutationObserver(() => {
   configureAlbumInputs(view);
   if (view.querySelector(`#${PANEL_ID}`)) removeFallback();
   else scheduleCheck();
-}).observe(view, { childList: true, subtree: true });
+}).observe(view, { childList: true });
 configureAlbumInputs();
 scheduleCheck();
