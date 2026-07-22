@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { guidedFlowConfiguration, skillPresentation } from "../src/skill-guidance.js";
+import { __test, guidedFlowConfiguration, skillPresentation } from "../src/skill-guidance.js";
 
 const sourceUrl = new URL("../src/skill-guidance.js", import.meta.url);
 const indexUrl = new URL("../index.html", import.meta.url);
@@ -61,6 +61,31 @@ test("unknown task type keys fail safe with a Chinese administrator warning", ()
   assert.match(unknown.formHelp, /不清楚用途时请不要选择/);
 });
 
+test("task form guidance skips identical DOM writes so observers can settle", () => {
+  let textWrites = 0;
+  let htmlWrites = 0;
+  const textNode = {
+    _value: "相同帮助文字",
+    get textContent() { return this._value; },
+    set textContent(value) { textWrites += 1; this._value = value; },
+  };
+  const htmlNode = {
+    _value: "<small>相同内容</small>",
+    get innerHTML() { return this._value; },
+    set innerHTML(value) { htmlWrites += 1; this._value = value; },
+  };
+
+  assert.equal(__test.setTextContentIfChanged(textNode, "相同帮助文字"), false);
+  assert.equal(__test.setInnerHtmlIfChanged(htmlNode, "<small>相同内容</small>"), false);
+  assert.equal(textWrites, 0);
+  assert.equal(htmlWrites, 0);
+
+  assert.equal(__test.setTextContentIfChanged(textNode, "新帮助文字"), true);
+  assert.equal(__test.setInnerHtmlIfChanged(htmlNode, "<small>新内容</small>"), true);
+  assert.equal(textWrites, 1);
+  assert.equal(htmlWrites, 1);
+});
+
 test("task forms use a guided builder and keep legacy imports only as a collapsed compatibility path", async () => {
   const source = await readFile(sourceUrl, "utf8");
   assert.match(source, /不用填写 JSON/);
@@ -77,5 +102,5 @@ test("task forms use a guided builder and keep legacy imports only as a collapse
 test("production page loads Chinese task type guidance", async () => {
   const index = await readFile(indexUrl, "utf8");
   assert.match(index, /data-route="skills"><span[^>]*>◇<\/span>任务类型<\/a>/);
-  assert.match(index, /\/src\/skill-guidance\.js\?v=20260722-3/);
+  assert.match(index, /\/src\/skill-guidance\.js\?v=20260722-4/);
 });

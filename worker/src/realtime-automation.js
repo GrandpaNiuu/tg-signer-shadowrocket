@@ -7,6 +7,7 @@ import { resolveTelegramApplicationCredentialRefs } from "./telegram-application
 
 const INSPECTION_STATUSES = new Set(["queued", "running", "success", "failed", "expired", "cancelled"]);
 const RULE_KINDS = new Set(["keyword_reply", "group_monitor"]);
+const REPLY_TRIGGER_MODES = new Set(["keyword", "reply_to_own", "keyword_or_reply_to_own"]);
 const LISTENER_STATUSES = new Set(["starting", "online", "degraded", "stopping", "offline"]);
 const TARGET_PATTERN = /^(?:\*|@[A-Za-z][A-Za-z0-9_]{3,31}|-?\d{1,20})$/;
 
@@ -93,6 +94,7 @@ function mapRule(row) {
     chat_selector: row.chat_selector,
     keyword: row.keyword,
     response_text: row.response_text,
+    trigger_mode: row.trigger_mode || "keyword",
     case_sensitive: Boolean(row.case_sensitive),
     notify_on_match: row.notify_on_match === undefined ? true : Boolean(row.notify_on_match),
     enabled: Boolean(row.enabled),
@@ -186,17 +188,26 @@ function ruleInput(body, { patch = false } = {}) {
       ? null
       : text(value.response_text ?? "", "response_text", { required: false, maximum: 2_000 });
   }
+  if (!patch || value.trigger_mode !== undefined) {
+    output.trigger_mode = text(value.trigger_mode ?? "keyword", "trigger_mode", { maximum: 40 });
+    if (!REPLY_TRIGGER_MODES.has(output.trigger_mode)) {
+      throw new HttpError(422, "validation_failed", "自动回复触发方式不受支持。", { fields: ["trigger_mode"] });
+    }
+  }
   if (!patch || value.case_sensitive !== undefined) output.case_sensitive = booleanValue(value.case_sensitive, false);
   if (!patch || value.notify_on_match !== undefined) output.notify_on_match = booleanValue(value.notify_on_match, true);
   if (!patch || value.enabled !== undefined) output.enabled = booleanValue(value.enabled, true);
   const finalKind = output.kind ?? value.kind;
   if (finalKind === "keyword_reply") {
-    if (!output.keyword && !patch) {
+    const triggerMode = output.trigger_mode ?? value.trigger_mode ?? "keyword";
+    if (["keyword", "keyword_or_reply_to_own"].includes(triggerMode) && !output.keyword && !patch) {
       throw new HttpError(422, "validation_failed", "关键词自动回复必须填写关键词。", { fields: ["keyword"] });
     }
     if (!output.response_text && !patch) {
       throw new HttpError(422, "validation_failed", "关键词自动回复必须填写回复内容。", { fields: ["response_text"] });
     }
+  } else if (output.trigger_mode && output.trigger_mode !== "keyword") {
+    throw new HttpError(422, "validation_failed", "消息监控只能使用关键词匹配。", { fields: ["trigger_mode"] });
   }
   return output;
 }
@@ -231,12 +242,13 @@ async function realtimeRules(request, repository, context, parts) {
       id: context.uuid(),
       ...input,
       response_text: input.kind === "keyword_reply" ? input.response_text : input.response_text || null,
+      trigger_mode: input.kind === "keyword_reply" ? input.trigger_mode : "keyword",
     };
     await repository.db.prepare(`INSERT INTO realtime_rules
-      (id, user_id, account_id, kind, name, chat_selector, keyword, response_text, case_sensitive, notify_on_match, enabled, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      (id, user_id, account_id, kind, name, chat_selector, keyword, response_text, trigger_mode, case_sensitive, notify_on_match, enabled, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .bind(rule.id, userId, rule.account_id, rule.kind, rule.name, rule.chat_selector, rule.keyword,
-        rule.response_text, rule.case_sensitive ? 1 : 0, rule.notify_on_match ? 1 : 0,
+        rule.response_text, rule.trigger_mode, rule.case_sensitive ? 1 : 0, rule.notify_on_match ? 1 : 0,
         rule.enabled ? 1 : 0, timestamp, timestamp).run();
     const created = await repository.db.prepare(`SELECT r.*, a.name AS account_name FROM realtime_rules r
       JOIN accounts a ON a.id = r.account_id WHERE r.id = ? AND r.user_id = ?`).bind(rule.id, userId).first();
@@ -255,10 +267,18 @@ async function realtimeRules(request, repository, context, parts) {
   const finalAccountId = input.account_id ?? current.account_id;
   await ensureRealtimeAdminAccountAvailable(repository, context, finalAccountId);
   const finalKind = input.kind ?? current.kind;
+  const finalTriggerMode = finalKind === "keyword_reply"
+    ? input.trigger_mode ?? current.trigger_mode ?? "keyword"
+    : "keyword";
   const finalKeyword = input.keyword ?? current.keyword;
   const finalResponse = input.response_text === undefined ? current.response_text : input.response_text;
-  if (finalKind === "keyword_reply" && (!finalKeyword || !finalResponse)) {
-    throw new HttpError(422, "validation_failed", "关键词自动回复必须填写关键词和回复内容。", { fields: ["keyword", "response_text"] });
+  if (finalKind === "keyword_reply" && !finalResponse) {
+    throw new HttpError(422, "validation_failed", "自动回复必须填写回复内容。", { fields: ["response_text"] });
+  }
+  if (finalKind === "keyword_reply"
+    && ["keyword", "keyword_or_reply_to_own"].includes(finalTriggerMode)
+    && !finalKeyword) {
+    throw new HttpError(422, "validation_failed", "这个触发方式必须填写关键词。", { fields: ["keyword"] });
   }
   const merged = {
     account_id: finalAccountId,
@@ -267,15 +287,16 @@ async function realtimeRules(request, repository, context, parts) {
     chat_selector: input.chat_selector ?? current.chat_selector,
     keyword: finalKeyword,
     response_text: finalResponse,
+    trigger_mode: finalTriggerMode,
     case_sensitive: input.case_sensitive ?? Boolean(current.case_sensitive),
     notify_on_match: input.notify_on_match ?? (current.notify_on_match === undefined ? true : Boolean(current.notify_on_match)),
     enabled: input.enabled ?? Boolean(current.enabled),
   };
   const timestamp = nowIso(context);
   await repository.db.prepare(`UPDATE realtime_rules SET account_id = ?, kind = ?, name = ?, chat_selector = ?,
-    keyword = ?, response_text = ?, case_sensitive = ?, notify_on_match = ?, enabled = ?, updated_at = ? WHERE id = ? AND user_id = ?`)
+    keyword = ?, response_text = ?, trigger_mode = ?, case_sensitive = ?, notify_on_match = ?, enabled = ?, updated_at = ? WHERE id = ? AND user_id = ?`)
     .bind(merged.account_id, merged.kind, merged.name, merged.chat_selector, merged.keyword, merged.response_text,
-      merged.case_sensitive ? 1 : 0, merged.notify_on_match ? 1 : 0,
+      merged.trigger_mode, merged.case_sensitive ? 1 : 0, merged.notify_on_match ? 1 : 0,
       merged.enabled ? 1 : 0, timestamp, id, userId).run();
   const updated = await repository.db.prepare(`SELECT r.*, a.name AS account_name FROM realtime_rules r
     JOIN accounts a ON a.id = r.account_id WHERE r.id = ? AND r.user_id = ?`).bind(id, userId).first();

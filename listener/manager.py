@@ -16,9 +16,11 @@ from listener.reply_limits import ReplyLimiter, is_human_sender
 from listener.rules import (
     GROUP_TYPES,
     chat_type_name,
+    is_own_message,
     keyword_matches,
     message_text,
     selector_matches,
+    trigger_matches,
 )
 from listener.telegram_runtime import build_client, stop_client
 from listener.worker_client import ListenerWorkerClient, WorkerClientError
@@ -71,6 +73,21 @@ class RealtimeManager:
         except WorkerClientError as exc:
             LOGGER.warning("Event report failed: %s", exc)
 
+    async def _reply_target_sent_by_account(self, client: Client, message: Any) -> Any | None:
+        replied = getattr(message, "reply_to_message", None)
+        if replied is not None:
+            return replied if is_own_message(replied) else None
+        reply_id = getattr(message, "reply_to_message_id", None)
+        chat = getattr(message, "chat", None)
+        chat_id = getattr(chat, "id", None)
+        if not reply_id or chat_id is None:
+            return None
+        try:
+            replied = await client.get_messages(chat_id, int(reply_id))
+        except Exception:
+            return None
+        return replied if is_own_message(replied) else None
+
     async def _handle_message(self, account_id: str, _client: Client, message: Any) -> None:
         if getattr(message, "outgoing", False):
             return
@@ -82,6 +99,8 @@ class RealtimeManager:
         sender = getattr(message, "from_user", None)
         sender_id = str(getattr(sender, "id", "") or "")
         content = message_text(message)
+        reply_checked = False
+        reply_target = None
         for rule in self.rules_by_account.get(account_id, []):
             if not rule.get("enabled", True):
                 continue
@@ -89,12 +108,25 @@ class RealtimeManager:
                 continue
             if rule.get("kind") == "group_monitor" and chat_type_name(chat) not in GROUP_TYPES:
                 continue
-            if not keyword_matches(
-                str(rule.get("keyword") or ""),
-                content,
-                case_sensitive=bool(rule.get("case_sensitive")),
-            ):
-                continue
+            keyword = str(rule.get("keyword") or "")
+            if rule.get("kind") == "keyword_reply":
+                mode = str(rule.get("trigger_mode") or "keyword")
+                keyword_hit = bool(keyword) and keyword_matches(
+                    keyword,
+                    content,
+                    case_sensitive=bool(rule.get("case_sensitive")),
+                )
+                reply_hit = False
+                if mode in {"reply_to_own", "keyword_or_reply_to_own"}:
+                    if not reply_checked:
+                        reply_target = await self._reply_target_sent_by_account(_client, message)
+                        reply_checked = True
+                    reply_hit = reply_target is not None
+                if not trigger_matches(mode, keyword_match=keyword_hit, reply_to_own=reply_hit):
+                    continue
+            else:
+                if not keyword_matches(keyword, content, case_sensitive=bool(rule.get("case_sensitive"))):
+                    continue
             dedupe = (str(rule["id"]), chat_id, message_id)
             if not self._remember(dedupe):
                 continue
@@ -116,9 +148,16 @@ class RealtimeManager:
                     continue
                 try:
                     await message.reply_text(response)
+                    reasons = []
+                    if keyword_hit:
+                        reasons.append(f"命中关键词「{keyword[:80]}」")
+                    if reply_hit:
+                        original = message_text(reply_target)[:100]
+                        reasons.append(f"回复了账号发送的消息{f'「{original}」' if original else ''}")
+                    reason = "，且".join(reasons) or "命中自动回复规则"
                     event.update({
                         "event_kind": "keyword_replied",
-                        "action_summary": f"已按规则「{rule.get('name', '')}」回复：{response[:180]}",
+                        "action_summary": f"{reason}；已按规则「{rule.get('name', '')}」回复：{response[:140]}",
                     })
                 except Exception as exc:
                     event.update({

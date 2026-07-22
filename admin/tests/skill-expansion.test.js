@@ -99,3 +99,15 @@ test("task type copy is idempotent so mutation observers cannot trigger each oth
   assert.equal(option.textContent, __test.PRESENTATIONS.send_media.name);
   assert.equal(writes, 1);
 });
+
+test("content task help text is not rewritten when it is already current", () => {
+  let writes = 0;
+  const help = {
+    _textContent: __test.PRESENTATIONS.send_media.formHelp,
+    get textContent() { return this._textContent; },
+    set textContent(value) { writes += 1; this._textContent = value; },
+  };
+
+  assert.equal(__test.setTextContentIfChanged(help, __test.PRESENTATIONS.send_media.formHelp), false);
+  assert.equal(writes, 0);
+});

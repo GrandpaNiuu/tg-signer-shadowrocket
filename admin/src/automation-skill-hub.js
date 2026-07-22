@@ -186,15 +186,43 @@ function accountOptions(accounts, selected = "") {
   return `<option value="">请选择 Telegram 账号</option>${accounts.map((account) => `<option value="${escapeHtml(account.id)}" ${String(account.id) === String(selected) ? "selected" : ""}>${escapeHtml(account.name)}</option>`).join("")}`;
 }
 
+function triggerModeLabel(mode) {
+  return ({
+    keyword: "消息包含关键词",
+    reply_to_own: "回复我发送的消息",
+    keyword_or_reply_to_own: "关键词或回复我的消息",
+  })[mode] || "消息包含关键词";
+}
+
+function triggerModeOptions(selected = "keyword") {
+  return ["keyword", "reply_to_own", "keyword_or_reply_to_own"]
+    .map((mode) => `<option value="${mode}" ${mode === selected ? "selected" : ""}>${triggerModeLabel(mode)}</option>`)
+    .join("");
+}
+
+function syncRealtimeTriggerForm(form) {
+  if (!form || form.dataset.kind !== "keyword_reply") return;
+  const mode = form.querySelector("#hub-rule-trigger")?.value || "keyword";
+  const keywordField = form.querySelector("[data-realtime-keyword-field]");
+  const caseField = form.querySelector("[data-realtime-case-field]");
+  const keyword = form.querySelector("#hub-rule-keyword");
+  const keywordOnly = mode === "reply_to_own";
+  if (keywordField) keywordField.hidden = keywordOnly;
+  if (caseField) caseField.hidden = keywordOnly;
+  if (keyword) keyword.required = !keywordOnly;
+}
+
 function realtimeFormMarkup(kind, accounts, rule = null) {
   const keywordReply = kind === "keyword_reply";
+  const triggerMode = rule?.trigger_mode || "keyword";
   return `<form id="skill-hub-realtime-form" data-id="${escapeHtml(rule?.id || "")}" data-kind="${escapeHtml(kind)}" novalidate><div class="form-grid">
     <div class="field span-2"><label class="required" for="hub-rule-name">规则名称</label><input id="hub-rule-name" name="name" maxlength="100" required value="${escapeHtml(rule?.name || "")}" placeholder="${keywordReply ? "例如：价格咨询自动回复" : "例如：采购关键词监控"}"></div>
     <div class="field"><label class="required" for="hub-rule-account">Telegram 账号</label><select id="hub-rule-account" name="account_id" required>${accountOptions(accounts, rule?.account_id)}</select></div>
-    <div class="field"><label for="hub-rule-case">匹配方式</label><select id="hub-rule-case" name="case_sensitive"><option value="false" ${rule?.case_sensitive ? "" : "selected"}>不区分大小写</option><option value="true" ${rule?.case_sensitive ? "selected" : ""}>区分大小写</option></select></div>
+    ${keywordReply ? `<div class="field"><label class="required" for="hub-rule-trigger">触发条件</label><select id="hub-rule-trigger" name="trigger_mode" required>${triggerModeOptions(triggerMode)}</select></div>` : ""}
+    <div class="field" data-realtime-case-field><label for="hub-rule-case">匹配方式</label><select id="hub-rule-case" name="case_sensitive"><option value="false" ${rule?.case_sensitive ? "" : "selected"}>不区分大小写</option><option value="true" ${rule?.case_sensitive ? "selected" : ""}>区分大小写</option></select></div>
     <div class="field span-2"><label class="required" for="hub-rule-chat">监听范围</label><input id="hub-rule-chat" name="chat_selector" maxlength="128" required value="${escapeHtml(rule?.chat_selector || "*")}" placeholder="*、@群组用户名或数字 Chat ID"><p class="field-help">填写 * 表示该账号收到的所有适用会话。</p></div>
-    <div class="field span-2"><label ${keywordReply ? 'class="required"' : ""} for="hub-rule-keyword">关键词</label><input id="hub-rule-keyword" name="keyword" maxlength="200" ${keywordReply ? "required" : ""} value="${escapeHtml(rule?.keyword || "")}" placeholder="${keywordReply ? "例如：价格、客服" : "可留空监控全部消息"}"></div>
-    ${keywordReply ? `<div class="field span-2"><label class="required" for="hub-rule-response">自动回复内容</label><textarea id="hub-rule-response" name="response_text" maxlength="2000" required placeholder="命中关键词后发送的固定回复">${escapeHtml(rule?.response_text || "")}</textarea></div>` : ""}
+    <div class="field span-2" data-realtime-keyword-field><label ${keywordReply ? 'class="required"' : ""} for="hub-rule-keyword">关键词</label><input id="hub-rule-keyword" name="keyword" maxlength="200" ${keywordReply && triggerMode !== "reply_to_own" ? "required" : ""} value="${escapeHtml(rule?.keyword || "")}" placeholder="${keywordReply ? "例如：价格、客服" : "可留空监控全部消息"}"></div>
+    ${keywordReply ? `<div class="field span-2"><div class="notice"><span aria-hidden="true">i</span><span>选择“回复我发送的消息”后，只要群成员使用 Telegram 的“回复”功能回复所选账号发出的消息，就会触发；无需关键词。</span></div></div><div class="field span-2"><label class="required" for="hub-rule-response">自动回复内容</label><textarea id="hub-rule-response" name="response_text" maxlength="2000" required placeholder="触发后发送的固定回复">${escapeHtml(rule?.response_text || "")}</textarea></div>` : ""}
     <div class="field span-2"><div class="notice"><span aria-hidden="true">✓</span><span><strong>每次命中都会由通知机器人汇报</strong><br>回执包含用户、规则、账号、会话、发送者、消息摘要${keywordReply ? "和实际回复内容" : ""}。</span></div></div>
     <div class="field span-2"><label class="check-row"><input type="checkbox" name="enabled" ${rule?.enabled === false ? "" : "checked"}>保存后启用规则</label></div>
   </div></form>`;
@@ -216,6 +244,7 @@ async function openRealtimeRule(kind, rule = null) {
       body: realtimeFormMarkup(kind, accounts, rule),
       footer: `<span class="field-help">保存后，监听服务会在下一次同步时加载</span><div><button class="button" type="button" data-skill-hub-action="close-modal">取消</button><button class="button primary" type="submit" form="skill-hub-realtime-form">保存规则</button></div>`,
     });
+    syncRealtimeTriggerForm(document.querySelector("#skill-hub-realtime-form"));
   } catch (error) {
     notify("无法创建规则", error.message, "error");
   }
@@ -235,6 +264,7 @@ async function submitRealtimeRule(form) {
     kind,
     name: String(data.get("name") || "").trim(),
     chat_selector: String(data.get("chat_selector") || "*").trim(),
+    trigger_mode: kind === "keyword_reply" ? String(data.get("trigger_mode") || "keyword") : "keyword",
     keyword: String(data.get("keyword") || "").trim(),
     response_text: kind === "keyword_reply" ? String(data.get("response_text") || "").trim() : "",
     case_sensitive: data.get("case_sensitive") === "true",
@@ -269,7 +299,7 @@ function ruleKindLabel(kind) {
 
 function realtimeRulesMarkup(rules) {
   if (!rules.length) return '<p class="field-help">尚未创建实时自动化规则。</p>';
-  return `<div class="service-list">${rules.map((rule) => `<div class="service-row"><div><strong>${escapeHtml(rule.name)}</strong><small>${escapeHtml(rule.account_name || "—")} · ${escapeHtml(ruleKindLabel(rule.kind))} · 范围 ${escapeHtml(rule.chat_selector || "*")}${rule.keyword ? ` · 关键词 ${escapeHtml(rule.keyword)}` : ""}</small><small>每次命中均由通知机器人汇报</small></div><div class="actions"><span class="badge ${rule.enabled ? "success" : "pending"}">${rule.enabled ? "监听中" : "已停用"}</span><button class="button small ghost" type="button" data-skill-hub-action="toggle-rule" data-id="${escapeHtml(rule.id)}" data-enabled="${rule.enabled ? "true" : "false"}">${rule.enabled ? "停用" : "启用"}</button><button class="button small ghost" type="button" data-skill-hub-action="edit-rule" data-id="${escapeHtml(rule.id)}">编辑</button><button class="button small ghost danger" type="button" data-skill-hub-action="delete-rule" data-id="${escapeHtml(rule.id)}">删除</button></div></div>`).join("")}</div>`;
+  return `<div class="service-list">${rules.map((rule) => `<div class="service-row"><div><strong>${escapeHtml(rule.name)}</strong><small>${escapeHtml(rule.account_name || "—")} · ${escapeHtml(ruleKindLabel(rule.kind))} · 范围 ${escapeHtml(rule.chat_selector || "*")}${rule.kind === "keyword_reply" ? ` · ${escapeHtml(triggerModeLabel(rule.trigger_mode || "keyword"))}` : ""}${rule.keyword ? ` · 关键词 ${escapeHtml(rule.keyword)}` : ""}</small><small>每次命中均由通知机器人汇报</small></div><div class="actions"><span class="badge ${rule.enabled ? "success" : "pending"}">${rule.enabled ? "监听中" : "已停用"}</span><button class="button small ghost" type="button" data-skill-hub-action="toggle-rule" data-id="${escapeHtml(rule.id)}" data-enabled="${rule.enabled ? "true" : "false"}">${rule.enabled ? "停用" : "启用"}</button><button class="button small ghost" type="button" data-skill-hub-action="edit-rule" data-id="${escapeHtml(rule.id)}">编辑</button><button class="button small ghost danger" type="button" data-skill-hub-action="delete-rule" data-id="${escapeHtml(rule.id)}">删除</button></div></div>`).join("")}</div>`;
 }
 
 async function renderRealtimeRuleSection({ force = false } = {}) {
@@ -369,6 +399,11 @@ document.addEventListener("submit", (event) => {
   if (event.target.id !== "skill-hub-realtime-form") return;
   event.preventDefault();
   submitRealtimeRule(event.target);
+});
+
+document.addEventListener("change", (event) => {
+  if (event.target.id !== "hub-rule-trigger") return;
+  syncRealtimeTriggerForm(event.target.closest("form"));
 });
 
 document.addEventListener("click", (event) => {

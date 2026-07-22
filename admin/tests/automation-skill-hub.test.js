@@ -17,7 +17,7 @@ test("Skill task hub JavaScript passes Node syntax validation", () => {
 test("the automation catalog exposes only distinct user-facing capabilities", async () => {
   const source = `${await readFile(catalogUrl, "utf8")}\n${await readFile(hubUrl, "utf8")}`;
   for (const marker of [
-    "24 小时关键词自动回复",
+    "24 小时自动回复",
     "实时消息监控",
   ]) {
     assert.match(source, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
@@ -38,6 +38,9 @@ test("Skill cards open task creation instead of storing business rules in Settin
   assert.match(source, /data-skill-hub-realtime-tasks/);
   assert.match(source, /新建自动回复规则/);
   assert.match(source, /新建消息监控规则/);
+  assert.match(source, /trigger_mode/);
+  assert.match(source, /回复我发送的消息/);
+  assert.match(source, /关键词或回复我的消息/);
 });
 
 test("Settings only exposes Listener infrastructure status", async () => {

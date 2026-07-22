@@ -5,13 +5,16 @@ from types import SimpleNamespace
 
 from listener.rules import (
     GROUP_TYPES,
+    REPLY_TRIGGER_MODES,
     chat_type_name,
     keyword_matches,
     message_buttons,
     message_text,
     parse_proxy,
+    replies_to_own_message,
     selector_matches,
     suggested_button,
+    trigger_matches,
 )
 
 
@@ -51,6 +54,24 @@ class ListenerRuleTests(unittest.TestCase):
         self.assertEqual(message_buttons(message), ["每日签到", "积分"])
         self.assertEqual(suggested_button(["积分", "每日签到"]), "每日签到")
         self.assertIsNone(suggested_button([]))
+
+    def test_reply_trigger_recognizes_messages_sent_by_the_authorized_account(self):
+        own_message = SimpleNamespace(outgoing=True, from_user=None)
+        self_message = SimpleNamespace(outgoing=False, from_user=SimpleNamespace(is_self=True))
+        other_message = SimpleNamespace(outgoing=False, from_user=SimpleNamespace(is_self=False))
+        self.assertTrue(replies_to_own_message(SimpleNamespace(reply_to_message=own_message)))
+        self.assertTrue(replies_to_own_message(SimpleNamespace(reply_to_message=self_message)))
+        self.assertFalse(replies_to_own_message(SimpleNamespace(reply_to_message=other_message)))
+        self.assertFalse(replies_to_own_message(SimpleNamespace(reply_to_message=None)))
+
+    def test_reply_trigger_modes_preserve_keyword_rules_and_support_replies(self):
+        self.assertEqual(REPLY_TRIGGER_MODES, {"keyword", "reply_to_own", "keyword_or_reply_to_own"})
+        self.assertTrue(trigger_matches("keyword", keyword_match=True, reply_to_own=False))
+        self.assertFalse(trigger_matches("keyword", keyword_match=False, reply_to_own=True))
+        self.assertTrue(trigger_matches("reply_to_own", keyword_match=False, reply_to_own=True))
+        self.assertFalse(trigger_matches("reply_to_own", keyword_match=True, reply_to_own=False))
+        self.assertTrue(trigger_matches("keyword_or_reply_to_own", keyword_match=True, reply_to_own=False))
+        self.assertTrue(trigger_matches("keyword_or_reply_to_own", keyword_match=False, reply_to_own=True))
 
 
 if __name__ == "__main__":

@@ -139,6 +139,11 @@ export function validateExpandedParams(skillKey, rawParams) {
 function fieldValue(form, selector) { return form.querySelector(selector)?.value ?? ""; }
 function fieldContainer(form, selector) { return form.querySelector(selector)?.closest(".field") || null; }
 function setHidden(element, hidden) { if (element && element.hidden !== hidden) element.hidden = hidden; }
+function setTextContentIfChanged(element, value) {
+  if (!element || element.textContent === value) return false;
+  element.textContent = value;
+  return true;
+}
 function setStatus(builder, message, kind = "") {
   const node = builder.querySelector("[data-skill-status]");
   if (!node) return;
@@ -281,7 +286,7 @@ function configureLegacyFields(form, skillKey) {
   setHidden(ensureBuilder(form), !expanded);
   if (expanded) {
     const help = ensureSkillHelp(form);
-    if (help) help.textContent = PRESENTATIONS.send_media.formHelp;
+    setTextContentIfChanged(help, PRESENTATIONS.send_media.formHelp);
   }
 }
 async function hydrateForm(form) {
@@ -366,5 +371,6 @@ export const __test = {
   PRESENTATIONS,
   TARGET_PATTERN,
   parseTelegramMessageLink,
+  setTextContentIfChanged,
   updateSkillOptionCopy,
 };

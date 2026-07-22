@@ -7,6 +7,7 @@ import { __test, handleWorkspaceRealtimeApi } from "../src/realtime-automation.j
 
 const migrationUrl = new URL("../migrations/0100_realtime_automation.sql", import.meta.url);
 const notificationMigrationUrl = new URL("../migrations/0106_realtime_rule_notifications.sql", import.meta.url);
+const replyTriggerMigrationUrl = new URL("../migrations/0108_realtime_reply_triggers.sql", import.meta.url);
 const appUrl = new URL("../src/app.js", import.meta.url);
 const apiUrl = new URL("../src/realtime-automation.js", import.meta.url);
 const repositoryUrl = new URL("../src/realtime-repository.js", import.meta.url);
@@ -52,7 +53,7 @@ function realtimeRuleRepository({ taskRuns = [], rule = null } = {}) {
               async run() {
                 if (source.includes("INSERT INTO realtime_rules")) {
                   const [id, userId, accountId, kind, name, chatSelector, keyword, responseText,
-                    caseSensitive, notifyOnMatch, enabled, createdAt, updatedAt] = bindings;
+                    triggerMode, caseSensitive, notifyOnMatch, enabled, createdAt, updatedAt] = bindings;
                   storedRule = {
                     id,
                     user_id: userId,
@@ -62,6 +63,7 @@ function realtimeRuleRepository({ taskRuns = [], rule = null } = {}) {
                     chat_selector: chatSelector,
                     keyword,
                     response_text: responseText,
+                    trigger_mode: triggerMode,
                     case_sensitive: caseSensitive,
                     notify_on_match: notifyOnMatch,
                     enabled,
@@ -72,7 +74,7 @@ function realtimeRuleRepository({ taskRuns = [], rule = null } = {}) {
                 }
                 if (source.includes("UPDATE realtime_rules SET account_id")) {
                   const [accountId, kind, name, chatSelector, keyword, responseText,
-                    caseSensitive, notifyOnMatch, enabled, updatedAt] = bindings;
+                    triggerMode, caseSensitive, notifyOnMatch, enabled, updatedAt] = bindings;
                   storedRule = {
                     ...storedRule,
                     account_id: accountId,
@@ -81,6 +83,7 @@ function realtimeRuleRepository({ taskRuns = [], rule = null } = {}) {
                     chat_selector: chatSelector,
                     keyword,
                     response_text: responseText,
+                    trigger_mode: triggerMode,
                     case_sensitive: caseSensitive,
                     notify_on_match: notifyOnMatch,
                     enabled,
@@ -147,6 +150,7 @@ test("keyword replies require both a keyword and fixed response", () => {
     chat_selector: "*",
     keyword: "价格",
     response_text: "请联系管理员。",
+    trigger_mode: "keyword",
     case_sensitive: false,
     notify_on_match: true,
     enabled: true,
@@ -167,6 +171,45 @@ test("keyword replies require both a keyword and fixed response", () => {
     keyword: "价格",
     response_text: "",
   }), /必须填写回复内容/);
+});
+
+test("reply rules can trigger when a human replies to the authorized account message", () => {
+  assert.deepEqual(__test.ruleInput({
+    account_id: "account-1",
+    kind: "keyword_reply",
+    name: "回复我的消息",
+    chat_selector: "*",
+    trigger_mode: "reply_to_own",
+    keyword: "",
+    response_text: "收到，我稍后处理。",
+    enabled: true,
+  }), {
+    account_id: "account-1",
+    kind: "keyword_reply",
+    name: "回复我的消息",
+    chat_selector: "*",
+    keyword: "",
+    response_text: "收到，我稍后处理。",
+    trigger_mode: "reply_to_own",
+    case_sensitive: false,
+    notify_on_match: true,
+    enabled: true,
+  });
+  assert.throws(() => __test.ruleInput({
+    account_id: "account-1",
+    kind: "keyword_reply",
+    name: "错误模式",
+    chat_selector: "*",
+    trigger_mode: "anything",
+    response_text: "回复",
+  }), /触发方式/);
+});
+
+test("reply trigger migration keeps existing rules on keyword mode", async () => {
+  const sql = await readFile(replyTriggerMigrationUrl, "utf8");
+  assert.match(sql, /ADD COLUMN trigger_mode TEXT NOT NULL DEFAULT 'keyword'/);
+  assert.match(sql, /'reply_to_own'/);
+  assert.match(sql, /'keyword_or_reply_to_own'/);
 });
 
 test("ordinary scheduled tasks and queued pending Listener runs allow realtime rule creation", async () => {

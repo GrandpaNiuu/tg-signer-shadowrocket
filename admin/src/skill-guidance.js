@@ -31,6 +31,18 @@ const EXTERNALLY_PRESENTED_SKILLS = new Set([
 const GUIDED_FLOW_KIND = "telegram_guided_signin";
 const GUIDED_FLOW_VERSION = 1;
 
+function setTextContentIfChanged(element, value) {
+  if (!element || element.textContent === value) return false;
+  element.textContent = value;
+  return true;
+}
+
+function setInnerHtmlIfChanged(element, value) {
+  if (!element || element.innerHTML === value) return false;
+  element.innerHTML = value;
+  return true;
+}
+
 export function skillPresentation(key) {
   const normalized = String(key || "").trim();
   return SKILL_PRESENTATIONS[normalized] || {
@@ -83,7 +95,7 @@ function updateNavigation() {
   replaceTextNode(link, "任务类型");
   if (location.hash === "#/skills" || location.hash.startsWith("#/skills?")) {
     const breadcrumb = document.querySelector("#breadcrumb");
-    if (breadcrumb) breadcrumb.textContent = "任务类型";
+    setTextContentIfChanged(breadcrumb, "任务类型");
     document.title = "任务类型 · Telegram 自动消息";
   }
 }
@@ -175,25 +187,25 @@ function updateTaskForm() {
 
   if (!EXTERNALLY_PRESENTED_SKILLS.has(select.value)) {
     const presentation = skillPresentation(select.value);
-    ensureSkillHelp(select).textContent = presentation.formHelp;
+    setTextContentIfChanged(ensureSkillHelp(select), presentation.formHelp);
   }
 
   const skillLabel = document.querySelector('label[for="task-skill"]');
-  if (skillLabel) skillLabel.textContent = "任务类型";
+  setTextContentIfChanged(skillLabel, "任务类型");
 
   const targetLabel = document.querySelector('label[for="task-bot"]');
-  if (targetLabel) targetLabel.textContent = "发送给谁（机器人 / 用户 / 群组 / 频道）";
+  setTextContentIfChanged(targetLabel, "发送给谁（机器人 / 用户 / 群组 / 频道）");
   const targetInput = document.querySelector("#task-bot");
   if (targetInput) targetInput.placeholder = "例如：@example_bot、@username 或 Chat ID";
 
   const commandLabel = document.querySelector('label[for="task-command"]');
-  if (commandLabel) commandLabel.textContent = "先发送的消息或命令";
+  setTextContentIfChanged(commandLabel, "先发送的消息或命令");
   const commandInput = document.querySelector("#task-command");
   if (commandInput) commandInput.placeholder = "例如：/checkin、/start、签到";
 
   const signerLabel = document.querySelector('label[for="task-signer-import"]');
   const legacyField = signerLabel?.closest(".field");
-  if (signerLabel) signerLabel.innerHTML = "旧版配置 <small>留空保持现有配置</small>";
+  setInnerHtmlIfChanged(signerLabel, "旧版配置 <small>留空保持现有配置</small>");
   if (legacyField) {
     legacyField.hidden = false;
     const { builder, legacyDetails } = ensureGuidedBuilder(form, legacyField);
@@ -216,7 +228,7 @@ function updateTaskTable() {
     if (!keyElement) continue;
     const key = cell.dataset.skillKey || keyElement.textContent.trim();
     cell.dataset.skillKey = key;
-    keyElement.textContent = skillPresentation(key).shortName;
+    setTextContentIfChanged(keyElement, skillPresentation(key).shortName);
     keyElement.classList.remove("mono");
   }
 }
@@ -358,4 +370,6 @@ if (typeof document !== "undefined") {
 
 export const __test = {
   EXTERNALLY_PRESENTED_SKILLS,
+  setInnerHtmlIfChanged,
+  setTextContentIfChanged,
 };

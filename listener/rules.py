@@ -5,6 +5,7 @@ from urllib.parse import urlparse
 
 GROUP_TYPES = {"group", "supergroup", "channel"}
 BUTTON_PRIORITY = ("签到", "打卡", "领取", "check in", "checkin", "sign")
+REPLY_TRIGGER_MODES = {"keyword", "reply_to_own", "keyword_or_reply_to_own"}
 
 
 def parse_proxy(value: str | None) -> dict[str, Any] | None:
@@ -29,6 +30,28 @@ def chat_type_name(chat: Any) -> str:
 
 def message_text(message: Any) -> str:
     return str(getattr(message, "text", None) or getattr(message, "caption", None) or "")
+
+
+def is_own_message(message: Any) -> bool:
+    if message is None:
+        return False
+    if bool(getattr(message, "outgoing", False)):
+        return True
+    sender = getattr(message, "from_user", None)
+    return bool(sender is not None and getattr(sender, "is_self", False))
+
+
+def replies_to_own_message(message: Any) -> bool:
+    return is_own_message(getattr(message, "reply_to_message", None))
+
+
+def trigger_matches(mode: str, *, keyword_match: bool, reply_to_own: bool) -> bool:
+    normalized = mode if mode in REPLY_TRIGGER_MODES else "keyword"
+    if normalized == "reply_to_own":
+        return reply_to_own
+    if normalized == "keyword_or_reply_to_own":
+        return keyword_match or reply_to_own
+    return keyword_match
 
 
 def message_buttons(message: Any) -> list[str]:
