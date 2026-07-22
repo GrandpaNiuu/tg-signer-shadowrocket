@@ -9,7 +9,7 @@ REPLIES_PER_RULE_PER_HOUR = 60
 
 
 def is_human_sender(sender: Any) -> bool:
-    """Only real Telegram users may trigger an automatic reply."""
+    """Only real Telegram users may trigger realtime monitoring or replies."""
     return sender is not None and not bool(getattr(sender, "is_bot", False))
 
 

@@ -28,14 +28,17 @@ class ReplyLimiterTests(unittest.TestCase):
             self.assertTrue(limiter.allow("rule", "chat", f"sender-{index}"))
         self.assertFalse(limiter.allow("rule", "chat", "sender-over-limit"))
 
-    def test_bot_and_anonymous_senders_cannot_trigger_auto_reply(self):
+    def test_bot_and_anonymous_senders_cannot_trigger_realtime_rules(self):
         self.assertFalse(is_human_sender(None))
         self.assertFalse(is_human_sender(SimpleNamespace(is_bot=True)))
         self.assertTrue(is_human_sender(SimpleNamespace(is_bot=False)))
 
-    def test_manager_applies_human_sender_and_reply_limiter_guards(self):
+    def test_manager_filters_nonhuman_senders_before_matching_any_rule(self):
         source = pathlib.Path("listener/manager.py").read_text(encoding="utf-8")
-        self.assertIn("if not is_human_sender(sender)", source)
+        human_guard = source.index("if not is_human_sender(sender):")
+        rule_loop = source.index("for rule in self.rules_by_account.get(account_id, []):")
+        self.assertLess(human_guard, rule_loop)
+        self.assertEqual(source.count("if not is_human_sender(sender):"), 1)
         self.assertIn("self._reply_limiter.allow", source)
         self.assertIn("if getattr(message, \"outgoing\", False)", source)
 
