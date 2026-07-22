@@ -99,6 +99,8 @@ class RealtimeManager:
         chat_id = source["chat_id"]
         message_id = str(getattr(message, "id", ""))
         sender = getattr(message, "from_user", None)
+        if not is_human_sender(sender):
+            return
         sender_id = source["sender_id"]
         content = message_text(message)
         reply_checked = False
@@ -140,10 +142,6 @@ class RealtimeManager:
                 "message_preview": content[:600],
             }
             if rule.get("kind") == "keyword_reply":
-                # Only reply to a real Telegram user. This prevents bot-to-bot loops,
-                # channel-post loops, and automatic replies to anonymous service events.
-                if not is_human_sender(sender):
-                    continue
                 response = str(rule.get("response_text") or "")
                 if not response or not self._allow_reply(str(rule["id"]), chat_id, sender_id):
                     continue
