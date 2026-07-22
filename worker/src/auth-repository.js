@@ -18,9 +18,8 @@ async function createVerificationToken(repository, token) {
   }
   await repository.db.batch([
     repository.db.prepare(`DELETE FROM auth_tokens
-      WHERE user_id = ? AND token_type = 'verify_email'
-      AND (consumed_at IS NOT NULL OR expires_at <= ?)`)
-      .bind(token.user_id, token.created_at),
+      WHERE user_id = ? AND token_type = 'verify_email'`)
+      .bind(token.user_id),
     repository.db.prepare(`INSERT INTO auth_tokens
       (id, token_hash, user_id, token_type, expires_at, created_at)
       VALUES (?, ?, ?, 'verify_email', ?, ?)`)
