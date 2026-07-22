@@ -16,14 +16,14 @@ test("scheduler cleanup runs only at the top of an hour", async () => {
       prepare(sql) {
         const statement = {
           sql,
-          value: null,
-          bind(value) { this.value = value; return this; },
+          values: [],
+          bind(...values) { this.values = values; return this; },
         };
         statements.push(statement);
         return statement;
       },
       async batch(values) {
-        assert.equal(values.length, 3);
+        assert.equal(values.length, 4);
         return values;
       },
     },
@@ -35,12 +35,14 @@ test("scheduler cleanup runs only at the top of an hour", async () => {
   assert.equal(statements.length, 0);
 
   await wrapped.reconcileRuns("2026-07-21T01:00:00.000Z", "2026-07-21T00:00:00.000Z");
-  assert.equal(statements.length, 3);
+  assert.equal(statements.length, 4);
   assert.match(statements[0].sql, /DELETE FROM listener_events/);
-  assert.equal(statements[0].value, "2026-06-21T01:00:00.000Z");
+  assert.equal(statements[0].values[0], "2026-06-21T01:00:00.000Z");
   assert.match(statements[1].sql, /DELETE FROM bot_inspections/);
-  assert.equal(statements[1].value, "2026-07-14T01:00:00.000Z");
+  assert.equal(statements[1].values[0], "2026-07-14T01:00:00.000Z");
   assert.match(statements[2].sql, /DELETE FROM listener_instances/);
+  assert.match(statements[3].sql, /DELETE FROM realtime_task_handoffs/);
+  assert.equal(statements[3].values[0], "2026-07-21T01:00:00.000Z");
 });
 
 test("scheduler maintenance preserves repository method binding", async () => {
