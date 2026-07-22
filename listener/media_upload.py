@@ -57,18 +57,20 @@ async def stage_media_upload(
     *,
     existing_client=None,
 ) -> int:
-    from listener.telegram_runtime import build_client, stop_client
-
     upload = dict(job.get("upload") or {})
     account = dict(job.get("account") or {})
     upload_id = str(upload.get("id") or "")
     if not upload_id or not account.get("id"):
         raise RuntimeError("Media upload claim is incomplete")
 
-    client = existing_client or build_client(account, suffix="_media_upload")
     temporary_client = existing_client is None
     if temporary_client:
+        from listener.telegram_runtime import build_client, stop_client
+
+        client = build_client(account, suffix="_media_upload")
         await client.start()
+    else:
+        client = existing_client
     try:
         try:
             with tempfile.TemporaryDirectory(prefix="telegram-media-stage-") as directory:
