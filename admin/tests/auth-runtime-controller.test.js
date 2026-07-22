@@ -34,3 +34,18 @@ test("failed login and registration preserve passwords and only reset Turnstile"
   assert.match(content, /resetTurnstile\(form\)/);
   assert.match(content, /sessionEstablished\(\)/);
 });
+
+test("successful email authentication reloads the document on the dashboard route", async () => {
+  const content = await source("src/auth-runtime-controller.js");
+  assert.match(content, /function openAuthenticatedDashboard\(\)/);
+  assert.match(content, /history\.replaceState\(null, "", "\/#\/dashboard"\)/);
+  assert.match(content, /globalThis\.location\.reload\(\)/);
+  assert.match(content, /登录成功，正在打开后台/);
+  assert.match(content, /账号创建成功，正在打开后台/);
+  assert.doesNotMatch(content, /location\.replace\("\/#\/dashboard"\)/);
+});
+
+test("the admin shell cache-busts the authenticated transition repair", async () => {
+  const index = await source("index.html");
+  assert.match(index, /src="\/src\/auth-runtime-controller\.js\?v=20260723-4"/);
+});
