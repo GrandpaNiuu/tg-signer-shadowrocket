@@ -38,7 +38,7 @@ export function registrationPresentation(config = {}) {
       showEmailDivider: false,
       title: "GitHub 注册已开放",
       message: emailEnabled
-        ? "邮箱新注册暂未开放；已有邮箱账号可以返回登录，或使用 GitHub 创建账号。"
+        ? "邮箱新注册暂未开放；已有邮箱账号仍可返回登录，或使用 GitHub 创建账号。"
         : "当前可使用 GitHub 创建账号；邮箱注册暂未启用。",
     };
   }
