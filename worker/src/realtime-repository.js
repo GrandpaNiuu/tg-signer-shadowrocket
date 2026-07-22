@@ -56,34 +56,56 @@ async function pendingRealtimeRun(repository, accountId) {
     LIMIT 1`).bind(accountId).first();
 }
 
+async function pauseRealtimeRules(repository, accountId, runId, timestamp) {
+  await repository.db.prepare(`INSERT OR IGNORE INTO realtime_task_handoff_rules
+    (account_id, task_run_id, rule_id)
+    SELECT ?, ?, id FROM realtime_rules
+    WHERE account_id = ? AND enabled = 1`)
+    .bind(accountId, runId, accountId).run();
+  await repository.db.prepare(`UPDATE realtime_rules SET enabled = 0, updated_at = ?
+    WHERE id IN (
+      SELECT rule_id FROM realtime_task_handoff_rules WHERE task_run_id = ?
+    )`).bind(timestamp, runId).run();
+}
+
 export async function prepareRealtimeTaskHandoff(repository, accountId, timestamp) {
   const target = requiredRepository(repository);
+
+  // Check a handoff before checking enabled rules. Handoff creation temporarily
+  // disables those rules so an old Listener also drops the Telegram connection.
+  let handoff = await activeRealtimeHandoff(target, accountId, timestamp);
+  if (handoff) {
+    return {
+      realtime: true,
+      ready: Boolean(handoff.ready_at && handoff.ready_at <= timestamp),
+      handoff,
+    };
+  }
+
   if (!await realtimeRuleActive(target, accountId)) {
     return { realtime: false, ready: true, handoff: null };
   }
 
-  let handoff = await activeRealtimeHandoff(target, accountId, timestamp);
-  if (!handoff) {
-    const pending = await pendingRealtimeRun(target, accountId);
-    if (!pending?.id) return { realtime: true, ready: false, handoff: null };
+  const pending = await pendingRealtimeRun(target, accountId);
+  if (!pending?.id) return { realtime: true, ready: false, handoff: null };
 
-    await target.db.prepare(`DELETE FROM realtime_task_handoffs
-      WHERE account_id = ? AND (
-        expires_at <= ? OR NOT EXISTS (
-          SELECT 1 FROM task_runs r
-          WHERE r.id = realtime_task_handoffs.task_run_id
-            AND r.status IN ('queued', 'claimed', 'running')
-        )
-      )`).bind(accountId, timestamp).run();
+  await target.db.prepare(`DELETE FROM realtime_task_handoffs
+    WHERE account_id = ? AND (
+      expires_at <= ? OR NOT EXISTS (
+        SELECT 1 FROM task_runs r
+        WHERE r.id = realtime_task_handoffs.task_run_id
+          AND r.status IN ('queued', 'claimed', 'running')
+      )
+    )`).bind(accountId, timestamp).run();
 
-    const readyAt = isoOffset(timestamp, REALTIME_HANDOFF_DELAY_SECONDS);
-    const expiresAt = isoOffset(timestamp, REALTIME_HANDOFF_TTL_SECONDS);
-    await target.db.prepare(`INSERT OR IGNORE INTO realtime_task_handoffs
-      (account_id, task_run_id, ready_at, expires_at, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?)`)
-      .bind(accountId, pending.id, readyAt, expiresAt, timestamp, timestamp).run();
-    handoff = await activeRealtimeHandoff(target, accountId, timestamp);
-  }
+  const readyAt = isoOffset(timestamp, REALTIME_HANDOFF_DELAY_SECONDS);
+  const expiresAt = isoOffset(timestamp, REALTIME_HANDOFF_TTL_SECONDS);
+  await target.db.prepare(`INSERT OR IGNORE INTO realtime_task_handoffs
+    (account_id, task_run_id, ready_at, expires_at, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)`)
+    .bind(accountId, pending.id, readyAt, expiresAt, timestamp, timestamp).run();
+  handoff = await activeRealtimeHandoff(target, accountId, timestamp);
+  if (handoff) await pauseRealtimeRules(target, accountId, handoff.task_run_id, timestamp);
 
   return {
     realtime: true,
@@ -103,8 +125,12 @@ export async function findRealtimeTransitionBlockingRun(repository, accountId) {
       AND (
         r.status IN ('claimed', 'running')
         OR (r.status = 'queued' AND r.dispatch_status IN ('dispatching', 'dispatched'))
+        OR EXISTS (
+          SELECT 1 FROM realtime_task_handoffs h
+          WHERE h.account_id = ? AND h.task_run_id = r.id
+        )
       )
-    LIMIT 1`).bind(accountId, ...(target.userId ? [target.userId] : [])).first();
+    LIMIT 1`).bind(accountId, ...(target.userId ? [target.userId] : []), accountId).first();
 }
 
 export async function assertRealtimeTransitionAllowed(repository, accountId) {
@@ -113,7 +139,7 @@ export async function assertRealtimeTransitionAllowed(repository, accountId) {
   throw new HttpError(
     409,
     "listener_account_task_active",
-    "这个账号当前已有任务交给 GitHub Runner 或正在执行。请等待该任务结束后再启用 24 小时实时规则。",
+    "这个账号的定时任务正在与 24 小时监听安全交接。任务结束后实时规则会自动恢复。",
   );
 }
 
@@ -200,6 +226,7 @@ export const __test = {
   cutoff,
   inspectionActive,
   isoOffset,
+  pauseRealtimeRules,
   pendingRealtimeRun,
   realtimeRuleActive,
 };
