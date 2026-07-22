@@ -8,6 +8,7 @@ const RESEND_SECONDS = 60;
 let observer = null;
 let scheduled = false;
 let countdownTimer = null;
+let pendingLogin = null;
 
 function text(value) { return String(value ?? ""); }
 function escapeHtml(value) {
@@ -95,15 +96,86 @@ function renderVerificationForm(email, { sent = false, message = "" } = {}) {
   if (sent) startCountdown();
 }
 
+function applyPendingLogin() {
+  if (!pendingLogin || !authContent) return false;
+  const form = authContent.querySelector("#email-login-form");
+  if (!form) return false;
+  const emailInput = form.querySelector('input[name="email"]');
+  if (emailInput && !emailInput.value) emailInput.value = pendingLogin.email;
+  if (authMessage) authMessage.textContent = pendingLogin.message;
+  form.querySelector('input[name="password"]')?.focus();
+  return true;
+}
+
+function goToLogin(email, message) {
+  pendingLogin = { email, message };
+  stopCountdown();
+  const loginTab = authContent?.querySelector('[data-auth-mode="login"]');
+  if (loginTab) {
+    loginTab.click();
+    queueMicrotask(scheduleApply);
+    return;
+  }
+  globalThis.location.hash = "#/login";
+}
+
+function reloadAuthenticatedDashboard() {
+  history.replaceState(null, "", "/#/dashboard");
+  globalThis.location.reload();
+}
+
 function scheduleApply() {
   if (scheduled) return;
   scheduled = true;
   queueMicrotask(() => {
     scheduled = false;
     const email = verificationEmailFromLocation();
-    if (!email || authContent?.querySelector("#email-verification-code-form")) return;
-    renderVerificationForm(email);
+    if (email && !authContent?.querySelector("#email-verification-code-form")) {
+      renderVerificationForm(email);
+      return;
+    }
+    applyPendingLogin();
   });
+}
+
+async function submitLogin(event, form) {
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  const data = new FormData(form);
+  const button = form.querySelector('button[type="submit"]');
+  const payload = {
+    email: text(data.get("email")).trim(),
+    password: text(data.get("password")),
+    turnstile_token: text(data.get("turnstile_token")),
+  };
+  pendingLogin = null;
+  if (button) { button.disabled = true; button.textContent = "正在登录…"; }
+  try {
+    const operation = request("/api/auth/email/login", payload);
+    const passwordInput = form.querySelector('input[name="password"]');
+    const tokenInput = form.querySelector('input[name="turnstile_token"]');
+    if (passwordInput) passwordInput.value = "";
+    if (tokenInput) tokenInput.value = "";
+    payload.password = "";
+    payload.turnstile_token = "";
+    await operation;
+    reloadAuthenticatedDashboard();
+  } catch (error) {
+    payload.password = "";
+    payload.turnstile_token = "";
+    const passwordInput = form.querySelector('input[name="password"]');
+    const tokenInput = form.querySelector('input[name="turnstile_token"]');
+    if (passwordInput) passwordInput.value = "";
+    if (tokenInput) tokenInput.value = "";
+    if (error.code === "email_verification_required") {
+      history.replaceState(null, "", `/#/register?verification_email=${encodeURIComponent(payload.email)}`);
+      renderVerificationForm(payload.email, { sent: true, message: error.message });
+      return;
+    }
+    if (authMessage) authMessage.textContent = error.message;
+    globalThis.turnstile?.reset?.();
+    if (button) { button.disabled = false; button.textContent = "邮箱登录"; }
+  }
 }
 
 async function submitRegistration(event, form) {
@@ -123,21 +195,26 @@ async function submitRegistration(event, form) {
     const passwordInput = form.querySelector('input[name="password"]');
     if (passwordInput) passwordInput.value = "";
     if (result?.status !== "verification_required") {
-      location.replace("/#/dashboard");
+      reloadAuthenticatedDashboard();
       return;
     }
     const email = payload.email;
     payload.password = "";
     payload.turnstile_token = "";
     history.replaceState(null, "", `/#/register?verification_email=${encodeURIComponent(email)}`);
-    renderVerificationForm(email, { sent: true, message: "验证码已发送，请检查收件箱和垃圾邮件。" });
+    renderVerificationForm(email, { sent: true, message: "账号已经创建，验证码已发送。请输入验证码完成激活。" });
   } catch (error) {
+    const email = payload.email;
     payload.password = "";
     payload.turnstile_token = "";
     const password = form.querySelector('input[name="password"]');
     const token = form.querySelector('input[name="turnstile_token"]');
     if (password) password.value = "";
     if (token) token.value = "";
+    if (error.code === "account_exists") {
+      goToLogin(email, "该邮箱账号已经存在。请直接登录；如果尚未完成邮箱验证，登录后会自动进入验证码步骤。");
+      return;
+    }
     if (authMessage) authMessage.textContent = error.message;
     globalThis.turnstile?.reset?.();
     if (button) { button.disabled = false; button.textContent = "创建账号"; }
@@ -157,8 +234,7 @@ async function submitVerificationCode(event, form) {
     await request("/api/auth/email/verify-code", { email, code });
     const codeInput = form.querySelector('input[name="code"]');
     if (codeInput) codeInput.value = "";
-    stopCountdown();
-    location.replace("/#/login");
+    goToLogin(email, "邮箱验证成功。请使用刚才设置的密码登录。");
   } catch (error) {
     const codeInput = form.querySelector('input[name="code"]');
     if (codeInput) { codeInput.value = ""; codeInput.focus(); }
@@ -190,6 +266,7 @@ if (authGate && authContent) {
 
   documentRef.addEventListener("submit", (event) => {
     const form = event.target;
+    if (form?.id === "email-login-form") return submitLogin(event, form);
     if (form?.id === "email-register-form") return submitRegistration(event, form);
     if (form?.id === "email-verification-code-form") return submitVerificationCode(event, form);
   }, true);
@@ -201,8 +278,7 @@ if (authGate && authContent) {
     event.stopImmediatePropagation();
     if (button.dataset.emailCodeAction === "resend") resendVerificationCode(button);
     if (button.dataset.emailCodeAction === "login") {
-      stopCountdown();
-      location.replace("/#/login");
+      goToLogin(verificationEmailFromLocation(), "请输入邮箱和密码登录。");
     }
   }, true);
 
