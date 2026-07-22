@@ -28,7 +28,7 @@ export function registrationPresentation(config = {}) {
       state: "open",
       showEmailDivider: githubEnabled,
       title: "邮箱注册已开放",
-      message: "邮箱注册需要完成人机验证并输入邮件中的 6 位验证码，验证后可以使用找回密码。",
+      message: "邮箱注册需要完成人机验证和邮件确认，并输入邮件中的 6 位验证码；验证后可以使用找回密码。",
     };
   }
 
