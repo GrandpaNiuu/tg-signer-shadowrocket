@@ -336,6 +336,10 @@ export function createEmailAuth(dependencies = {}) {
           throw new HttpError(401, "invalid_credentials", "邮箱或密码不正确。");
         }
         if (user.status !== "active" || (config.emailVerificationRequired && !user.email_verified_at)) {
+          if (config.registrationEnabled && !user.email_verified_at && ["pending", "active"].includes(user.status)) {
+            await issueVerificationCode({ repository, request, email, user, timestamp, config, randomToken, fetchImpl, env });
+            throw new HttpError(403, "email_verification_required", "请先输入邮箱收到的 6 位验证码完成验证。新的验证码已经发送。");
+          }
           throw new HttpError(403, "email_verification_required", "请先输入邮箱收到的 6 位验证码完成验证。");
         }
         return createSession(request, env, repository, user);
