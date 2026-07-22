@@ -1,3 +1,4 @@
+import { HttpError } from "./http.js";
 import { withPasswordRehash } from "./password-repository.js";
 
 function requiredRepository(repository) {
@@ -22,7 +23,7 @@ async function createVerificationToken(repository, token) {
       .bind(token.user_id),
     repository.db.prepare(`INSERT INTO auth_tokens
       (id, token_hash, user_id, token_type, expires_at, created_at)
-      VALUES (?, ?, ?, 'verify_email', ?, ?)`)
+      VALUES (?, ?, ?, 'verify_email', ?, ?)`) 
       .bind(token.id, token.token_hash, token.user_id, token.expires_at, token.created_at),
   ]);
 }
@@ -43,6 +44,38 @@ async function consumeVerificationToken(repository, tokenHash, timestamp) {
   await repository.db.prepare(`DELETE FROM auth_tokens
     WHERE user_id = ? AND token_type = 'verify_email'`).bind(user.id).run();
   return user;
+}
+
+function duplicateRegistrationError(user) {
+  const unverified = !user?.email_verified_at && ["pending", "active"].includes(user?.status);
+  if (unverified) {
+    return new HttpError(
+      409,
+      "account_pending_verification",
+      "该邮箱账号已经存在，不能重复注册。请返回登录，使用首次设置的密码继续验证；系统会重新发送验证码。",
+    );
+  }
+  return new HttpError(409, "account_exists", "该邮箱已注册，请直接登录或使用“忘记密码”。");
+}
+
+async function createPendingEmailUserOnce(repository, user, password) {
+  const normalized = String(user?.email_normalized || "").trim();
+  if (!normalized || typeof repository.getUserByEmail !== "function") {
+    return repository.createOrUpdatePendingEmailUser(user, password);
+  }
+
+  const existing = await repository.getUserByEmail(normalized);
+  if (existing) throw duplicateRegistrationError(existing);
+
+  try {
+    return await repository.createOrUpdatePendingEmailUser(user, password);
+  } catch (error) {
+    // A concurrent registration may win after the pre-check. Convert the unique
+    // database conflict into the same deterministic account-exists response.
+    const raced = await repository.getUserByEmail(normalized);
+    if (raced) throw duplicateRegistrationError(raced);
+    throw error;
+  }
 }
 
 async function existingGithubUser(repository, input) {
@@ -100,6 +133,19 @@ export function withEmailVerificationLifecycle(repository) {
   });
 }
 
+export function withEmailRegistrationUniqueness(repository) {
+  const target = requiredRepository(repository);
+  if (typeof target.createOrUpdatePendingEmailUser !== "function") return target;
+  return new Proxy(target, {
+    get(current, property) {
+      if (property === "createOrUpdatePendingEmailUser") {
+        return async (user, password) => createPendingEmailUserOnce(current, user, password);
+      }
+      return bindRepositoryMember(current, property);
+    },
+  });
+}
+
 export function withGithubProfilePersistence(repository) {
   const target = requiredRepository(repository);
   if (typeof target.upsertGithubUser !== "function") return target;
@@ -115,12 +161,15 @@ export function withGithubProfilePersistence(repository) {
 
 export function authenticationRepository(repository, now = () => new Date()) {
   const verified = withEmailVerificationLifecycle(requiredRepository(repository));
-  return withPasswordRehash(withGithubProfilePersistence(verified), now);
+  const uniqueRegistration = withEmailRegistrationUniqueness(verified);
+  return withPasswordRehash(withGithubProfilePersistence(uniqueRegistration), now);
 }
 
 export const __test = {
   consumeVerificationToken,
   createVerificationToken,
+  createPendingEmailUserOnce,
+  duplicateRegistrationError,
   customGithubDisplayName,
   existingGithubUser,
   upsertGithubUserPreservingDisplayName,
