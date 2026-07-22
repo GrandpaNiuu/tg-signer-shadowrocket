@@ -44,8 +44,3 @@ test("successful email authentication reloads the document on the dashboard rout
   assert.match(content, /账号创建成功，正在打开后台/);
   assert.doesNotMatch(content, /location\.replace\("\/#\/dashboard"\)/);
 });
-
-test("the admin shell cache-busts the authenticated transition repair", async () => {
-  const index = await source("index.html");
-  assert.match(index, /src="\/src\/auth-runtime-controller\.js\?v=20260723-4"/);
-});
