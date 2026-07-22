@@ -4,6 +4,7 @@ const authMessage = documentRef?.querySelector("#auth-message") || null;
 
 const COPY = Object.freeze({
   loginIntro: "输入注册邮箱和密码，并完成人机验证。连续多次失败后，系统会暂时限制尝试。",
+  loginProtection: "人机验证结果短时间内有效；验证过期后，请重新完成验证再提交。",
   registerIntro: "注册后可以绑定自己的 Telegram 账号，并单独管理定时消息、机器人操作和执行记录。不同用户的数据相互隔离。",
   passwordHelp: "至少 12 个字符。建议使用独立的长密码或多个无关词语组合，不要使用其他网站已经使用过的密码。",
   turnstileHelp: "请完成人机验证。验证结果短时间内有效；页面停留较久或验证过期后，需要重新完成验证。",
@@ -64,8 +65,8 @@ function updateSecureLoginNotice() {
   const content = notice?.querySelector("span:nth-child(2)");
   if (!content || content.dataset.authGuidanceUpdated === "true") return;
   const heading = documentRef.createElement("strong");
-  heading.textContent = "邮箱登录";
-  content.replaceChildren(heading, documentRef.createElement("br"), documentRef.createTextNode(COPY.loginIntro));
+  heading.textContent = "验证提示";
+  content.replaceChildren(heading, documentRef.createElement("br"), documentRef.createTextNode(COPY.loginProtection));
   content.dataset.authGuidanceUpdated = "true";
 }
 
