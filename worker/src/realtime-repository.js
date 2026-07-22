@@ -1,5 +1,8 @@
 import { HttpError } from "./http.js";
 
+export const REALTIME_HANDOFF_DELAY_SECONDS = 45;
+export const REALTIME_HANDOFF_TTL_SECONDS = 10 * 60;
+
 function requiredRepository(repository) {
   if (!repository || typeof repository !== "object") throw new Error("Repository is unavailable.");
   return repository;
@@ -8,6 +11,12 @@ function requiredRepository(repository) {
 function bindMember(target, property) {
   const value = Reflect.get(target, property, target);
   return typeof value === "function" ? value.bind(target) : value;
+}
+
+function isoOffset(timestamp, seconds) {
+  const value = Date.parse(timestamp);
+  if (!Number.isFinite(value)) throw new Error("Invalid realtime handoff timestamp.");
+  return new Date(value + seconds * 1_000).toISOString();
 }
 
 async function inspectionActive(repository, accountId, timestamp) {
@@ -24,6 +33,63 @@ async function realtimeRuleActive(repository, accountId) {
     JOIN users u ON u.id = r.user_id AND u.role = 'admin' AND u.status = 'active'
     WHERE r.account_id = ? AND r.enabled = 1 LIMIT 1`).bind(accountId).first();
   return Boolean(row?.active);
+}
+
+async function activeRealtimeHandoff(repository, accountId, timestamp) {
+  if (!repository.db?.prepare || !accountId) return null;
+  return repository.db.prepare(`SELECT h.account_id, h.task_run_id, h.ready_at, h.expires_at
+    FROM realtime_task_handoffs h
+    JOIN task_runs r ON r.id = h.task_run_id
+    WHERE h.account_id = ? AND h.expires_at > ?
+      AND r.status IN ('queued', 'claimed', 'running')
+    LIMIT 1`).bind(accountId, timestamp).first();
+}
+
+async function pendingRealtimeRun(repository, accountId) {
+  if (!repository.db?.prepare || !accountId) return null;
+  return repository.db.prepare(`SELECT r.id
+    FROM task_runs r
+    JOIN tasks t ON t.id = r.task_id
+    WHERE COALESCE(r.account_id_snapshot, t.account_id) = ?
+      AND r.status = 'queued' AND r.dispatch_status = 'pending'
+    ORDER BY r.scheduled_for, r.created_at, r.id
+    LIMIT 1`).bind(accountId).first();
+}
+
+export async function prepareRealtimeTaskHandoff(repository, accountId, timestamp) {
+  const target = requiredRepository(repository);
+  if (!await realtimeRuleActive(target, accountId)) {
+    return { realtime: false, ready: true, handoff: null };
+  }
+
+  let handoff = await activeRealtimeHandoff(target, accountId, timestamp);
+  if (!handoff) {
+    const pending = await pendingRealtimeRun(target, accountId);
+    if (!pending?.id) return { realtime: true, ready: false, handoff: null };
+
+    await target.db.prepare(`DELETE FROM realtime_task_handoffs
+      WHERE account_id = ? AND (
+        expires_at <= ? OR NOT EXISTS (
+          SELECT 1 FROM task_runs r
+          WHERE r.id = realtime_task_handoffs.task_run_id
+            AND r.status IN ('queued', 'claimed', 'running')
+        )
+      )`).bind(accountId, timestamp).run();
+
+    const readyAt = isoOffset(timestamp, REALTIME_HANDOFF_DELAY_SECONDS);
+    const expiresAt = isoOffset(timestamp, REALTIME_HANDOFF_TTL_SECONDS);
+    await target.db.prepare(`INSERT OR IGNORE INTO realtime_task_handoffs
+      (account_id, task_run_id, ready_at, expires_at, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)`)
+      .bind(accountId, pending.id, readyAt, expiresAt, timestamp, timestamp).run();
+    handoff = await activeRealtimeHandoff(target, accountId, timestamp);
+  }
+
+  return {
+    realtime: true,
+    ready: Boolean(handoff?.ready_at && handoff.ready_at <= timestamp),
+    handoff,
+  };
 }
 
 export async function findRealtimeTransitionBlockingRun(repository, accountId) {
@@ -69,6 +135,12 @@ async function cleanupRealtimeHistory(repository, timestamp) {
       .bind(cutoff(timestamp, 7)),
     repository.db.prepare("DELETE FROM listener_instances WHERE last_heartbeat_at < ?")
       .bind(cutoff(timestamp, 7)),
+    repository.db.prepare(`DELETE FROM realtime_task_handoffs
+      WHERE expires_at <= ? OR NOT EXISTS (
+        SELECT 1 FROM task_runs r
+        WHERE r.id = realtime_task_handoffs.task_run_id
+          AND r.status IN ('queued', 'claimed', 'running')
+      )`).bind(timestamp),
   ]);
   return true;
 }
@@ -81,7 +153,8 @@ export function withInspectionDispatchGuard(repository) {
       if (property === "reserveNextDispatch") {
         return async (accountId, timestamp) => {
           if (await inspectionActive(current, accountId, timestamp)) return null;
-          if (await realtimeRuleActive(current, accountId)) return null;
+          const handoff = await prepareRealtimeTaskHandoff(current, accountId, timestamp);
+          if (handoff.realtime && !handoff.ready) return null;
           return current.reserveNextDispatch(accountId, timestamp);
         };
       }
@@ -91,7 +164,8 @@ export function withInspectionDispatchGuard(repository) {
           const available = [];
           for (const accountId of candidates) {
             if (await inspectionActive(current, accountId, timestamp)) continue;
-            if (await realtimeRuleActive(current, accountId)) continue;
+            const handoff = await prepareRealtimeTaskHandoff(current, accountId, timestamp);
+            if (handoff.realtime && !handoff.ready) continue;
             available.push(accountId);
             if (available.length >= limit) break;
           }
@@ -121,8 +195,11 @@ export function withRealtimeMaintenance(repository) {
 }
 
 export const __test = {
+  activeRealtimeHandoff,
   cleanupRealtimeHistory,
   cutoff,
   inspectionActive,
+  isoOffset,
+  pendingRealtimeRun,
   realtimeRuleActive,
 };
