@@ -11,7 +11,14 @@ class D1StatementAdapter {
   }
 
   bind(...bindings) {
-    return new D1StatementAdapter(this.database, this.sql, bindings);
+    const normalized = bindings.map((value) => {
+      if (value instanceof ArrayBuffer) return new Uint8Array(value);
+      if (ArrayBuffer.isView(value)) {
+        return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+      }
+      return value;
+    });
+    return new D1StatementAdapter(this.database, this.sql, normalized);
   }
 
   async first() {

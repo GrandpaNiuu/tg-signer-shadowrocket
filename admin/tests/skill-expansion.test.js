@@ -111,3 +111,45 @@ test("content task help text is not rewritten when it is already current", () =>
   assert.equal(__test.setTextContentIfChanged(help, __test.PRESENTATIONS.send_media.formHelp), false);
   assert.equal(writes, 0);
 });
+
+test("direct file selection supports previews for images, video, voice, audio and documents", async () => {
+  assert.equal(__test.mediaKindForFile({ type: "image/jpeg", name: "photo.jpg" }), "photo");
+  assert.equal(__test.mediaKindForFile({ type: "video/mp4", name: "clip.mp4" }), "video");
+  assert.equal(__test.mediaKindForFile({ type: "audio/ogg", name: "voice.ogg" }), "audio");
+  assert.equal(__test.mediaKindForFile({ type: "application/pdf", name: "guide.pdf" }), "document");
+  assert.equal(__test.mediaPreviewKind({ type: "audio/ogg", name: "voice.ogg" }), "audio");
+  assert.equal(__test.mediaPreviewKind({ type: "application/pdf", name: "guide.pdf" }), "file");
+
+  const source = await readFile(sourceUrl, "utf8");
+  assert.match(source, /data-skill-media-file/);
+  assert.match(source, /data-skill-media-preview/);
+  assert.match(source, /直接选择图片、视频、语音、音频或文件/);
+  assert.match(source, /MEDIA_UPLOAD_MAX_BYTES/);
+  assert.match(source, /pendingSelectedFileSource/);
+  assert.match(source, /payload\.params = collectParams\(form, pendingSource\)[\s\S]*stageSelectedFile/);
+});
+
+test("direct uploads use stable Telegram source metadata once Listener staging completes", () => {
+  assert.deepEqual(validateExpandedParams("send_media", {
+    target: "@example_channel",
+    source_chat_id: "me",
+    source_message_id: 321,
+    source_name: "demo.mp4",
+    source_content_type: "video/mp4",
+    source_size_bytes: 1024,
+    source_kind: "video",
+    source_upload_id: "upload-12345678",
+  }), {
+    target: "@example_channel",
+    source_chat_id: "me",
+    source_message_id: 321,
+    source_name: "demo.mp4",
+    source_content_type: "video/mp4",
+    source_size_bytes: 1024,
+    source_kind: "video",
+    source_upload_id: "upload-12345678",
+    caption: null,
+    message_thread_id: null,
+    delete_after: null,
+  });
+});

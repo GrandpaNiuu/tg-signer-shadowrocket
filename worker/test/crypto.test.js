@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { decryptSecret, encryptSecret } from "../src/crypto.js";
+import { decryptBytes, decryptSecret, encryptBytes, encryptSecret } from "../src/crypto.js";
 
 const ROOT_KEY = Buffer.alloc(32, 7).toString("base64");
 
@@ -42,5 +42,25 @@ test("root key must be exactly 32 bytes", async () => {
       ownerId: "account-1",
     }),
     /32-byte/,
+  );
+});
+
+test("AES-256-GCM binary chunks round-trip without converting files to text", async () => {
+  const plaintext = Uint8Array.from([0, 1, 2, 127, 128, 254, 255]);
+  const encrypted = await encryptBytes(ROOT_KEY, plaintext, {
+    purpose: "media_upload_chunk:3",
+    ownerId: "upload-1",
+    keyVersion: 2,
+  });
+
+  assert.equal(encrypted.key_version, 2);
+  assert.ok(encrypted.ciphertext instanceof ArrayBuffer);
+  assert.notDeepEqual([...new Uint8Array(encrypted.ciphertext)], [...plaintext]);
+  assert.deepEqual(
+    [...await decryptBytes(ROOT_KEY, encrypted, {
+      purpose: "media_upload_chunk:3",
+      ownerId: "upload-1",
+    })],
+    [...plaintext],
   );
 });

@@ -3,6 +3,7 @@ import { HttpError } from "./http.js";
 const TARGET = /^(?:@[A-Za-z][A-Za-z0-9_]{4,31}|-?\d{1,20}|me|self)$/i;
 const ASSET_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,159}$/;
 const SKILLS = new Set(["send_text", "tg_signer", "send_media"]);
+const CONTENT_KINDS = new Set(["photo", "video", "audio", "voice", "animation", "video_note", "sticker", "document"]);
 
 function fail(fields) {
   throw new HttpError(422, "validation_failed", "Request validation failed.", {
@@ -73,7 +74,8 @@ export function normalizeSkillParams(skillKey, rawParams = {}, legacy = {}) {
   const source = Object.keys(params).length ? params : legacyJson(legacy.command, "command");
   const input = exact(source, [
     "target", "source_chat_id", "source_message_id", "file_id", "media_type",
-    "caption", "message_thread_id", "delete_after",
+    "caption", "message_thread_id", "delete_after", "source_name", "source_content_type",
+    "source_size_bytes", "source_kind", "source_upload_id",
   ], "params");
   const directSource = input.source_chat_id !== undefined || input.source_message_id !== undefined;
   const common = {
@@ -85,11 +87,21 @@ export function normalizeSkillParams(skillKey, rawParams = {}, legacy = {}) {
     delete_after: integer(input.delete_after ?? legacy.delete_after_seconds, "params.delete_after", { min: 0, max: 86400, nullable: true }),
   };
   if (directSource) {
-    return {
+    const direct = {
       ...common,
       source_chat_id: target(input.source_chat_id, "params.source_chat_id"),
       source_message_id: integer(input.source_message_id, "params.source_message_id", { min: 1, max: Number.MAX_SAFE_INTEGER }),
     };
+    if (input.source_name !== undefined) direct.source_name = text(input.source_name, "params.source_name", { max: 160 });
+    if (input.source_content_type !== undefined) direct.source_content_type = text(input.source_content_type, "params.source_content_type", { max: 120 });
+    if (input.source_size_bytes !== undefined) direct.source_size_bytes = integer(input.source_size_bytes, "params.source_size_bytes", { min: 1, max: 20 * 1024 * 1024 });
+    if (input.source_kind !== undefined) {
+      const contentKind = text(input.source_kind, "params.source_kind", { max: 20 });
+      if (!CONTENT_KINDS.has(contentKind)) fail(["params.source_kind"]);
+      direct.source_kind = contentKind;
+    }
+    if (input.source_upload_id !== undefined) direct.source_upload_id = text(input.source_upload_id, "params.source_upload_id", { max: 160 });
+    return direct;
   }
   const fileId = text(input.file_id, "params.file_id", { max: 160 });
   if (!ASSET_ID.test(fileId)) fail(["params.file_id"]);
@@ -107,7 +119,7 @@ export function taskPresentation(skillKey, params) {
   if (skillKey === "tg_signer") return { bot: "", command: params.task_name, thread_id: null, delete_after_seconds: null };
   if (skillKey === "send_media") {
     const source = params.source_chat_id !== undefined
-      ? `${params.source_chat_id} / 消息 ${params.source_message_id}`
+      ? params.source_name || `${params.source_chat_id} / 消息 ${params.source_message_id}`
       : `旧媒体 ${params.file_id}`;
     const caption = params.caption === null ? "" : params.caption === "" ? " · 移除原说明" : ` · ${params.caption}`;
     return {

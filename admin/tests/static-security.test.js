@@ -26,6 +26,8 @@ test("browser code does not persist data or use inline executable content", asyn
   assert.equal(/\son[a-z]+=/.test(html), false);
   assert.match(headers, /Content-Security-Policy:/);
   assert.doesNotMatch(headers, /unsafe-inline|unsafe-eval/);
+  assert.match(headers, /img-src[^;]*blob:/);
+  assert.match(headers, /media-src[^;]*blob:/);
 });
 
 test("account edit controls never render stored credentials and support explicit clears", async () => {

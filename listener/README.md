@@ -6,6 +6,7 @@
 - 管理员账号连接检测；
 - 管理员 24 小时关键词自动回复；
 - 管理员全天候群消息监听；
+- 把网页直接选择的图片、视频、语音、音频和文件暂存到所选账号的 Telegram“收藏夹”；
 - 执行启用了实时规则的管理员账号自身的定时消息、签到和审核通过的 Skill。
 
 GitHub Actions 继续负责普通账号短任务、Telegram 手机号登录和部署；Listener 需要在一台长期在线的 VPS 上运行。实时账号的任务不会再派发给 GitHub Actions，从而避免两个执行器同时使用同一 Telegram Session。
@@ -93,6 +94,7 @@ LISTENER_SYNC_SECONDS=30
 LISTENER_HEARTBEAT_SECONDS=60
 LISTENER_INSPECTION_SECONDS=4
 LISTENER_TASK_SECONDS=2
+LISTENER_MEDIA_UPLOAD_SECONDS=2
 ```
 
 每个同时在线的 Listener 必须使用不同且稳定的 `LISTENER_INSTANCE_ID`。不要在容器重启时随机生成实例编号。
@@ -210,6 +212,7 @@ Listener 心跳正常时会显示“在线”。创建实时规则前，账号�
 - 配置默认每 30 秒同步一次；待命实例不会建立 Telegram 实时账号连接，也不会领取识别任务或定时任务。
 - 识别任务默认每 4 秒轮询一次。
 - 实时账号排队任务默认每 2 秒检查一次，但只会领取接近计划时间的运行。
+- 网页文件暂存默认每 2 秒检查一次；Listener 成功存入 Telegram“收藏夹”后，Worker 会立即删除 D1 中的加密文件分块。
 - 规则更新后通常在 30 秒内生效。
 - 定时任务执行期间，该账号的实时连接会短暂停止，执行完成后自动恢复。
 - Listener 重启期间不会处理新消息；恢复后不会补处理离线期间所有历史消息。未过期的排队任务仍可继续领取。

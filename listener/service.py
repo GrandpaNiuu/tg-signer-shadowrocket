@@ -10,6 +10,7 @@ from pyrogram.handlers import MessageHandler
 from listener import __version__
 from listener.inspection import inspect_bot_operation
 from listener.manager import ManagedAccount, RealtimeManager
+from listener.media_upload import stage_media_upload
 from listener.task_execution import execute_claimed_task
 from listener.telegram_runtime import build_client, stop_client
 from listener.worker_client import ListenerWorkerClient
@@ -32,6 +33,7 @@ class ListenerService:
         heartbeat_interval: int = 60,
         inspection_interval: int = 4,
         task_interval: int = 2,
+        media_upload_interval: int = 2,
     ) -> None:
         self.worker = worker
         self.instance_id = instance_id
@@ -40,6 +42,7 @@ class ListenerService:
         self.heartbeat_interval = heartbeat_interval
         self.inspection_interval = inspection_interval
         self.task_interval = task_interval
+        self.media_upload_interval = media_upload_interval
         self.started_at = utc_now()
         self.stop_event = asyncio.Event()
         self.manager = RealtimeManager(worker)
@@ -202,6 +205,45 @@ class ListenerService:
             except asyncio.TimeoutError:
                 pass
 
+    async def _execute_media_upload(self, job: dict[str, Any]) -> None:
+        upload = dict(job.get("upload") or {})
+        account = dict(job.get("account") or {})
+        upload_id = str(upload.get("id") or "")
+        account_id = str(account.get("id") or "")
+        if not upload_id or not account_id:
+            LOGGER.warning("Media upload claim is missing upload or account id")
+            return
+        async with self.manager_lock:
+            try:
+                await stage_media_upload(
+                    job,
+                    self.worker,
+                    existing_client=self.manager.client_for(account_id),
+                )
+                LOGGER.info("Media upload %s was staged in Telegram Saved Messages", upload_id)
+            except Exception as exc:
+                self.manager.last_error = f"media_upload:{upload_id}:{type(exc).__name__}"
+                LOGGER.warning("Media upload %s failed: %s", upload_id, type(exc).__name__)
+
+    async def media_upload_loop(self) -> None:
+        while not self.stop_event.is_set():
+            try:
+                if not self.is_leader:
+                    await asyncio.wait_for(self.stop_event.wait(), timeout=self.media_upload_interval)
+                    continue
+                job = await self.worker.claim_media_upload(self.instance_id)
+                if job:
+                    await self._execute_media_upload(job)
+                    continue
+            except asyncio.TimeoutError:
+                pass
+            except Exception as exc:
+                LOGGER.warning("Media upload polling failed: %s", exc)
+            try:
+                await asyncio.wait_for(self.stop_event.wait(), timeout=self.media_upload_interval)
+            except asyncio.TimeoutError:
+                pass
+
     async def run(self) -> None:
         LOGGER.info("Starting listener instance %s", self.instance_id)
         tasks = [
@@ -209,6 +251,7 @@ class ListenerService:
             asyncio.create_task(self.heartbeat_loop()),
             asyncio.create_task(self.inspection_loop()),
             asyncio.create_task(self.task_loop()),
+            asyncio.create_task(self.media_upload_loop()),
         ]
         await self.stop_event.wait()
         for task in tasks:

@@ -3,6 +3,7 @@ import { createAdminAuth } from "./admin-auth.js";
 import { verifyRunnerRequest } from "./auth.js";
 import { errorResponse, json } from "./http.js";
 import { handleListenerTaskApi } from "./listener-task-api.js";
+import { handleListenerMediaUploadApi, handleWorkspaceMediaUploadApi } from "./media-upload-api.js";
 import { handlePlatformAccountHealthApi } from "./platform-account-health.js";
 import { handleProfileBrandingApi, handlePublicBrandingApi } from "./profile-branding.js";
 import { createD1Repository } from "./repository.js";
@@ -170,6 +171,14 @@ export function createWorker(dependencies = {}) {
             fetch: fetchImpl,
           }), requestId);
         }
+        if (url.pathname.startsWith("/api/listener/v1/media-uploads")) {
+          const repository = repositoryFactory(env);
+          return await withRequestId(await handleListenerMediaUploadApi(request, env, repository, {
+            uuid,
+            now,
+            fetch: fetchImpl,
+          }), requestId);
+        }
         if (url.pathname.startsWith("/api/listener/v1/")) {
           const repository = repositoryFactory(env);
           return await withRequestId(await handleListenerApi(request, env, repository, { fetch: fetchImpl }), requestId);
@@ -203,6 +212,8 @@ export function createWorker(dependencies = {}) {
           const platformHealthResponse = await handlePlatformAccountHealthApi(request, env, repository, context);
           if (platformHealthResponse) return await withRequestId(platformHealthResponse, requestId);
           const userRepository = adminWorkspaceRepository(repository, identity);
+          const mediaUploadResponse = await handleWorkspaceMediaUploadApi(request, env, userRepository, context);
+          if (mediaUploadResponse) return await withRequestId(mediaUploadResponse, requestId);
           const realtimeResponse = await handleWorkspaceRealtimeApi(request, env, userRepository, context);
           if (realtimeResponse) return await withRequestId(realtimeResponse, requestId);
           const skillTaskResponse = await handleSkillTaskApi(request, env, userRepository, context);

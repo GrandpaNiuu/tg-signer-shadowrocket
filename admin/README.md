@@ -15,7 +15,7 @@
 
 - **概览**：今日执行、成功、失败、进行中、最近运行和脱敏日志。
 - **Telegram 账号**：网页只提供手机号登录；依次完成验证码和可选二步验证。Session 导入与代理配置不再作为普通用户入口。
-- **自动消息任务**：账号、Skill、目标、消息或命令、Cron、Retry、Timeout、Thread、Delete After、启停、复制和手动执行。
+- **自动消息任务**：账号、Skill、目标、消息或命令、Cron、Retry、Timeout、Thread、Delete After、启停、复制和手动执行。“定时发送任意内容”可直接选择并预览图片、视频、语音、音频或文件，也兼容 Telegram 消息链接。
 - **Skills**：只读展示 Worker 中已经部署的代码白名单；网页不能上传任意 Python 或 Shell 代码。
 - **执行记录**：查看手动与定时运行、状态、计划时间、调度偏差、耗时、重试和脱敏日志。
 - **登录会话**：查看当前网页账号的会话并撤销其他会话。
@@ -98,6 +98,7 @@ npm test --prefix admin
 - `/accounts/validate-all`
 - `/login-flows`
 - `/tasks` 与 `/tasks/{id}/runs`
+- `/media-uploads`（最多 20 MB 的加密短期中转，完成 Telegram 暂存后自动清理文件分块）
 - `/skills`
 - `/task-runs`
 - `/admin/users`

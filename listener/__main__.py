@@ -36,6 +36,7 @@ async def run() -> None:
         heartbeat_interval=max(20, int(os.environ.get("LISTENER_HEARTBEAT_SECONDS", "60"))),
         inspection_interval=max(2, int(os.environ.get("LISTENER_INSPECTION_SECONDS", "4"))),
         task_interval=max(1, int(os.environ.get("LISTENER_TASK_SECONDS", "2"))),
+        media_upload_interval=max(1, int(os.environ.get("LISTENER_MEDIA_UPLOAD_SECONDS", "2"))),
     )
     loop = asyncio.get_running_loop()
     for signal_name in (signal.SIGINT, signal.SIGTERM):

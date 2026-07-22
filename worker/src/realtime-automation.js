@@ -363,7 +363,7 @@ async function secureEqual(left, right) {
   return different === 0;
 }
 
-async function verifyListener(request, env) {
+export async function verifyListener(request, env) {
   const configured = String(env.LISTENER_API_TOKEN || "").trim();
   if (configured.length < 32) {
     throw new HttpError(503, "listener_not_configured", "常驻 Listener 尚未配置。" );
@@ -390,7 +390,7 @@ async function plaintext(repository, env, secretId, purpose, ownerId, { required
   return decryptSecret(rootKey, secret, { purpose, ownerId });
 }
 
-async function listenerAccount(repository, env, accountId) {
+export async function listenerAccount(repository, env, accountId) {
   const account = await repository.db.prepare(`SELECT id, user_id, name, status, enabled, session_secret_id,
     api_id_secret_id, api_hash_secret_id, proxy_secret_id FROM accounts WHERE id = ?`).bind(accountId).first();
   if (!account || account.status !== "connected" || !account.enabled) {

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -123,3 +124,60 @@ class ListenerWorkerClient:
 
     async def record_event(self, payload: dict[str, Any]) -> None:
         await self._request("POST", "/api/listener/v1/events", json=payload)
+
+    async def claim_media_upload(self, instance_id: str) -> dict[str, Any] | None:
+        value = await self._request(
+            "POST",
+            "/api/listener/v1/media-uploads/claim",
+            json={"instance_id": instance_id},
+        )
+        return value if isinstance(value, dict) else None
+
+    async def download_media_upload(self, upload_id: str, target: Path, *, expected_size: int) -> None:
+        received = 0
+        try:
+            async with self._client.stream(
+                "GET",
+                f"/api/listener/v1/media-uploads/{upload_id}/content",
+            ) as response:
+                if response.status_code < 200 or response.status_code >= 300:
+                    raise WorkerClientError(f"Worker returned HTTP {response.status_code}")
+                with target.open("wb") as handle:
+                    async for chunk in response.aiter_bytes():
+                        received += len(chunk)
+                        if expected_size > 0 and received > expected_size:
+                            raise WorkerClientError("Worker returned an oversized media upload")
+                        handle.write(chunk)
+        except (httpx.HTTPError, asyncio.TimeoutError, OSError) as exc:
+            raise WorkerClientError(f"Media download failed: {type(exc).__name__}") from exc
+        if expected_size < 1 or received != expected_size:
+            try:
+                target.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise WorkerClientError("Worker returned an incomplete media upload")
+
+    async def complete_media_upload(
+        self,
+        upload_id: str,
+        *,
+        status: str,
+        source_message_id: int | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+    ) -> None:
+        payload: dict[str, Any] = {
+            "instance_id": self.instance_id,
+            "status": status,
+        }
+        if source_message_id is not None:
+            payload["source_message_id"] = source_message_id
+        if error_code:
+            payload["error_code"] = error_code
+        if error_message:
+            payload["error_message"] = error_message
+        await self._request(
+            "POST",
+            f"/api/listener/v1/media-uploads/{upload_id}/complete",
+            json=payload,
+        )
