@@ -40,7 +40,10 @@ test("Turnstile accepts the configured frontend hostname and expected action", a
 
 test("Turnstile accepts the actual browser origin when the API runs on another hostname", async () => {
   const aliasRequest = new Request("https://tg-signer-shadowrocket.q3j1h8.workers.dev/api/auth/email/login", {
-    headers: { origin: "https://preview.example.pages.dev" },
+    headers: {
+      "cf-connecting-ip": "203.0.113.10",
+      origin: "https://preview.example.pages.dev",
+    },
   });
   const result = await verifyTurnstileToken({
     request: aliasRequest,
