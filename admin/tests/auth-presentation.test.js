@@ -39,7 +39,7 @@ test("current production state is presented as GitHub registration, not a broken
   });
 });
 
-test("verified email registration explains capabilities and verification requirements", () => {
+test("verified email registration explains the required next step", () => {
   const presentation = registrationPresentation({
     github_enabled: true,
     email_enabled: true,
@@ -50,11 +50,12 @@ test("verified email registration explains capabilities and verification require
   });
   assert.equal(presentation.state, "open");
   assert.equal(presentation.showEmailDivider, true);
-  assert.match(presentation.message, /独立管理定时消息、机器人操作和执行记录/);
-  assert.match(presentation.message, /人机验证和 6 位邮件验证码/);
+  assert.equal(presentation.title, "注册验证");
+  assert.match(presentation.message, /6 位验证码/);
+  assert.match(presentation.message, /验证成功后才能登录/);
 });
 
-test("login guidance uses user-facing instructions instead of configuration status", () => {
+test("login guidance uses user-facing instructions instead of configuration jargon", () => {
   assert.equal(loginSecurityMessage({
     email_enabled: true,
     security_setup_required: true,
@@ -64,6 +65,6 @@ test("login guidance uses user-facing instructions instead of configuration stat
     registration_enabled: true,
     email_verification_required: true,
     password_reset_enabled: true,
-  }), "输入注册邮箱和密码，并完成人机验证。连续多次失败后，系统会暂时限制尝试。");
+  }), "登录需要完成人机验证；连续多次失败后，系统会暂时限制尝试。");
   assert.equal(loginSecurityMessage({ email_enabled: false }), null);
 });
