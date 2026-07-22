@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { encryptSecret } from "../src/crypto.js";
-import { discoverNotificationChats, sendRunNotification, sendTestNotification, __test } from "../src/notifications.js";
+import {
+  discoverNotificationChats,
+  sendRealtimeNotification,
+  sendRunNotification,
+  sendTestNotification,
+  __test,
+} from "../src/notifications.js";
 
 const ROOT_KEY = Buffer.alloc(32, 23).toString("base64");
 const BOT_TOKEN = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd";
@@ -48,12 +54,15 @@ test("failed run notification identifies user, Telegram account, content, and pr
         account_id: "account-1",
         task_name: "音乐积分签到",
         account_name: "主账号",
+        skill_key: "tg_signer",
+        skill_name: "机器人按钮签到",
         bot: "@music_points_bot",
         command: "/checkin",
         status: "failed",
         trigger_type: "scheduled",
         duration_ms: 8313,
         attempt_count: 1,
+        max_attempts: 2,
         github_run_id: "987654321",
         error_message: "机器人暂时没有响应",
         logs: [
@@ -81,12 +90,15 @@ test("failed run notification identifies user, Telegram account, content, and pr
   assert.equal(captured.body.disable_web_page_preview, true);
   assert.match(captured.body.text, /任务执行失败/);
   assert.match(captured.body.text, /任务：<\/b>音乐积分签到/);
+  assert.match(captured.body.text, /类型：<\/b>机器人按钮签到/);
   assert.match(captured.body.text, /用户：<\/b>小明/);
   assert.match(captured.body.text, /Telegram：<\/b>主账号（@xiaoming_tg）/);
   assert.doesNotMatch(captured.body.text, /执行编号|run-1-audit-20260721/);
   assert.match(captured.body.text, /目标：<\/b>@music_points_bot/);
   assert.match(captured.body.text, /任务消息：<\/b><code>\/checkin<\/code>/);
   assert.match(captured.body.text, /耗时：<\/b>8\.3 秒/);
+  assert.match(captured.body.text, /执行方式：<\/b>定时执行/);
+  assert.match(captured.body.text, /尝试：<\/b>1 \/ 2 次/);
   assert.match(captured.body.text, /原因：<\/b>机器人暂时没有响应/);
   assert.doesNotMatch(captured.body.text, /GitHub Actions|TgCrypto|task_started|accidental token/);
   assert.equal(captured.body.text.includes(BOT_TOKEN), false);
@@ -124,11 +136,16 @@ test("successful task broadcasts show the Telegram account instead of an executi
         account_id: "account-2",
         task_name: "开户积分签到",
         account_name: "备用账号",
+        skill_key: "send_text",
+        skill_name: "发送一次消息或命令",
         bot: "@points_bot",
         command: "领取今日积分",
         status: "success",
         trigger_type: "manual",
         duration_ms: 8373,
+        attempt_count: 1,
+        max_attempts: 1,
+        result: { delivered: true },
         github_run_id: "123456789",
         logs: [{ level: "info", message: "very long success log" }],
       };
@@ -146,13 +163,17 @@ test("successful task broadcasts show the Telegram account instead of an executi
 
   assert.match(message.text, /任务执行成功/);
   assert.match(message.text, /任务：<\/b>开户积分签到/);
+  assert.match(message.text, /类型：<\/b>发送文字或命令/);
   assert.match(message.text, /用户：<\/b>小红/);
   assert.match(message.text, /Telegram：<\/b>备用账号（\+86\*{7}5678）/);
   assert.doesNotMatch(message.text, /执行编号|run-2-audit-20260721/);
   assert.match(message.text, /目标：<\/b>@points_bot/);
   assert.match(message.text, /任务消息：<\/b><code>领取今日积分<\/code>/);
   assert.match(message.text, /耗时：<\/b>8\.4 秒/);
-  assert.doesNotMatch(message.text, /手动执行|very long success log|日志|https:\/\/|查看执行详情/);
+  assert.match(message.text, /执行方式：<\/b>手动执行/);
+  assert.match(message.text, /尝试：<\/b>1 \/ 1 次/);
+  assert.match(message.text, /执行反馈：<\/b>消息已送达/);
+  assert.doesNotMatch(message.text, /very long success log|日志|https:\/\//);
   assert.deepEqual(message.reply_markup, {
     inline_keyboard: [[{
       text: "查看执行详情",
@@ -166,6 +187,13 @@ test("Telegram account labels prefer username, then masked phone, then display n
   assert.equal(__test.telegramAccountLabel({ phone_masked: "+86*******0001" }, { account_name: "备用账号" }), "备用账号（+86*******0001）");
   assert.equal(__test.telegramAccountLabel({ telegram_display_name: "Grandpa" }, {}), "Grandpa");
   assert.equal(__test.telegramAccountLabel(null, { account_name: "历史账号" }), "历史账号");
+});
+
+test("arbitrary Telegram content receipts describe the actual copied content", () => {
+  assert.equal(__test.resultFeedback({
+    status: "success",
+    result: { content_type: "voice", content_preview: "今日语音通知" },
+  }, []), "已发送 语音：今日语音通知");
 });
 
 test("long task messages show both ends, length, and redacted sensitive values", () => {
@@ -190,6 +218,44 @@ test("disabled notifications do not read secrets or call Telegram", async () => 
     assert.fail("Telegram must not be called");
   }, "run-1");
   assert.deepEqual(result, { sent: false, reason: "disabled" });
+});
+
+test("realtime rule notifications report what was heard and what was replied", async () => {
+  const secrets = new Map([
+    ["bot_token", await secret("bot_token", BOT_TOKEN)],
+    ["chat_id", await secret("chat_id", CHAT_ID)],
+  ]);
+  const repository = {
+    async getSettings() { return { notifications_enabled: true }; },
+    async getSecretByOwnerPurpose(_ownerType, _ownerId, purpose) { return secrets.get(purpose); },
+  };
+  let message;
+  const result = await sendRealtimeNotification({ SECRET_ROOT_KEY: ROOT_KEY }, repository, async (_url, init) => {
+    message = JSON.parse(init.body);
+    return new Response(null, { status: 200 });
+  }, {
+    event_kind: "keyword_replied",
+    user_name: "客户甲",
+    rule_name: "价格咨询回复",
+    rule_kind: "keyword_reply",
+    account_name: "客服账号",
+    chat_id: "-1001234",
+    sender_id: "9988",
+    message_preview: `价格是多少？ token=${BOT_TOKEN}`,
+    action_summary: "已发送：请联系管理员。",
+    created_at: "2026-07-22T06:00:00.000Z",
+  });
+
+  assert.deepEqual(result, { sent: true, reason: null });
+  assert.match(message.text, /自动回复已发送/);
+  assert.match(message.text, /规则：<\/b>价格咨询回复/);
+  assert.match(message.text, /用户：<\/b>客户甲/);
+  assert.match(message.text, /类型：<\/b>关键词自动回复/);
+  assert.match(message.text, /Telegram：<\/b>客服账号/);
+  assert.match(message.text, /收到：<\/b><code>价格是多少？/);
+  assert.match(message.text, /处理：<\/b>已发送：请联系管理员。/);
+  assert.equal(message.text.includes(BOT_TOKEN), false);
+  assert.equal(message.text.includes(CHAT_ID), false);
 });
 
 test("notification setup discovers deduplicated Telegram chats without exposing the token", async () => {

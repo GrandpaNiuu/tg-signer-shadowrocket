@@ -95,6 +95,15 @@ function statusPresentation(status) {
   })[status] || { icon: "ℹ️", title: "任务状态已更新" };
 }
 
+function skillPresentation(run) {
+  const builtIn = ({
+    send_text: "发送文字或命令",
+    tg_signer: "机器人按钮签到",
+    send_media: "发送任意内容",
+  })[run?.skill_key];
+  return builtIn || String(run?.skill_name || run?.skill_key || "未知任务类型").trim();
+}
+
 function userLabel(user, run) {
   return user?.display_name || user?.email || user?.github_login || run.user_id || "未知用户";
 }
@@ -136,6 +145,26 @@ function taskMessageAudit(value, secrets, { headLength = 360, tailLength = 160 }
   };
 }
 
+function resultFeedback(run, secrets) {
+  const result = run?.result && typeof run.result === "object" && !Array.isArray(run.result) ? run.result : {};
+  if (result.content_type) {
+    const type = compactAuditText(({
+      text: "文字", photo: "图片", video: "视频", document: "文件", audio: "音频",
+      voice: "语音", animation: "动图", sticker: "贴纸", video_note: "视频消息",
+      poll: "投票", contact: "联系人", location: "位置", venue: "地点",
+      game: "游戏", invoice: "账单", story: "故事",
+    })[result.content_type] || result.content_type, secrets, 40);
+    const preview = compactAuditText(result.content_preview, secrets, 360);
+    return preview === "未记录" ? `已发送 ${type}` : `已发送 ${type}：${preview}`;
+  }
+  if (result.matched_reply) return `机器人回复：${compactAuditText(result.matched_reply, secrets, 360)}`;
+  if (result.button_clicked) return result.success_confirmed ? "按钮已点击，且机器人回复已确认成功" : "按钮已点击";
+  if (result.delivered || result.sent) return "消息已送达";
+  if (result.completed) return "任务流程已完成";
+  if (run?.status === "success") return "执行成功";
+  return run?.error_message ? "执行失败，详情见下方原因" : "执行结果已记录";
+}
+
 export async function sendRunNotification(env, repository, fetchImpl, runId) {
   const settings = await repository.getSettings();
   if (settings.notifications_enabled !== true) return { sent: false, reason: "disabled" };
@@ -158,28 +187,34 @@ export async function sendRunNotification(env, repository, fetchImpl, runId) {
   const presentation = statusPresentation(run.status);
   const actionsUrl = githubActionsUrl(env, run);
   const taskName = compactAuditText(run.task_name || run.task_id || "已删除任务", knownSecrets, 160);
-  const target = compactAuditText(run.bot, knownSecrets, 180);
-  const taskMessage = taskMessageAudit(run.command, knownSecrets);
+  const target = compactAuditText(run.bot || run.result?.target, knownSecrets, 180);
+  const taskMessage = taskMessageAudit(run.result?.task_message || run.command, knownSecrets);
   const accountName = compactAuditText(telegramAccountLabel(account, run), knownSecrets, 180);
   const errorMessage = run.error_message ? redactKnownSecrets(run.error_message, knownSecrets) : null;
   const logTail = run.status === "success" ? null : sanitizedLogTail(run.logs, knownSecrets);
-  const attempts = Number(run.attempt_count || 0);
+  const attempts = Math.max(0, Number(run.attempt_count || 0));
+  const maxAttempts = Math.max(attempts, Number(run.max_attempts || Number(run.retry || 0) + 1));
   const trigger = run.trigger_type === "manual" ? "手动执行" : "定时执行";
   const isSuccess = run.status === "success";
+  const skill = compactAuditText(skillPresentation(run), knownSecrets, 120);
+  const feedback = compactAuditText(resultFeedback(run, knownSecrets), knownSecrets, 420);
+  const owner = compactAuditText(userLabel(user, run), knownSecrets, 180);
 
   const lines = [
     `${presentation.icon} <b>${presentation.title}</b>`,
     "",
     `<b>任务：</b>${escapeHtml(taskName)}`,
-    `<b>用户：</b>${escapeHtml(userLabel(user, run))}`,
+    `<b>类型：</b>${escapeHtml(skill)}`,
+    `<b>用户：</b>${escapeHtml(owner)}`,
     `<b>Telegram：</b>${escapeHtml(accountName)}`,
     `<b>目标：</b>${escapeHtml(target)}`,
     `<b>任务消息：</b><code>${escapeHtml(taskMessage.text)}</code>`,
     ...(taskMessage.truncated ? [`<b>消息长度：</b>${taskMessage.length} 字符（已显示首尾）`] : []),
+    `<b>执行反馈：</b>${escapeHtml(feedback)}`,
+    `<b>执行方式：</b>${trigger}`,
     `<b>耗时：</b>${durationLabel(run.duration_ms)}`,
+    `<b>尝试：</b>${attempts} / ${maxAttempts} 次`,
     ...(!isSuccess ? [
-      `<b>方式：</b>${trigger}`,
-      ...(attempts > 1 ? [`<b>尝试：</b>${attempts} 次`] : []),
       ...(errorMessage ? ["", `<b>原因：</b>${escapeHtml(sanitizeLogText(errorMessage, { maxLines: 1, maxLength: 240 }))}`] : []),
       ...(logTail && !errorMessage ? ["", `<b>诊断：</b>${escapeHtml(logTail)}`] : []),
       ...(actionsUrl ? ["", "可点击下方按钮查看完整执行详情。"] : []),
@@ -198,6 +233,58 @@ export async function sendRunNotification(env, repository, fetchImpl, runId) {
     } : {}),
   };
   const response = await telegramBotRequest(fetchImpl, token, "sendMessage", body);
+  return { sent: response.ok, reason: response.ok ? null : `http_${response.status}` };
+}
+
+function realtimePresentation(kind) {
+  return ({
+    keyword_replied: { icon: "💬", title: "自动回复已发送" },
+    message_observed: { icon: "👂", title: "消息监控命中" },
+    listener_error: { icon: "❌", title: "实时自动化异常" },
+  })[kind] || { icon: "ℹ️", title: "实时自动化事件" };
+}
+
+function realtimeKindLabel(kind) {
+  return ({
+    keyword_reply: "关键词自动回复",
+    group_monitor: "消息监控",
+  })[kind] || "实时自动化";
+}
+
+export async function sendRealtimeNotification(env, repository, fetchImpl, event) {
+  const settings = await repository.getSettings();
+  if (settings.notifications_enabled !== true) return { sent: false, reason: "disabled" };
+  const { token, chatId } = await notificationCredentials(repository, env);
+  if (!token || !chatId) return { sent: false, reason: "not_configured" };
+
+  const knownSecrets = [token, chatId];
+  const presentation = realtimePresentation(event?.event_kind);
+  const ruleName = compactAuditText(event?.rule_name || "实时自动化规则", knownSecrets, 160);
+  const owner = compactAuditText(event?.user_name || event?.user_id || "未记录", knownSecrets, 160);
+  const ruleType = compactAuditText(realtimeKindLabel(event?.rule_kind), knownSecrets, 120);
+  const accountName = compactAuditText(event?.account_name || "未记录", knownSecrets, 160);
+  const chat = compactAuditText(event?.chat_id || "未记录", knownSecrets, 80);
+  const sender = compactAuditText(event?.sender_id || "未记录", knownSecrets, 80);
+  const preview = compactAuditText(event?.message_preview || "未记录", knownSecrets, 360);
+  const action = compactAuditText(event?.action_summary || "已记录命中事件", knownSecrets, 300);
+  const lines = [
+    `${presentation.icon} <b>${presentation.title}</b>`,
+    "",
+    `<b>规则：</b>${escapeHtml(ruleName)}`,
+    `<b>类型：</b>${escapeHtml(ruleType)}`,
+    `<b>用户：</b>${escapeHtml(owner)}`,
+    `<b>Telegram：</b>${escapeHtml(accountName)}`,
+    `<b>会话：</b>${escapeHtml(chat)}`,
+    `<b>发送者：</b>${escapeHtml(sender)}`,
+    `<b>收到：</b><code>${escapeHtml(preview)}</code>`,
+    `<b>处理：</b>${escapeHtml(action)}`,
+  ];
+  const response = await telegramBotRequest(fetchImpl, token, "sendMessage", {
+    chat_id: chatId,
+    text: lines.join("\n"),
+    parse_mode: "HTML",
+    disable_web_page_preview: true,
+  });
   return { sent: response.ok, reason: response.ok ? null : `http_${response.status}` };
 }
 
@@ -274,6 +361,10 @@ export const __test = {
   redactKnownSecrets,
   sanitizedLogTail,
   statusPresentation,
+  realtimePresentation,
+  realtimeKindLabel,
+  resultFeedback,
+  skillPresentation,
   taskMessageAudit,
   telegramAccountLabel,
 };

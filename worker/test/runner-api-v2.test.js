@@ -41,6 +41,30 @@ test("claim enrichment resolves only workspace-owned media assets", async () => 
   assert.equal(payload.task.params._source_message_id, 77);
 });
 
+test("direct Telegram content claims bypass the legacy media registry", async () => {
+  const repository = {
+    async getExecution() {
+      return {
+        user_id: "user-1",
+        skill_key: "send_media",
+        params_json_snapshot: JSON.stringify({
+          target: "@target_bot",
+          source_chat_id: "me",
+          source_message_id: 42,
+          caption: null,
+          message_thread_id: null,
+          delete_after: null,
+        }),
+      };
+    },
+    db: { prepare() { assert.fail("direct content must not query media_assets"); } },
+  };
+  const payload = await __test.enrichClaim({ task: { skill: "send_media", params: {} } }, "run-1", repository);
+  assert.equal(payload.task.params.source_chat_id, "me");
+  assert.equal(payload.task.params.source_message_id, 42);
+  assert.equal(payload.task.params._source_error, undefined);
+});
+
 test("retired Skill claims are rejected before Runner execution", async () => {
   for (const skill of ["account_audit", "bot_flow", "chat_snapshot"]) {
     const repository = {

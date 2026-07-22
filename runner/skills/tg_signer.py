@@ -113,6 +113,7 @@ class TgSignerSkill(Skill):
         await signer.login(num_of_dialogs=1, print_chat=False)
         target = normalize_target(flow["target"])
         text = flow["text"]
+        audit = {"target": target, "task_message": text[:500]}
         button_text = flow["button_text"]
         success_keywords = flow["success_keywords"]
         wait_seconds = flow["wait_seconds"]
@@ -125,7 +126,7 @@ class TgSignerSkill(Skill):
             )
             sent_id = message_id(sent)
             if not button_text and not success_keywords:
-                return {"sent": True, "button_clicked": False, "success_confirmed": False}
+                return {**audit, "sent": True, "button_clicked": False, "success_confirmed": False}
 
             loop = asyncio.get_running_loop()
             deadline = loop.time() + wait_seconds
@@ -138,6 +139,7 @@ class TgSignerSkill(Skill):
                     current_text = message_text(message)
                     if success_keywords and contains_any(current_text, success_keywords):
                         return {
+                            **audit,
                             "sent": True,
                             "button_clicked": clicked,
                             "success_confirmed": True,
@@ -150,6 +152,7 @@ class TgSignerSkill(Skill):
                                 clicked = True
                                 if not success_keywords:
                                     return {
+                                        **audit,
                                         "sent": True,
                                         "button_clicked": True,
                                         "success_confirmed": False,

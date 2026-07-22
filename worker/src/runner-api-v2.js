@@ -33,7 +33,7 @@ async function enrichClaim(payload, runId, repository) {
       if (payload?.task?.params?.[key] !== undefined) baseParams[key] = payload.task.params[key];
     }
   }
-  if (skillKey === "send_media") {
+  if (skillKey === "send_media" && baseParams.file_id) {
     try {
       const asset = await repository.db.prepare(`SELECT id, media_type, source_chat_id, source_message_id
         FROM media_assets WHERE id = ? AND user_id = ?`)

@@ -1117,9 +1117,13 @@ test("configured notification secrets are decrypted only to send a completed run
   assert.equal(telegramMessages[0].body.chat_id, chatId);
   assert.match(telegramMessages[0].body.text, /任务执行成功/);
   assert.match(telegramMessages[0].body.text, /任务：<\/b>/);
+  assert.match(telegramMessages[0].body.text, /类型：<\/b>/);
   assert.match(telegramMessages[0].body.text, /用户：<\/b>GrandpaNiuu/);
+  assert.match(telegramMessages[0].body.text, /Telegram：<\/b>Primary/);
+  assert.match(telegramMessages[0].body.text, /执行方式：<\/b>手动执行/);
+  assert.match(telegramMessages[0].body.text, /尝试：<\/b>1 \/ 2 次/);
   assert.match(telegramMessages[0].body.text, /耗时：<\/b>/);
-  assert.doesNotMatch(telegramMessages[0].body.text, /账号：|方式：|GitHub Actions|check-in done|查看执行详情/);
+  assert.doesNotMatch(telegramMessages[0].body.text, /GitHub Actions|check-in done|查看执行详情/);
   assert.deepEqual(telegramMessages[0].body.reply_markup, {
     inline_keyboard: [[{
       text: "查看执行详情",

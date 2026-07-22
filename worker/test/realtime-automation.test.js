@@ -6,6 +6,7 @@ import { createWorker } from "../src/app.js";
 import { __test, handleWorkspaceRealtimeApi } from "../src/realtime-automation.js";
 
 const migrationUrl = new URL("../migrations/0100_realtime_automation.sql", import.meta.url);
+const notificationMigrationUrl = new URL("../migrations/0106_realtime_rule_notifications.sql", import.meta.url);
 const appUrl = new URL("../src/app.js", import.meta.url);
 const apiUrl = new URL("../src/realtime-automation.js", import.meta.url);
 const repositoryUrl = new URL("../src/realtime-repository.js", import.meta.url);
@@ -51,7 +52,7 @@ function realtimeRuleRepository({ taskRuns = [], rule = null } = {}) {
               async run() {
                 if (source.includes("INSERT INTO realtime_rules")) {
                   const [id, userId, accountId, kind, name, chatSelector, keyword, responseText,
-                    caseSensitive, enabled, createdAt, updatedAt] = bindings;
+                    caseSensitive, notifyOnMatch, enabled, createdAt, updatedAt] = bindings;
                   storedRule = {
                     id,
                     user_id: userId,
@@ -62,6 +63,7 @@ function realtimeRuleRepository({ taskRuns = [], rule = null } = {}) {
                     keyword,
                     response_text: responseText,
                     case_sensitive: caseSensitive,
+                    notify_on_match: notifyOnMatch,
                     enabled,
                     created_at: createdAt,
                     updated_at: updatedAt,
@@ -70,7 +72,7 @@ function realtimeRuleRepository({ taskRuns = [], rule = null } = {}) {
                 }
                 if (source.includes("UPDATE realtime_rules SET account_id")) {
                   const [accountId, kind, name, chatSelector, keyword, responseText,
-                    caseSensitive, enabled, updatedAt] = bindings;
+                    caseSensitive, notifyOnMatch, enabled, updatedAt] = bindings;
                   storedRule = {
                     ...storedRule,
                     account_id: accountId,
@@ -80,6 +82,7 @@ function realtimeRuleRepository({ taskRuns = [], rule = null } = {}) {
                     keyword,
                     response_text: responseText,
                     case_sensitive: caseSensitive,
+                    notify_on_match: notifyOnMatch,
                     enabled,
                     updated_at: updatedAt,
                   };
@@ -114,6 +117,7 @@ function createRuleRequest(enabled = true) {
       chat_selector: "*",
       keyword: "价格",
       response_text: "请联系管理员。",
+      notify_on_match: true,
       enabled,
     }),
   });
@@ -144,6 +148,7 @@ test("keyword replies require both a keyword and fixed response", () => {
     keyword: "价格",
     response_text: "请联系管理员。",
     case_sensitive: false,
+    notify_on_match: true,
     enabled: true,
   });
   assert.throws(() => __test.ruleInput({
@@ -220,6 +225,59 @@ test("listener bearer comparison is deterministic without exposing the secret", 
   assert.equal(await __test.secureEqual("same-secret", "other-secret"), false);
 });
 
+test("listener events are stored and notification failures never reject the event", async () => {
+  const batched = [];
+  const repository = {
+    async getSettings() { return { notifications_enabled: false }; },
+    db: {
+      prepare(statement) {
+        const source = String(statement);
+        return {
+          bind(...bindings) {
+            return {
+              source,
+              bindings,
+              async first() {
+                if (source.includes("FROM realtime_rules r")) {
+                  return {
+                    rule_name: "价格回复",
+                    rule_kind: "keyword_reply",
+                    notify_on_match: 1,
+                    account_name: "客服账号",
+                  };
+                }
+                return null;
+              },
+            };
+          },
+        };
+      },
+      async batch(statements) { batched.push(...statements); },
+    },
+  };
+  const response = await __test.recordListenerEvent(new Request("https://worker.example/events", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      rule_id: "rule-1",
+      account_id: "account-1",
+      event_kind: "keyword_replied",
+      chat_id: "-1001",
+      sender_id: "8",
+      message_id: "9",
+      message_preview: "价格",
+      action_summary: "已回复",
+    }),
+  }), repository, {}, { fetch: async () => { throw new Error("must not call Telegram"); } });
+  const body = await response.json();
+
+  assert.equal(response.status, 202);
+  assert.equal(body.data.accepted, true);
+  assert.deepEqual(body.data.notification, { sent: false, reason: "disabled" });
+  assert.equal(batched.length, 2);
+  assert.match(batched[0].source, /INSERT INTO listener_events/);
+});
+
 test("bot inspection fails before creating data when the listener token is absent", async () => {
   const worker = createWorker({
     uuid: () => "request-id",
@@ -244,6 +302,12 @@ test("realtime migration keeps user inspections and administrator rules separate
   }
   assert.match(sql, /kind TEXT NOT NULL CHECK \(kind IN \('keyword_reply', 'group_monitor'\)\)/);
   assert.match(sql, /user_id TEXT NOT NULL REFERENCES users\(id\) ON DELETE CASCADE/);
+});
+
+test("realtime rules default to notification-bot reporting", async () => {
+  const sql = await readFile(notificationMigrationUrl, "utf8");
+  assert.match(sql, /ADD COLUMN notify_on_match INTEGER NOT NULL DEFAULT 1/);
+  assert.match(sql, /CHECK \(notify_on_match IN \(0, 1\)\)/);
 });
 
 test("realtime transition guard no longer depends on SQL text interception", async () => {

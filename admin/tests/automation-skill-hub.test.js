@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 const hubUrl = new URL("../src/automation-skill-hub.js", import.meta.url);
+const catalogUrl = new URL("../src/automation-catalog.js", import.meta.url);
 const realtimeUrl = new URL("../src/realtime-automation.js", import.meta.url);
 const indexUrl = new URL("../index.html", import.meta.url);
 
@@ -13,28 +14,30 @@ test("Skill task hub JavaScript passes Node syntax validation", () => {
   assert.equal(result.status, 0, result.stderr || result.stdout);
 });
 
-test("all business automation capabilities are presented through Skills", async () => {
-  const source = await readFile(hubUrl, "utf8");
+test("the automation catalog exposes only distinct user-facing capabilities", async () => {
+  const source = `${await readFile(catalogUrl, "utf8")}\n${await readFile(hubUrl, "utf8")}`;
   for (const marker of [
-    "自动识别机器人操作",
     "24 小时关键词自动回复",
-    "全天候群消息监听",
-    "账号连接检测",
+    "实时消息监控",
   ]) {
     assert.match(source, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
-  assert.match(source, /audience: "all"/);
   assert.match(source, /audience: "admin"/);
   assert.match(source, /isAdministrator\(\)/);
+  assert.doesNotMatch(source, /bot_inspection|account_connection_check/);
+  assert.doesNotMatch(source, /内部标识|Registry Key|Schema|查看使用方法|VPS Listener/);
+  assert.match(source, /每次命中都会由通知机器人汇报/);
 });
 
 test("Skill cards open task creation instead of storing business rules in Settings", async () => {
-  const source = await readFile(hubUrl, "utf8");
+  const source = `${await readFile(catalogUrl, "utf8")}\n${await readFile(hubUrl, "utf8")}`;
   assert.match(source, /data-skill-hub-action="create-scheduled"/);
   assert.match(source, /data-skill-hub-action="create-realtime"/);
   assert.match(source, /skill-hub-realtime-form/);
   assert.match(source, /\/api\/v1\/admin\/realtime-rules/);
   assert.match(source, /data-skill-hub-realtime-tasks/);
+  assert.match(source, /新建自动回复规则/);
+  assert.match(source, /新建消息监控规则/);
 });
 
 test("Settings only exposes Listener infrastructure status", async () => {

@@ -25,6 +25,8 @@ def normalize_target(value: Any) -> str | int:
         raw = id_match.group(1)
     if raw in {"8604751086", "freexzteam_bot", "@freexzteam_bot"}:
         raw = "@freexzteam_bot"
+    if raw.casefold() in {"me", "self"}:
+        return "me"
     if raw.startswith("@"):
         if not re.fullmatch(r"@[A-Za-z][A-Za-z0-9_]{4,31}", raw):
             raise SkillValidationError("target must be @username or a numeric chat id")

@@ -118,7 +118,7 @@ class RealtimeManager:
                     await message.reply_text(response)
                     event.update({
                         "event_kind": "keyword_replied",
-                        "action_summary": f"已按规则「{rule.get('name', '')}」回复",
+                        "action_summary": f"已按规则「{rule.get('name', '')}」回复：{response[:180]}",
                     })
                 except Exception as exc:
                     event.update({

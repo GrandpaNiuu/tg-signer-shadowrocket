@@ -172,7 +172,7 @@ export function createWorker(dependencies = {}) {
         }
         if (url.pathname.startsWith("/api/listener/v1/")) {
           const repository = repositoryFactory(env);
-          return await withRequestId(await handleListenerApi(request, env, repository), requestId);
+          return await withRequestId(await handleListenerApi(request, env, repository, { fetch: fetchImpl }), requestId);
         }
         if (url.pathname.startsWith("/api/v1/")) {
           const repository = repositoryFactory(env);

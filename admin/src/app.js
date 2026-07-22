@@ -1,8 +1,10 @@
 import { ApiClient, ApiError } from "./api.js";
+import { scheduledAutomationDefinition } from "./automation-catalog.js";
 import { buildNotificationSettingsPatch, validateNotificationSettings } from "./notification-settings.js";
 import { refreshDelayForRoute } from "./live-refresh.js";
 import { cronFromSchedulePreset, schedulePresetFromCron } from "./schedule-presets.js";
 import { buildTaskExport, copyTaskDraft, parseTaskImport, TaskTransferError } from "./task-transfer.js";
+import { taskValidationSummary } from "./task-form-feedback.js";
 import { rerunnableTaskId } from "./run-actions.js";
 import {
   createStore,
@@ -50,7 +52,7 @@ const routeMeta = {
   dashboard: ["概览", "今天的 Telegram 自动任务运行情况"],
   accounts: ["Telegram 账号", "管理登录凭据和连接状态"],
   tasks: ["自动消息", "配置接收方、消息或机器人命令和执行时间"],
-  skills: ["Skills", "已部署的安全执行能力"],
+  skills: ["自动化功能", "选择定时发送、按钮签到、媒体发送或实时监听"],
   runs: ["执行记录", "检查结果、重试和脱敏日志"],
   sessions: ["登录会话", "查看并撤销已登录的浏览器与设备"],
   users: ["用户管理", "查看注册用户和独立工作区"],
@@ -999,10 +1001,10 @@ async function renderTasks(token) {
 }
 
 function renderTasksTable(tasks, accounts) {
-  if (!tasks.length) return emptyState("✓", "还没有自动消息任务", "选择账号和 Skill，填写接收方、内容与时间即可开始。", `<button class="button primary" type="button" data-action="add-task" ${accounts.length ? "" : "disabled"}>新增任务</button>`);
+  if (!tasks.length) return emptyState("✓", "还没有定时任务", "选择账号和任务类型，再填写接收方、内容与时间即可开始。", `<button class="button primary" type="button" data-action="add-task" ${accounts.length ? "" : "disabled"}>新增任务</button>`);
   const names = new Map(accounts.map((account) => [String(account.id), account.name]));
-  return `<div class="table-wrap"><table><thead><tr><th>任务</th><th>账号 / Skill</th><th>接收方 / 消息</th><th>Cron</th><th>下次执行</th><th>启用</th><th><span class="sr-only">操作</span></th></tr></thead><tbody>
-    ${tasks.map((task) => `<tr><td data-label="任务"><span class="cell-title">${escapeHtml(task.name)}</span><span class="cell-sub">重试 ${escapeHtml(task.retry ?? task.retry_count ?? 0)} 次 · 超时 ${escapeHtml(task.timeout_seconds ?? 120)} 秒</span></td><td data-label="账号 / Skill"><span class="cell-title">${escapeHtml(task.account_name || names.get(String(task.account_id)) || "未知账号")}</span><span class="cell-sub mono">${escapeHtml(task.skill_key || task.skill || "—")}</span></td><td data-label="接收方 / 消息"><span class="cell-title mono">${escapeHtml(task.bot)}</span><span class="cell-sub">${escapeHtml(String(task.command || "").slice(0, 48))}${String(task.command || "").length > 48 ? "…" : ""}</span></td><td data-label="Cron"><span class="mono">${escapeHtml(task.cron || task.cron_expr)}</span><span class="cell-sub">${escapeHtml(task.timezone || "Asia/Shanghai")}</span></td><td data-label="下次执行">${formatDate(task.next_run_at)}</td><td data-label="启用"><label class="switch"><input type="checkbox" data-action="toggle-task" data-id="${escapeHtml(task.id)}" ${task.enabled ? "checked" : ""} aria-label="${task.enabled ? "停用" : "启用"}${escapeHtml(task.name)}"><span></span></label></td><td data-label="操作"><div class="actions"><button class="button small" type="button" data-action="run-task" data-id="${escapeHtml(task.id)}">执行</button><button class="button small ghost" type="button" data-action="copy-task" data-id="${escapeHtml(task.id)}">复制</button><button class="button small ghost" type="button" data-action="edit-task" data-id="${escapeHtml(task.id)}">编辑</button><button class="button small ghost danger" type="button" data-action="delete-task" data-id="${escapeHtml(task.id)}">删除</button></div></td></tr>`).join("")}
+  return `<div class="table-wrap"><table><thead><tr><th>任务</th><th>账号 / 类型</th><th>接收方 / 消息</th><th>计划</th><th>下次执行</th><th>启用</th><th><span class="sr-only">操作</span></th></tr></thead><tbody>
+    ${tasks.map((task) => { const skill = scheduledAutomationDefinition(task.skill_key || task.skill); return `<tr><td data-label="任务"><span class="cell-title">${escapeHtml(task.name)}</span><span class="cell-sub">重试 ${escapeHtml(task.retry ?? task.retry_count ?? 0)} 次 · 超时 ${escapeHtml(task.timeout_seconds ?? 120)} 秒</span></td><td data-label="账号 / 类型"><span class="cell-title">${escapeHtml(task.account_name || names.get(String(task.account_id)) || "未知账号")}</span><span class="cell-sub">${escapeHtml(skill?.shortName || task.skill_key || task.skill || "—")}</span></td><td data-label="接收方 / 消息"><span class="cell-title mono">${escapeHtml(task.bot)}</span><span class="cell-sub">${escapeHtml(String(task.command || "").slice(0, 48))}${String(task.command || "").length > 48 ? "…" : ""}</span></td><td data-label="计划"><span class="mono">${escapeHtml(task.cron || task.cron_expr)}</span><span class="cell-sub">${escapeHtml(task.timezone || "Asia/Shanghai")}</span></td><td data-label="下次执行">${formatDate(task.next_run_at)}</td><td data-label="启用"><label class="switch"><input type="checkbox" data-action="toggle-task" data-id="${escapeHtml(task.id)}" ${task.enabled ? "checked" : ""} aria-label="${task.enabled ? "停用" : "启用"}${escapeHtml(task.name)}"><span></span></label></td><td data-label="操作"><div class="actions"><button class="button small" type="button" data-action="run-task" data-id="${escapeHtml(task.id)}">执行</button><button class="button small ghost" type="button" data-action="copy-task" data-id="${escapeHtml(task.id)}">复制</button><button class="button small ghost" type="button" data-action="edit-task" data-id="${escapeHtml(task.id)}">编辑</button><button class="button small ghost danger" type="button" data-action="delete-task" data-id="${escapeHtml(task.id)}">删除</button></div></td></tr>`; }).join("")}
   </tbody></table></div>`;
 }
 
@@ -1136,15 +1138,17 @@ function taskFormValues(task = {}) {
 
 function taskFormHtml(values, errors = {}) {
   const { accounts, skills } = store.get();
+  const availableSkills = skills.filter((skill) => scheduledAutomationDefinition(skill.key));
+  const validation = hasErrors(errors) ? taskValidationSummary(errors) : null;
   const scheduleMode = values.schedule_mode || "custom";
   const scheduleGroup = (mode) => scheduleMode === mode ? "" : "hidden";
-  return `<form id="task-form" data-id="${escapeHtml(values.id || "")}" data-has-tg-signer-import="${values.has_tg_signer_import ? "true" : "false"}" novalidate><div class="form-grid">
+  return `<form id="task-form" data-id="${escapeHtml(values.id || "")}" data-has-tg-signer-import="${values.has_tg_signer_import ? "true" : "false"}" novalidate>${validation ? `<div class="notice danger mb-md" role="alert"><span aria-hidden="true">!</span><span><strong>${escapeHtml(validation.title)}</strong><br>${escapeHtml(validation.message)} 下方对应输入框已标出原因。</span></div>` : ""}<div class="form-grid">
     <div class="field span-2"><label class="required" for="task-name">任务名称</label><input id="task-name" name="name" maxlength="100" value="${escapeHtml(values.name)}" placeholder="例如：每日提醒 / 机器人签到" ${invalidAttr(errors,"name")}>${fieldError(errors,"name")}</div>
-    <div class="field"><label class="required" for="task-account">账号</label><select id="task-account" name="account_id" ${invalidAttr(errors,"account_id")}><option value="">请选择</option>${accounts.map((account) => `<option value="${escapeHtml(account.id)}" ${String(values.account_id) === String(account.id) ? "selected" : ""}>${escapeHtml(account.name)}${account.status !== "connected" ? `（${statusText(account.status)}）` : ""}</option>`).join("")}</select>${fieldError(errors,"account_id")}</div>
-    <div class="field"><label class="required" for="task-skill">Skill</label><select id="task-skill" name="skill_key" ${invalidAttr(errors,"skill_key")}>${skills.map((skill) => `<option value="${escapeHtml(skill.key)}" ${String(values.skill_key) === String(skill.key) ? "selected" : ""} ${skill.enabled === false ? "disabled" : ""}>${escapeHtml(skill.name || skill.key)}${skill.enabled === false ? "（已停用）" : ""}</option>`).join("")}</select>${fieldError(errors,"skill_key")}</div>
+    <div class="field"><label class="required" for="task-account">Telegram 账号</label><select id="task-account" name="account_id" ${invalidAttr(errors,"account_id")}><option value="">请选择 Telegram 账号</option>${accounts.map((account) => `<option value="${escapeHtml(account.id)}" ${String(values.account_id) === String(account.id) ? "selected" : ""}>${escapeHtml(account.name)}${account.status !== "connected" ? `（${statusText(account.status)}）` : ""}</option>`).join("")}</select>${fieldError(errors,"account_id")}</div>
+    <div class="field"><label class="required" for="task-skill">任务类型</label><select id="task-skill" name="skill_key" ${invalidAttr(errors,"skill_key")}>${availableSkills.map((skill) => { const definition = scheduledAutomationDefinition(skill.key); return `<option value="${escapeHtml(skill.key)}" ${String(values.skill_key) === String(skill.key) ? "selected" : ""} ${skill.enabled === false ? "disabled" : ""}>${escapeHtml(definition?.shortName || skill.name || skill.key)}${skill.enabled === false ? "（已停用）" : ""}</option>`; }).join("")}</select>${fieldError(errors,"skill_key")}</div>
     <div class="field span-2"><label class="required" for="task-bot">接收方（Bot / Chat）</label><input id="task-bot" name="bot" maxlength="128" value="${escapeHtml(values.bot)}" placeholder="@example_bot、@username 或 Chat ID" ${invalidAttr(errors,"bot")}>${fieldError(errors,"bot")}</div>
     <div class="field span-2"><label class="required" for="task-command">发送内容 / Command</label><textarea id="task-command" name="command" maxlength="2000" placeholder="普通消息、机器人命令或签到指令" ${invalidAttr(errors,"command")}>${escapeHtml(values.command)}</textarea>${fieldError(errors,"command")}</div>
-    <div class="field span-2"><label for="task-signer-import">tg_signer 配置 <small>${values.has_tg_signer_import ? "已加密保存；留空保持不变" : "仅 tg_signer Skill 需要"}</small></label><textarea id="task-signer-import" name="tg_signer_import" maxlength="131072" autocomplete="off" data-sensitive placeholder="粘贴 tg-signer 导出 JSON 或 Base64；提交后立即清空" ${invalidAttr(errors,"tg_signer_import")}></textarea>${fieldError(errors,"tg_signer_import")}</div>
+    <div class="field span-2"><label for="task-signer-import">按钮签到配置 <small>${values.has_tg_signer_import ? "已加密保存；留空保持不变" : "仅按钮签到需要"}</small></label><textarea id="task-signer-import" name="tg_signer_import" maxlength="131072" autocomplete="off" data-sensitive placeholder="粘贴 tg-signer 导出配置；提交后立即清空" ${invalidAttr(errors,"tg_signer_import")}></textarea>${fieldError(errors,"tg_signer_import")}</div>
     <div class="field"><label class="required" for="task-schedule-mode">执行方式</label><select id="task-schedule-mode" name="schedule_mode" data-schedule-field>
       <option value="daily" ${scheduleMode === "daily" ? "selected" : ""}>每天固定时间</option>
       <option value="weekly" ${scheduleMode === "weekly" ? "selected" : ""}>每周固定时间</option>
@@ -1172,14 +1176,24 @@ function taskFormHtml(values, errors = {}) {
 
 function openTaskModal(task = null, errors = {}, attempted = null) {
   const values = { ...taskFormValues({ ...(task || {}), ...(attempted || {}) }), id: task?.id || "" };
+  const definition = scheduledAutomationDefinition(values.skill_key);
   openModal({
-    title: task ? "编辑自动消息任务" : "新增自动消息任务",
-    description: "普通消息、机器人命令与签到均由统一 Runner 执行",
+    title: task ? `编辑${definition?.shortName || "定时任务"}` : `新增${definition?.shortName || "定时任务"}`,
+    description: definition?.description || "定时任务由统一 Runner 负责重试、超时、记录与通知",
     wide: true,
     body: taskFormHtml(values, errors),
     footer: `<span class="field-help">保存前请核对时区与执行预览</span><div><button class="button" type="button" data-action="close-modal">取消</button><button class="button primary" type="submit" form="task-form">保存任务</button></div>`,
   });
   updateScheduleEditor();
+  if (hasErrors(errors)) {
+    const validation = taskValidationSummary(errors);
+    queueMicrotask(() => {
+      const input = modalRoot.querySelector(`[name="${CSS.escape(validation.firstField)}"]`);
+      input?.scrollIntoView({ block: "center", behavior: "smooth" });
+      input?.focus();
+    });
+    toast(validation.title, validation.message, "error");
+  }
 }
 
 function readTaskForm(form) {
@@ -1291,15 +1305,21 @@ async function renderSkills(token) {
   const skills = listFrom(payload, ["skills"]).map(normalizeSkill);
   store.set({ skills });
   setApiState("ok", "服务正常");
-  view.innerHTML = `${pageHead("Skills", "Skill Registry 只允许执行仓库中已部署和测试的能力")}
-    <div class="notice mb-md"><span aria-hidden="true">i</span><span>这里不能上传 Python 或执行任意 Shell。新增 Skill 需要通过代码、测试与部署流程完成。</span></div>
-    <section class="skill-grid">${skills.length ? skills.map(renderSkillCard).join("") : `<div class="card grid-all">${emptyState("◇", "Skill Registry 为空", "请先运行 D1 migration 以注册内置 Skills。")}</div>`}</section>`;
+  const visibleSkills = skills.filter((skill) => scheduledAutomationDefinition(skill.key));
+  view.innerHTML = `${pageHead("自动化功能", "先选择要完成的事情，再填写账号、目标、内容和执行时间")}
+    <div class="notice mb-md"><span aria-hidden="true">i</span><span>每种功能只有一个创建入口。定时功能由统一 Runner 执行；实时功能由监听服务持续运行，结果都会进入记录并可通过通知机器人汇报。</span></div>
+    <section class="skill-grid">${visibleSkills.length ? visibleSkills.map(renderSkillCard).join("") : `<div class="card grid-all">${emptyState("◇", "暂时没有可用功能", "请联系管理员检查 Worker 与数据库迁移状态。")}</div>`}</section>`;
 }
 
 function renderSkillCard(skill) {
-  const params = skill.params_schema || skill.params_schema_json;
-  const fieldCount = params?.properties ? Object.keys(params.properties).length : Array.isArray(params) ? params.length : 0;
-  return `<article class="skill-card"><div class="skill-card-head"><div><div class="skill-icon" aria-hidden="true">${skill.key === "send_text" ? "T" : "S"}</div><h2>${escapeHtml(skill.name || skill.key)}</h2></div><span class="badge ${skill.enabled ? "enabled" : "disabled"}">${skill.enabled ? "已部署" : "已停用"}</span></div><p>${escapeHtml(skill.description || (skill.key === "send_text" ? "向机器人发送命令，可选 Thread 与自动删除。" : "运行 tg-signer 中经过校验的已注册任务。"))}</p><div class="skill-meta"><span>Registry Key<strong class="mono">${escapeHtml(skill.key)}</strong></span><span>实现版本<strong>${escapeHtml(skill.implementation_version || skill.version || "1")}</strong></span><span>Schema<strong>v${escapeHtml(skill.schema_version || 1)}</strong></span><span>参数<strong>${escapeHtml(fieldCount)} 个字段</strong></span></div></article>`;
+  const definition = scheduledAutomationDefinition(skill.key);
+  if (!definition) return "";
+  return `<article class="skill-card" data-automation-key="${escapeHtml(definition.key)}">
+    <div class="skill-card-head"><div><div class="skill-icon" aria-hidden="true">${escapeHtml(definition.icon)}</div><h2>${escapeHtml(definition.title)}</h2></div><span class="badge ${skill.enabled ? "enabled" : "disabled"}">${skill.enabled ? escapeHtml(definition.badge) : "暂不可用"}</span></div>
+    <p>${escapeHtml(definition.description)}</p>
+    <div class="notice"><span aria-hidden="true">i</span><span><strong>适合：</strong>${escapeHtml(definition.purpose)}</span></div>
+    <div class="skill-meta"><span>运行方式<strong>${escapeHtml(definition.execution)}</strong></span><span>需要填写<strong>${escapeHtml(definition.required)}</strong></span></div>
+  </article>`;
 }
 
 async function renderRuns(token) {
@@ -1416,10 +1436,10 @@ function renderNotificationSettings(settings) {
   const ready = tokenConfigured && chatConfigured;
   const statusTitle = ready ? "通知通道已就绪" : tokenConfigured ? "Bot 已连接，还差接收位置" : "通知尚未配置";
   const statusDescription = ready
-    ? "可先发送一条测试通知；启用后，每次任务结束都会推送摘要。"
+    ? "每次任务结束和每次实时规则命中都会自动推送完整回执；可先发送一条测试通知。"
     : tokenConfigured
       ? "先给 Bot 发送 /start，再让后台自动查找 Chat ID。"
-      : "这是可选功能，不配置也不会影响定时消息和签到任务。";
+      : "不配置不会影响任务执行，但无法收到任务和实时规则的机器人回执。";
   return `<div class="settings-section notification-section" id="notification-settings">
     <div class="settings-title-row"><div><h2>任务结果通知</h2><p>通知只影响任务结果提醒，不会改变任务内容，也不会影响自动执行。</p></div><span class="badge ${ready ? "success" : "pending"}">${ready ? "已就绪" : "可选"}</span></div>
     <div class="notification-state ${ready ? "ready" : ""}"><span class="notification-state-icon" aria-hidden="true">${ready ? "✓" : "i"}</span><div><strong>${statusTitle}</strong><small>${statusDescription}</small></div></div>
@@ -1428,7 +1448,8 @@ function renderNotificationSettings(settings) {
       <li><span>2</span><div><strong>让 Bot 认识接收位置</strong><p>打开刚创建的 Bot 并发送 <code>/start</code>；群组或频道则先把 Bot 加进去，再发送一条消息。</p></div></li>
       <li><span>3</span><div><strong>保存、查找并测试</strong><p>先保存 Bot Token，然后点击“查找 Chat ID”；选中会话、再次保存，最后发送测试通知。</p></div></li>
     </ol>
-    <div class="notification-enable-row"><div><strong>任务完成后推送</strong><small>成功与失败都会发送任务名、耗时、Actions 链接和脱敏日志尾部。</small></div><label class="switch"><input type="checkbox" name="notifications_enabled" ${settings.notifications_enabled ? "checked" : ""} aria-label="任务结束后发送通知"><span></span></label></div>
+    <input type="hidden" name="notifications_enabled" value="on">
+    <div class="notification-enable-row"><div><strong>所有任务自动发送回执</strong><small>成功、失败、定时发送、按钮签到、实时监听和自动回复都会汇报用户、账号、类型、目标、消息、耗时与重试。</small></div><span class="badge ${ready ? "success" : "pending"}">${ready ? "已启用" : "配置后启用"}</span></div>
     <div class="form-grid notification-fields">
       <div class="field"><label for="notification-bot-token">Bot Token</label><input id="notification-bot-token" name="notification_bot_token" type="password" maxlength="256" autocomplete="new-password" data-sensitive value="" placeholder="${tokenConfigured ? "已配置；留空保持不变" : "从 @BotFather 复制到这里"}"><p class="field-help">当前：${tokenConfigured ? '<span class="badge success">已配置</span>' : '<span class="badge pending">未配置</span>'}</p></div>
       <div class="field"><label for="notification-chat-id">Chat ID</label><input id="notification-chat-id" name="notification_chat_id" type="password" maxlength="33" autocomplete="new-password" data-sensitive value="" placeholder="${chatConfigured ? "已配置；留空保持不变" : "可让后台自动查找"}"><p class="field-help">当前：${chatConfigured ? '<span class="badge success">已配置</span>' : '<span class="badge pending">未配置</span>'}</p></div>

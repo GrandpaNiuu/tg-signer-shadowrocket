@@ -1,6 +1,6 @@
 import { HttpError } from "./http.js";
 
-const TARGET = /^(?:@[A-Za-z][A-Za-z0-9_]{4,31}|-?\d{1,20})$/;
+const TARGET = /^(?:@[A-Za-z][A-Za-z0-9_]{4,31}|-?\d{1,20}|me|self)$/i;
 const ASSET_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,159}$/;
 const SKILLS = new Set(["send_text", "tg_signer", "send_media"]);
 
@@ -71,25 +71,52 @@ export function normalizeSkillParams(skillKey, rawParams = {}, legacy = {}) {
     };
   }
   const source = Object.keys(params).length ? params : legacyJson(legacy.command, "command");
-  const input = exact(source, ["target", "file_id", "media_type", "caption", "message_thread_id", "delete_after"], "params");
+  const input = exact(source, [
+    "target", "source_chat_id", "source_message_id", "file_id", "media_type",
+    "caption", "message_thread_id", "delete_after",
+  ], "params");
+  const directSource = input.source_chat_id !== undefined || input.source_message_id !== undefined;
+  const common = {
+    target: target(input.target ?? legacy.bot),
+    caption: input.caption === undefined || input.caption === null
+      ? null
+      : text(input.caption, "params.caption", { required: false, max: 1024 }),
+    message_thread_id: integer(input.message_thread_id ?? legacy.thread_id, "params.message_thread_id", { min: 1, max: Number.MAX_SAFE_INTEGER, nullable: true }),
+    delete_after: integer(input.delete_after ?? legacy.delete_after_seconds, "params.delete_after", { min: 0, max: 86400, nullable: true }),
+  };
+  if (directSource) {
+    return {
+      ...common,
+      source_chat_id: target(input.source_chat_id, "params.source_chat_id"),
+      source_message_id: integer(input.source_message_id, "params.source_message_id", { min: 1, max: Number.MAX_SAFE_INTEGER }),
+    };
+  }
   const fileId = text(input.file_id, "params.file_id", { max: 160 });
   if (!ASSET_ID.test(fileId)) fail(["params.file_id"]);
   const mediaType = text(input.media_type, "params.media_type", { max: 20 });
   if (!["photo", "document", "video"].includes(mediaType)) fail(["params.media_type"]);
   return {
-    target: target(input.target ?? legacy.bot),
+    ...common,
     file_id: fileId,
     media_type: mediaType,
-    caption: input.caption === undefined || input.caption === null || input.caption === "" ? null : text(input.caption, "params.caption", { max: 1024 }),
-    message_thread_id: integer(input.message_thread_id ?? legacy.thread_id, "params.message_thread_id", { min: 1, max: Number.MAX_SAFE_INTEGER, nullable: true }),
-    delete_after: integer(input.delete_after ?? legacy.delete_after_seconds, "params.delete_after", { min: 0, max: 86400, nullable: true }),
   };
 }
 
 export function taskPresentation(skillKey, params) {
   if (skillKey === "send_text") return { bot: String(params.target), command: params.text, thread_id: params.message_thread_id, delete_after_seconds: params.delete_after };
   if (skillKey === "tg_signer") return { bot: "", command: params.task_name, thread_id: null, delete_after_seconds: null };
-  if (skillKey === "send_media") return { bot: String(params.target), command: `[${params.media_type}] ${params.file_id}${params.caption ? ` · ${params.caption}` : ""}`.slice(0, 2000), thread_id: params.message_thread_id, delete_after_seconds: params.delete_after };
+  if (skillKey === "send_media") {
+    const source = params.source_chat_id !== undefined
+      ? `${params.source_chat_id} / 消息 ${params.source_message_id}`
+      : `旧媒体 ${params.file_id}`;
+    const caption = params.caption === null ? "" : params.caption === "" ? " · 移除原说明" : ` · ${params.caption}`;
+    return {
+      bot: String(params.target),
+      command: `[任意内容] ${source}${caption}`.slice(0, 2000),
+      thread_id: params.message_thread_id,
+      delete_after_seconds: params.delete_after,
+    };
+  }
   fail(["skill_key"]);
 }
 

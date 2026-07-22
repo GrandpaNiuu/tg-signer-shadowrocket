@@ -26,12 +26,11 @@ test("platform account health interface is administrator-only and support-safe",
   assert.doesNotMatch(source, /session_secret_id|proxy_secret_id|two_factor_password|login_code/);
 });
 
-test("account connection Skill opens the health center instead of a private-account modal", async () => {
+test("account health remains a dedicated administrator workspace instead of a duplicate Skill", async () => {
   const source = await readFile(healthUrl, "utf8");
-  assert.match(source, /account_connection_check/);
-  assert.match(source, /stopImmediatePropagation/);
-  assert.match(source, /location\.hash = HEALTH_ROUTE/);
-  assert.match(source, /打开健康中心/);
+  assert.doesNotMatch(source, /account_connection_check|data-skill-hub-capability/);
+  assert.match(source, /HEALTH_ROUTE/);
+  assert.match(source, /全平台账号健康中心/);
 });
 
 test("health center loads as an isolated module and does not mutate the security bootstrap", async () => {

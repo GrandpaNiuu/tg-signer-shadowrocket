@@ -234,9 +234,12 @@ function copyLegacyFields(task, skillKey, params) {
     };
   }
   if (skillKey === "send_media") {
+    const source = params.source_chat_id !== undefined
+      ? { source_chat_id: params.source_chat_id, source_message_id: params.source_message_id }
+      : { file_id: params.file_id, media_type: params.media_type };
     return {
       bot: text(params.target),
-      command: JSON.stringify({ file_id: params.file_id, media_type: params.media_type, caption: params.caption ?? null }),
+      command: JSON.stringify({ ...source, caption: params.caption ?? null }),
       thread_id: params.message_thread_id ?? null,
       delete_after_seconds: params.delete_after ?? null,
     };

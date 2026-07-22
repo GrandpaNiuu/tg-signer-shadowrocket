@@ -48,35 +48,28 @@ wait for a reply, find a button, click it, and confirm success.
 
 ### `send_media`
 
-Sends media from a Worker-approved Telegram source message. The Runner reads the
-source message, extracts its Telegram-cached file identifier, and sends that cached
-media. It never accepts a server path or arbitrary URL.
+Copies any Telegram message the selected account can access. Telegram itself remains
+the content store, so the platform does not need paid object storage and does not put
+large files in D1. Text, photos, videos, documents, audio, voice messages, stickers,
+polls, contacts, and locations use the same contract.
 
 ```json
 {
   "target": "@channel",
-  "file_id": "worker-media-asset-id",
-  "media_type": "photo",
+  "source_chat_id": "me",
+  "source_message_id": 123,
   "caption": "Optional caption",
   "message_thread_id": null,
   "delete_after": null
 }
 ```
 
-The Worker resolves `file_id` to an asset owned by the same workspace and injects
-the source chat/message reference only into the one-time claim. The Skill returns
-the created Telegram `message_id`.
+`caption: null` keeps the original caption, an empty string removes it, and a non-empty
+string replaces it. The Skill returns the created Telegram `message_id`, detected
+content type, and a sanitized text/caption preview for the task receipt.
 
-Media assets are registered through the authenticated workspace API:
-
-```text
-GET    /api/v1/media-assets
-POST   /api/v1/media-assets
-DELETE /api/v1/media-assets/{id}
-```
-
-A registration contains `name`, `media_type`, `source_chat_id`, and
-`source_message_id`.
+Legacy `file_id`/`media_type` tasks remain executable during migration, but the admin
+no longer exposes media registration for new tasks.
 
 Long-running keyword/group monitoring remains exclusively in Listener. Account
 connectivity remains in the existing account validation workflow. Neither is

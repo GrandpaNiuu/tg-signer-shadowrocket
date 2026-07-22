@@ -16,7 +16,22 @@ test("only media sending remains as an expanded non-overlapping task type", () =
   assert.equal(__test.PRESENTATIONS.chat_snapshot, undefined);
 });
 
-test("media task params are explicit and legacy-compatible", () => {
+test("arbitrary Telegram content links are parsed without a media registry", () => {
+  assert.deepEqual(__test.parseTelegramMessageLink("https://t.me/source_channel/123"), {
+    source_chat_id: "@source_channel",
+    source_message_id: 123,
+  });
+  assert.deepEqual(__test.parseTelegramMessageLink("https://t.me/c/1234567890/9/456"), {
+    source_chat_id: "-1001234567890",
+    source_message_id: 456,
+  });
+  assert.deepEqual(__test.parseTelegramMessageLink("tg://privatepost?channel=1234567890&post=789"), {
+    source_chat_id: "-1001234567890",
+    source_message_id: 789,
+  });
+});
+
+test("content task params are explicit and legacy-compatible", () => {
   assert.deepEqual(paramsFromLegacy("send_media", {
     bot: "@example_channel",
     command: JSON.stringify({ file_id: "media-asset-1234", media_type: "photo", caption: "海报" }),
@@ -33,31 +48,29 @@ test("media task params are explicit and legacy-compatible", () => {
 
   assert.deepEqual(validateExpandedParams("send_media", {
     target: "@example_channel",
-    file_id: "media-asset-1234",
-    media_type: "photo",
-    caption: "海报",
+    source_link: "https://t.me/source_channel/123",
+    caption: "",
     message_thread_id: null,
     delete_after: null,
   }), {
     target: "@example_channel",
-    file_id: "media-asset-1234",
-    media_type: "photo",
-    caption: "海报",
+    source_chat_id: "@source_channel",
+    source_message_id: 123,
+    caption: "",
     message_thread_id: null,
     delete_after: null,
   });
 });
 
-test("media tasks reject arbitrary paths, URLs, and retired task types", () => {
-  for (const fileId of ["/tmp/file.jpg", "https://example.com/file.jpg"]) {
+test("content tasks reject non-Telegram links and retired task types", () => {
+  for (const sourceLink of ["/tmp/file.jpg", "https://example.com/file.jpg"]) {
     assert.throws(() => validateExpandedParams("send_media", {
       target: "@example_channel",
-      file_id: fileId,
-      media_type: "photo",
-    }), /媒体资产/);
+      source_link: sourceLink,
+    }), /Telegram 消息链接/);
   }
-  assert.throws(() => validateExpandedParams("bot_flow", {}), /不属于媒体发送任务/);
-  assert.throws(() => validateExpandedParams("chat_snapshot", {}), /不属于媒体发送任务/);
+  assert.throws(() => validateExpandedParams("bot_flow", {}), /不属于任意内容发送任务/);
+  assert.throws(() => validateExpandedParams("chat_snapshot", {}), /不属于任意内容发送任务/);
 });
 
 test("media builder is inserted before schedule fields and exposes save errors", async () => {
@@ -66,4 +79,5 @@ test("media builder is inserted before schedule fields and exposes save errors",
   assert.match(source, /scheduleAnchor\.insertAdjacentElement\("beforebegin", wrapper\)/);
   assert.match(source, /builder\.scrollIntoView/);
   assert.match(source, /请检查：/);
+  assert.doesNotMatch(source, /register-media|media-assets\?/);
 });

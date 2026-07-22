@@ -1,6 +1,7 @@
 import { decryptSecret, rootKeyForVersion } from "./crypto.js";
 import { HttpError, json, methodNotAllowed, readJson } from "./http.js";
 import { sanitizeLogText } from "./redaction.js";
+import { sendRealtimeNotification } from "./notifications.js";
 import { assertRealtimeTransitionAllowed } from "./realtime-repository.js";
 import { resolveTelegramApplicationCredentialRefs } from "./telegram-application.js";
 
@@ -93,6 +94,7 @@ function mapRule(row) {
     keyword: row.keyword,
     response_text: row.response_text,
     case_sensitive: Boolean(row.case_sensitive),
+    notify_on_match: row.notify_on_match === undefined ? true : Boolean(row.notify_on_match),
     enabled: Boolean(row.enabled),
     last_event_at: row.last_event_at,
     created_at: row.created_at,
@@ -185,6 +187,7 @@ function ruleInput(body, { patch = false } = {}) {
       : text(value.response_text ?? "", "response_text", { required: false, maximum: 2_000 });
   }
   if (!patch || value.case_sensitive !== undefined) output.case_sensitive = booleanValue(value.case_sensitive, false);
+  if (!patch || value.notify_on_match !== undefined) output.notify_on_match = booleanValue(value.notify_on_match, true);
   if (!patch || value.enabled !== undefined) output.enabled = booleanValue(value.enabled, true);
   const finalKind = output.kind ?? value.kind;
   if (finalKind === "keyword_reply") {
@@ -230,10 +233,11 @@ async function realtimeRules(request, repository, context, parts) {
       response_text: input.kind === "keyword_reply" ? input.response_text : input.response_text || null,
     };
     await repository.db.prepare(`INSERT INTO realtime_rules
-      (id, user_id, account_id, kind, name, chat_selector, keyword, response_text, case_sensitive, enabled, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      (id, user_id, account_id, kind, name, chat_selector, keyword, response_text, case_sensitive, notify_on_match, enabled, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .bind(rule.id, userId, rule.account_id, rule.kind, rule.name, rule.chat_selector, rule.keyword,
-        rule.response_text, rule.case_sensitive ? 1 : 0, rule.enabled ? 1 : 0, timestamp, timestamp).run();
+        rule.response_text, rule.case_sensitive ? 1 : 0, rule.notify_on_match ? 1 : 0,
+        rule.enabled ? 1 : 0, timestamp, timestamp).run();
     const created = await repository.db.prepare(`SELECT r.*, a.name AS account_name FROM realtime_rules r
       JOIN accounts a ON a.id = r.account_id WHERE r.id = ? AND r.user_id = ?`).bind(rule.id, userId).first();
     return json({ data: mapRule(created) }, 201);
@@ -264,13 +268,15 @@ async function realtimeRules(request, repository, context, parts) {
     keyword: finalKeyword,
     response_text: finalResponse,
     case_sensitive: input.case_sensitive ?? Boolean(current.case_sensitive),
+    notify_on_match: input.notify_on_match ?? (current.notify_on_match === undefined ? true : Boolean(current.notify_on_match)),
     enabled: input.enabled ?? Boolean(current.enabled),
   };
   const timestamp = nowIso(context);
   await repository.db.prepare(`UPDATE realtime_rules SET account_id = ?, kind = ?, name = ?, chat_selector = ?,
-    keyword = ?, response_text = ?, case_sensitive = ?, enabled = ?, updated_at = ? WHERE id = ? AND user_id = ?`)
+    keyword = ?, response_text = ?, case_sensitive = ?, notify_on_match = ?, enabled = ?, updated_at = ? WHERE id = ? AND user_id = ?`)
     .bind(merged.account_id, merged.kind, merged.name, merged.chat_selector, merged.keyword, merged.response_text,
-      merged.case_sensitive ? 1 : 0, merged.enabled ? 1 : 0, timestamp, id, userId).run();
+      merged.case_sensitive ? 1 : 0, merged.notify_on_match ? 1 : 0,
+      merged.enabled ? 1 : 0, timestamp, id, userId).run();
   const updated = await repository.db.prepare(`SELECT r.*, a.name AS account_name FROM realtime_rules r
     JOIN accounts a ON a.id = r.account_id WHERE r.id = ? AND r.user_id = ?`).bind(id, userId).first();
   return json({ data: mapRule(updated) });
@@ -476,7 +482,27 @@ async function completeInspection(request, repository, id) {
   return json({ data: { accepted: true } });
 }
 
-async function recordListenerEvent(request, repository) {
+async function notificationContextForEvent(repository, body) {
+  if (body.rule_id) {
+    return repository.db.prepare(`SELECT r.name AS rule_name, r.kind AS rule_kind, r.notify_on_match,
+      r.user_id, a.name AS account_name, u.display_name AS user_display_name,
+      u.email AS user_email, u.github_login AS user_github_login FROM realtime_rules r
+      LEFT JOIN accounts a ON a.id = r.account_id
+      LEFT JOIN users u ON u.id = r.user_id WHERE r.id = ?`)
+      .bind(body.rule_id).first();
+  }
+  if (body.account_id) {
+    const account = await repository.db.prepare(`SELECT a.name AS account_name, a.user_id,
+      u.display_name AS user_display_name, u.email AS user_email,
+      u.github_login AS user_github_login FROM accounts a
+      LEFT JOIN users u ON u.id = a.user_id WHERE a.id = ?`)
+      .bind(body.account_id).first();
+    return { ...account, notify_on_match: 1 };
+  }
+  return { notify_on_match: 1 };
+}
+
+async function recordListenerEvent(request, repository, env, context) {
   const body = objectBody(await readJson(request, 32_000));
   const eventKind = text(body.event_kind, "event_kind", { maximum: 40 });
   if (!["message_observed", "keyword_replied", "listener_error"].includes(eventKind)) {
@@ -489,6 +515,7 @@ async function recordListenerEvent(request, repository) {
   const action = body.action_summary
     ? sanitizeLogText(String(body.action_summary), { maxLines: 2, maxLength: 300 })
     : null;
+  const notificationContext = await notificationContextForEvent(repository, body);
   await repository.db.batch([
     repository.db.prepare(`INSERT INTO listener_events
       (rule_id, account_id, event_kind, chat_id, sender_id, message_id, message_preview, action_summary, created_at)
@@ -503,10 +530,30 @@ async function recordListenerEvent(request, repository) {
         .bind(timestamp, body.rule_id)
       : repository.db.prepare("SELECT 1"),
   ]);
-  return json({ data: { accepted: true } }, 202);
+  let notification;
+  try {
+    notification = await sendRealtimeNotification(env, repository, context.fetch, {
+      event_kind: eventKind,
+      rule_name: notificationContext?.rule_name,
+      rule_kind: notificationContext?.rule_kind,
+      user_id: notificationContext?.user_id,
+      user_name: notificationContext?.user_display_name
+        || notificationContext?.user_email
+        || notificationContext?.user_github_login,
+      account_name: notificationContext?.account_name,
+      chat_id: body.chat_id,
+      sender_id: body.sender_id,
+      message_preview: preview,
+      action_summary: action,
+      created_at: timestamp,
+    });
+  } catch {
+    notification = { sent: false, reason: "notification_failed" };
+  }
+  return json({ data: { accepted: true, notification } }, 202);
 }
 
-export async function handleListenerApi(request, env, repository) {
+export async function handleListenerApi(request, env, repository, context = {}) {
   const url = new URL(request.url);
   const prefix = "/api/listener/v1/";
   if (!url.pathname.startsWith(prefix)) return null;
@@ -522,7 +569,9 @@ export async function handleListenerApi(request, env, repository) {
   }
   if (parts[0] === "events" && parts.length === 1) {
     if (request.method !== "POST") return methodNotAllowed(["POST"]);
-    return recordListenerEvent(request, repository);
+    return recordListenerEvent(request, repository, env, {
+      fetch: context.fetch || globalThis.fetch,
+    });
   }
   if (parts[0] === "inspections" && parts[1] === "claim" && parts.length === 2) {
     if (request.method !== "POST") return methodNotAllowed(["POST"]);
@@ -538,6 +587,7 @@ export async function handleListenerApi(request, env, repository) {
 export const __test = {
   ensureRealtimeAdminAccountAvailable,
   normalizeTelegramTarget,
+  recordListenerEvent,
   ruleInput,
   secureEqual,
 };

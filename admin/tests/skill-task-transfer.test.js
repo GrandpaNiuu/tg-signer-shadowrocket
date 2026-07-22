@@ -56,11 +56,11 @@ test("expanded Skill parameters round-trip without account secrets", () => {
   assert.deepEqual(imported.tasks[0].params, source.params);
 });
 
-test("media task copies keep the Worker asset reference but never inherit task ids", () => {
+test("content task copies keep the direct Telegram source but never inherit task ids", () => {
   const source = task("send_media", {
     target: "@example_channel",
-    file_id: "asset-telegram-0001",
-    media_type: "photo",
+    source_chat_id: "me",
+    source_message_id: 41,
     caption: "每日海报",
     message_thread_id: 10,
     delete_after: 60,

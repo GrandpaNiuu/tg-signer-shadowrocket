@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 const mergeUrl = new URL("../src/signer-skill-merge.js", import.meta.url);
+const hubUrl = new URL("../src/automation-skill-hub.js", import.meta.url);
 const indexUrl = new URL("../index.html", import.meta.url);
 
 test("merged signer Skill JavaScript passes syntax validation", () => {
@@ -13,9 +14,8 @@ test("merged signer Skill JavaScript passes syntax validation", () => {
 });
 
 test("bot inspection is presented as a signer creation method instead of a separate visible Skill", async () => {
-  const source = await readFile(mergeUrl, "utf8");
-  assert.match(source, /data-skill-hub-capability="bot_inspection"/);
-  assert.match(source, /card\.hidden = true/);
+  const [source, hub] = await Promise.all([readFile(mergeUrl, "utf8"), readFile(hubUrl, "utf8")]);
+  assert.doesNotMatch(hub, /bot_inspection/);
   assert.match(source, /自动识别并创建（推荐）/);
   assert.match(source, /手动配置/);
   assert.match(source, /data-signer-skill-action/);

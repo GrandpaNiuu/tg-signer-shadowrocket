@@ -151,7 +151,10 @@ async function taskCollection(request, env, repository, context, url) {
   if (!skill) throw new HttpError(422, "validation_failed", "Request validation failed.", { fields: ["skill_key"] });
   const params = normalizeSkillParams(input.skill_key, input.params || {}, input);
   if (input.skill_key === "send_media") await validateMediaAsset(repository, params);
-  const presentation = taskPresentation(input.skill_key, params);
+  const presentation = {
+    ...taskPresentation(input.skill_key, params),
+    ...(input.skill_key === "tg_signer" ? { bot: input.bot, command: input.command } : {}),
+  };
   validateTaskRuntime({ ...input, ...presentation });
   const timestamp = iso(context.now);
   const taskId = context.uuid();
@@ -216,7 +219,13 @@ async function taskItem(request, env, repository, context, id) {
     delete_after_seconds: input.delete_after_seconds ?? current.delete_after_seconds,
   });
   if (finalSkillKey === "send_media") await validateMediaAsset(repository, params);
-  const presentation = taskPresentation(finalSkillKey, params);
+  const presentation = {
+    ...taskPresentation(finalSkillKey, params),
+    ...(finalSkillKey === "tg_signer" ? {
+      bot: input.bot ?? current.bot,
+      command: input.command ?? current.command,
+    } : {}),
+  };
   validateTaskRuntime({ ...input, skill_key: finalSkillKey, ...presentation }, current);
   const timestamp = iso(context.now);
   const values = { ...input, ...presentation, updated_at: timestamp };
@@ -316,4 +325,4 @@ export async function handleSkillTaskApi(request, env, repository, context = {})
   return null;
 }
 
-export const __test = { attachParams, legacyParams, mediaAssetInput, mergedLegacyParams, safeParams };
+export const __test = { attachParams, legacyParams, mediaAssetInput, mergedLegacyParams, safeParams, validateMediaAsset };

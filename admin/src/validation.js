@@ -110,7 +110,7 @@ export function validateTask(input) {
   const errors = {};
   if (!required(input.name) || input.name.trim().length > 100) errors.name = "请输入 1–100 个字符的任务名称。";
   if (!required(input.account_id)) errors.account_id = "请选择账号。";
-  if (!required(input.skill_key)) errors.skill_key = "请选择 Skill。";
+  if (!required(input.skill_key)) errors.skill_key = "请选择任务类型。";
   const bot = String(input.bot || "").trim();
   if (!BOT_USERNAME.test(bot) && !CHAT_ID.test(bot)) errors.bot = "请输入 @用户/机器人/频道用户名或数字 Chat ID。";
   if (!required(input.command) || input.command.length > 2000) errors.command = "请输入不超过 2000 个字符的消息或命令。";

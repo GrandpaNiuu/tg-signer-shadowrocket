@@ -30,3 +30,13 @@ test("stored task params are parsed without exposing malformed JSON", () => {
   assert.deepEqual(__test.safeParams('{"target":"@bot"}'), { target: "@bot" });
   assert.deepEqual(__test.safeParams("not-json"), {});
 });
+
+test("new arbitrary-content tasks do not query the legacy media registry", async () => {
+  const repository = { db: { prepare() { assert.fail("media_assets must not be queried"); } } };
+  const result = await __test.validateMediaAsset(repository, {
+    target: "@target",
+    source_chat_id: "me",
+    source_message_id: 123,
+  });
+  assert.equal(result, null);
+});

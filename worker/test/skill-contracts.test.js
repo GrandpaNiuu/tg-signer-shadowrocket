@@ -3,18 +3,19 @@ import test from "node:test";
 
 import { normalizeSkillParams, taskPresentation } from "../src/skill-contracts.js";
 
-test("send_media validates explicit Worker-owned media parameters", () => {
+test("send_media accepts a direct Telegram message without a media registry", () => {
   const media = normalizeSkillParams("send_media", {
     target: "-1001234567890",
-    file_id: "media-asset-1234",
-    media_type: "photo",
-    caption: "海报",
+    source_chat_id: "me",
+    source_message_id: 88,
+    caption: "",
     message_thread_id: null,
     delete_after: null,
   });
   assert.equal(media.target, "-1001234567890");
-  assert.equal(media.file_id, "media-asset-1234");
-  assert.equal(media.media_type, "photo");
+  assert.equal(media.source_chat_id, "me");
+  assert.equal(media.source_message_id, 88);
+  assert.equal(media.caption, "");
 });
 
 test("legacy admin fields can create media tasks without arbitrary server paths", () => {
@@ -48,13 +49,14 @@ test("overlapping and retired Skills are rejected by the Worker allowlist", () =
 test("media presentation stores a human summary separately from canonical params", () => {
   const presentation = taskPresentation("send_media", {
     target: "@channel_name",
-    file_id: "media-asset-1234",
-    media_type: "video",
+    source_chat_id: "@source_name",
+    source_message_id: 77,
     caption: "新品视频",
     message_thread_id: null,
     delete_after: null,
   });
   assert.equal(presentation.bot, "@channel_name");
-  assert.match(presentation.command, /video/);
-  assert.match(presentation.command, /media-asset-1234/);
+  assert.match(presentation.command, /任意内容/);
+  assert.match(presentation.command, /@source_name/);
+  assert.match(presentation.command, /77/);
 });

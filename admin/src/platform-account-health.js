@@ -1,5 +1,4 @@
 const HEALTH_ROUTE = "#/users";
-const SKILLS_ROUTE = "#/skills";
 const MAX_BATCH = 20;
 const STALE_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
 const ACTIVE_VALIDATION_STATUSES = new Set(["created", "starting", "code_submitted", "password_submitted"]);
@@ -381,20 +380,8 @@ function selectedIds(section) {
   return [...section.querySelectorAll("[data-health-select]:checked")].map((input) => input.value);
 }
 
-function adaptSkillCard() {
-  if (!isAdministrator() || !String(location.hash).startsWith(SKILLS_ROUTE)) return;
-  const card = document.querySelector('[data-skill-hub-capability="account_connection_check"]');
-  if (!card || card.dataset.healthCenterAdapted === "true") return;
-  const button = card.querySelector('[data-skill-hub-action="create-validation"]');
-  if (button) button.textContent = "打开健康中心";
-  const entry = [...card.querySelectorAll(".skill-meta span")].find((item) => item.textContent.includes("配置入口"));
-  if (entry) entry.innerHTML = "配置入口<strong>全平台账号健康中心</strong>";
-  card.dataset.healthCenterAdapted = "true";
-}
-
 function syncRoute() {
   attachViewObserver();
-  if (String(location.hash).startsWith(SKILLS_ROUTE)) adaptSkillCard();
   if (String(location.hash).startsWith(HEALTH_ROUTE)) {
     renderHealthCenter();
   } else {
@@ -418,15 +405,6 @@ function attachViewObserver() {
   viewObserver = new MutationObserver(scheduleSync);
   viewObserver.observe(view, { childList: true });
 }
-
-document.addEventListener("click", (event) => {
-  const validationButton = event.target.closest('[data-skill-hub-capability="account_connection_check"] [data-skill-hub-action="create-validation"]');
-  if (!validationButton || !isAdministrator()) return;
-  event.preventDefault();
-  event.stopImmediatePropagation();
-  sessionStorage.setItem("focus-platform-account-health", "1");
-  location.hash = HEALTH_ROUTE;
-}, true);
 
 document.addEventListener("click", async (event) => {
   const button = event.target.closest("[data-health-action]");

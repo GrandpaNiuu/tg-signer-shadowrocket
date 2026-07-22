@@ -26,7 +26,8 @@ function notify(title, message = "", kind = "success") {
 }
 
 function skillKey(card) {
-  return card?.querySelector(".skill-meta strong.mono")?.textContent.trim()
+  return card?.dataset.automationKey
+    || card?.querySelector(".skill-meta strong.mono")?.textContent.trim()
     || card?.querySelector(".skill-meta strong")?.textContent.trim()
     || "";
 }
@@ -36,18 +37,8 @@ function signerCard() {
     .find((card) => skillKey(card) === "tg_signer") || null;
 }
 
-function hideStandaloneInspectionCard() {
-  const card = document.querySelector('[data-skill-hub-capability="bot_inspection"]');
-  if (!card || card.dataset.mergedIntoSigner === "true") return;
-  card.hidden = true;
-  card.setAttribute("aria-hidden", "true");
-  card.dataset.mergedIntoSigner = "true";
-}
-
 function mergeSignerCard() {
   if (!String(location.hash).startsWith(SKILLS_ROUTE)) return;
-  hideStandaloneInspectionCard();
-
   const card = signerCard();
   const actions = card?.querySelector("[data-skill-hub-existing-action]");
   const manualButton = actions?.querySelector('[data-skill-hub-action="create-scheduled"][data-skill-key="tg_signer"]');
