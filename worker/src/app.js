@@ -2,6 +2,7 @@ import { handleAdminApi } from "./admin-api.js";
 import { createAdminAuth } from "./admin-auth.js";
 import { verifyRunnerRequest } from "./auth.js";
 import { errorResponse, json } from "./http.js";
+import { handleListenerEventApi } from "./listener-event-api.js";
 import { handleListenerTaskApi } from "./listener-task-api.js";
 import { handleListenerMediaUploadApi, handleWorkspaceMediaUploadApi } from "./media-upload-api.js";
 import { handlePlatformAccountHealthApi } from "./platform-account-health.js";
@@ -176,6 +177,12 @@ export function createWorker(dependencies = {}) {
           return await withRequestId(await handleListenerMediaUploadApi(request, env, repository, {
             uuid,
             now,
+            fetch: fetchImpl,
+          }), requestId);
+        }
+        if (url.pathname === "/api/listener/v1/events") {
+          const repository = repositoryFactory(env);
+          return await withRequestId(await handleListenerEventApi(request, env, repository, {
             fetch: fetchImpl,
           }), requestId);
         }
