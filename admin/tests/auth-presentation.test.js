@@ -35,11 +35,11 @@ test("current production state is presented as GitHub registration, not a broken
     state: "github-only",
     showEmailDivider: false,
     title: "GitHub 注册已开放",
-    message: "邮箱新注册尚未开放；已有邮箱账号仍可返回登录。",
+    message: "邮箱新注册暂未开放；已有邮箱账号可以返回登录，或使用 GitHub 创建账号。",
   });
 });
 
-test("verified email registration is shown only when every public security feature is ready", () => {
+test("verified email registration explains capabilities and verification requirements", () => {
   const presentation = registrationPresentation({
     github_enabled: true,
     email_enabled: true,
@@ -50,13 +50,20 @@ test("verified email registration is shown only when every public security featu
   });
   assert.equal(presentation.state, "open");
   assert.equal(presentation.showEmailDivider, true);
-  assert.match(presentation.message, /人机验证和邮件确认/);
+  assert.match(presentation.message, /独立管理定时消息、机器人操作和执行记录/);
+  assert.match(presentation.message, /人机验证和 6 位邮件验证码/);
 });
 
-test("login warning accurately separates existing email access from new registration", () => {
+test("login guidance uses user-facing instructions instead of configuration status", () => {
   assert.equal(loginSecurityMessage({
     email_enabled: true,
     security_setup_required: true,
-  }), "已有邮箱账号可以继续登录；邮箱新注册和自助找回密码尚未完成安全配置。");
+  }), "已有邮箱账号可以继续登录；邮箱新注册和密码找回暂未开放。");
+  assert.equal(loginSecurityMessage({
+    email_enabled: true,
+    registration_enabled: true,
+    email_verification_required: true,
+    password_reset_enabled: true,
+  }), "输入注册邮箱和密码，并完成人机验证。连续多次失败后，系统会暂时限制尝试。");
   assert.equal(loginSecurityMessage({ email_enabled: false }), null);
 });
