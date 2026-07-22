@@ -12,6 +12,7 @@ from typing import Any, Callable
 from pyrogram import Client
 from pyrogram.handlers import MessageHandler
 
+from listener.event_identity import message_source
 from listener.reply_limits import ReplyLimiter, is_human_sender
 from listener.rules import (
     GROUP_TYPES,
@@ -94,10 +95,11 @@ class RealtimeManager:
         chat = getattr(message, "chat", None)
         if not chat:
             return
-        chat_id = str(getattr(chat, "id", ""))
+        source = message_source(message)
+        chat_id = source["chat_id"]
         message_id = str(getattr(message, "id", ""))
         sender = getattr(message, "from_user", None)
-        sender_id = str(getattr(sender, "id", "") or "")
+        sender_id = source["sender_id"]
         content = message_text(message)
         reply_checked = False
         reply_target = None
@@ -133,8 +135,7 @@ class RealtimeManager:
             event = {
                 "rule_id": rule["id"],
                 "account_id": account_id,
-                "chat_id": chat_id,
-                "sender_id": sender_id,
+                **source,
                 "message_id": message_id,
                 "message_preview": content[:600],
             }

@@ -1,0 +1,9 @@
+ALTER TABLE listener_events ADD COLUMN chat_title TEXT;
+ALTER TABLE listener_events ADD COLUMN chat_username TEXT;
+ALTER TABLE listener_events ADD COLUMN chat_type TEXT;
+ALTER TABLE listener_events ADD COLUMN chat_label TEXT;
+ALTER TABLE listener_events ADD COLUMN sender_name TEXT;
+ALTER TABLE listener_events ADD COLUMN sender_username TEXT;
+ALTER TABLE listener_events ADD COLUMN sender_type TEXT;
+ALTER TABLE listener_events ADD COLUMN sender_label TEXT;
+ALTER TABLE listener_events ADD COLUMN message_link TEXT;
