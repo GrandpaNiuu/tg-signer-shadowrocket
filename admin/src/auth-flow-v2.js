@@ -225,6 +225,16 @@ async function sessionEstablished() {
   return false;
 }
 
+function openAuthenticatedDashboard(message) {
+  // A hash-only location.replace keeps the current document and triggers the
+  // legacy hashchange handler, which renders the login gate again while the
+  // authenticated application shell is still hidden. Reloading after replacing
+  // the route lets bootstrap read the new session cookie and open the dashboard.
+  setMessage(message);
+  history.replaceState(null, "", "/#/dashboard");
+  globalThis.location.reload();
+}
+
 function setVerificationRoute(email, { sent = false } = {}) {
   stopResendTimer();
   const query = new URLSearchParams({ verification_email_v2: email });
@@ -265,7 +275,7 @@ async function handleLogin(form) {
     }
     const passwordInput = form.querySelector('input[name="password"]');
     if (passwordInput) passwordInput.value = "";
-    globalThis.location.replace("/#/dashboard");
+    openAuthenticatedDashboard("登录成功，正在打开后台…");
   } catch (error) {
     if (error?.code === "email_verification_required") {
       const sent = /已经发送|新的验证码/.test(text(error.message));
@@ -313,7 +323,11 @@ async function handleRegistration(form) {
       return;
     }
     if (!await sessionEstablished()) throw new Error("账号已创建，但登录会话未建立。");
-    globalThis.location.replace("/#/dashboard");
+    for (const name of ["password", "password_confirm"]) {
+      const input = form.querySelector(`input[name="${name}"]`);
+      if (input) input.value = "";
+    }
+    openAuthenticatedDashboard("账号创建成功，正在打开后台…");
   } catch (error) {
     setMessage(`${formattedError(error)} 已填写的注册资料和密码已保留。`);
     resetFormTurnstile(form);
@@ -544,4 +558,5 @@ export const __test = {
   RESEND_SECONDS,
   routeInfo,
   verificationRouteInfo,
+  openAuthenticatedDashboard,
 };
