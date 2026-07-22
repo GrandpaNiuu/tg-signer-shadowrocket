@@ -10,6 +10,7 @@ const TOKEN_PATTERN = /^[A-Za-z0-9_-]{32,128}$/;
 const VERIFICATION_CODE_PATTERN = /^\d{6}$/;
 const VERIFICATION_CODE_TTL_MS = 10 * 60 * 1000;
 const VERIFICATION_RESEND_SECONDS = 60;
+const VERIFICATION_CODE_MAX_ATTEMPTS = 5;
 
 function bytesToBase64Url(bytes) {
   let binary = "";
@@ -19,6 +20,17 @@ function bytesToBase64Url(bytes) {
 
 async function sha256(value) {
   return bytesToBase64Url(new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(value))));
+}
+
+function constantTimeTextEqual(left, right) {
+  const a = String(left || "");
+  const b = String(right || "");
+  const length = Math.max(a.length, b.length);
+  let difference = a.length ^ b.length;
+  for (let index = 0; index < length; index += 1) {
+    difference |= (a.charCodeAt(index) || 0) ^ (b.charCodeAt(index) || 0);
+  }
+  return difference === 0;
 }
 
 function normalizeEmail(value) {
@@ -160,13 +172,28 @@ function sessionTtlSeconds(env) {
   return Number.isInteger(configured) && configured >= 300 && configured <= 2592000 ? configured : 604800;
 }
 
-async function enforceRateLimit(repository, request, action, identity, now, limit, windowSeconds) {
+function rateLimitMaterial(request, identity, scope) {
+  const remoteIp = String(request.headers.get("cf-connecting-ip") || "unknown").trim() || "unknown";
+  if (scope === "ip") return `ip\u0000${remoteIp}`;
+  if (scope === "identity") return `identity\u0000${identity}`;
+  return `ip_identity\u0000${remoteIp}\u0000${identity}`;
+}
+
+async function enforceRateLimit(
+  repository,
+  request,
+  action,
+  identity,
+  now,
+  limit,
+  windowSeconds,
+  { scope = "ip_identity" } = {},
+) {
   const timestamp = now.getTime();
   const windowStart = Math.floor(timestamp / (windowSeconds * 1000)) * windowSeconds * 1000;
-  const remoteIp = String(request.headers.get("cf-connecting-ip") || "unknown");
   const allowed = await repository.consumeAuthRateLimit({
     action,
-    bucket_hash: await sha256(`${remoteIp}\u0000${identity}`),
+    bucket_hash: await sha256(rateLimitMaterial(request, identity, scope)),
     window_started_at: new Date(windowStart).toISOString(),
     expires_at: new Date(windowStart + windowSeconds * 1000).toISOString(),
     limit,
@@ -175,14 +202,81 @@ async function enforceRateLimit(repository, request, action, identity, now, limi
 }
 
 async function enforceVerificationSendLimits(repository, request, emailNormalized, timestamp) {
-  await enforceRateLimit(repository, request, "verification_code_send_minute", emailNormalized, timestamp, 1, VERIFICATION_RESEND_SECONDS);
-  await enforceRateLimit(repository, request, "verification_code_send_hour", emailNormalized, timestamp, 5, 3600);
+  await enforceRateLimit(
+    repository,
+    request,
+    "verification_code_send_minute",
+    emailNormalized,
+    timestamp,
+    1,
+    VERIFICATION_RESEND_SECONDS,
+  );
+  await enforceRateLimit(
+    repository,
+    request,
+    "verification_code_send_email_hour",
+    emailNormalized,
+    timestamp,
+    5,
+    3600,
+    { scope: "identity" },
+  );
+  await enforceRateLimit(
+    repository,
+    request,
+    "verification_code_send_email_day",
+    emailNormalized,
+    timestamp,
+    10,
+    86400,
+    { scope: "identity" },
+  );
+  await enforceRateLimit(
+    repository,
+    request,
+    "verification_code_send_ip_hour",
+    "*",
+    timestamp,
+    30,
+    3600,
+    { scope: "ip" },
+  );
 }
 
 async function issueVerificationCode({ repository, request, email, user, timestamp, config, randomToken, fetchImpl, env }) {
   await enforceVerificationSendLimits(repository, request, email.normalized, timestamp);
   const verification = await createVerificationCode(repository, randomToken, user.id, timestamp, config);
   await sendVerificationEmail(fetchImpl, env, config, user.email || email.original, verification);
+}
+
+async function consumeVerificationCodeAttempt(repository, userId, tokenHash, timestamp) {
+  if (!repository.db?.prepare || !userId || userId === "missing-user") {
+    return { user: await repository.consumeEmailVerification(tokenHash, timestamp), locked: false };
+  }
+
+  const active = await repository.db.prepare(`SELECT id, token_hash, attempt_count
+    FROM auth_tokens
+    WHERE user_id = ? AND token_type = 'verify_email'
+      AND consumed_at IS NULL AND expires_at > ?
+    ORDER BY created_at DESC LIMIT 1`).bind(userId, timestamp).first();
+  if (!active) return { user: null, locked: false, attemptsRemaining: 0 };
+
+  if (constantTimeTextEqual(active.token_hash, tokenHash)) {
+    return { user: await repository.consumeEmailVerification(tokenHash, timestamp), locked: false };
+  }
+
+  const updated = await repository.db.prepare(`UPDATE auth_tokens
+    SET attempt_count = attempt_count + 1,
+      consumed_at = CASE WHEN attempt_count + 1 >= ? THEN ? ELSE consumed_at END
+    WHERE id = ? AND consumed_at IS NULL AND expires_at > ?
+    RETURNING attempt_count, consumed_at`)
+    .bind(VERIFICATION_CODE_MAX_ATTEMPTS, timestamp, active.id, timestamp).first();
+  const attempts = Number(updated?.attempt_count || active.attempt_count || 0);
+  return {
+    user: null,
+    locked: Boolean(updated?.consumed_at),
+    attemptsRemaining: Math.max(0, VERIFICATION_CODE_MAX_ATTEMPTS - attempts),
+  };
 }
 
 function sessionIdentity(user, provider = "email") {
@@ -241,8 +335,9 @@ export function createEmailAuth(dependencies = {}) {
         await verifyAuthChallenge(request, env, config, turnstileInput(body.turnstile_token, {
           required: Boolean(config.turnstileSecret),
         }), "email_register", fetchImpl);
-        await enforceRateLimit(repository, request, "register_ip", "*", timestamp, 5, 3600);
-        await enforceRateLimit(repository, request, "register", email.normalized, timestamp, 5, 3600);
+        await enforceRateLimit(repository, request, "register_ip", "*", timestamp, 5, 3600, { scope: "ip" });
+        await enforceRateLimit(repository, request, "register_email", email.normalized, timestamp, 5, 86400, { scope: "identity" });
+        await enforceRateLimit(repository, request, "register_pair", email.normalized, timestamp, 3, 3600);
         const passwordRecord = await hashPassword(password, env);
         const createdAt = timestamp.toISOString();
 
@@ -269,10 +364,9 @@ export function createEmailAuth(dependencies = {}) {
           created_at: createdAt,
           updated_at: createdAt,
         }, passwordRecord);
-        if (!result.verification_required) {
-          throw new HttpError(409, "account_exists", "该邮箱已注册，请直接登录或找回密码。");
+        if (result.verification_required) {
+          await issueVerificationCode({ repository, request, email, user: result.user, timestamp, config, randomToken, fetchImpl, env });
         }
-        await issueVerificationCode({ repository, request, email, user: result.user, timestamp, config, randomToken, fetchImpl, env });
         return json({ data: { status: "verification_required" } }, 202);
       }
 
@@ -282,20 +376,39 @@ export function createEmailAuth(dependencies = {}) {
         exactInput(body, ["email", "code"]);
         const email = emailInput(body.email);
         const code = verificationCodeInput(body.code);
-        await enforceRateLimit(repository, request, "verification_code_attempt", email.normalized, timestamp, 5, 600);
+        await enforceRateLimit(repository, request, "verification_code_attempt_ip", "*", timestamp, 30, 600, { scope: "ip" });
+        await enforceRateLimit(repository, request, "verification_code_attempt_email", email.normalized, timestamp, 10, 1800, { scope: "identity" });
+        await enforceRateLimit(repository, request, "verification_code_attempt_pair", email.normalized, timestamp, 5, 600);
         const pendingUser = await repository.getUserByEmail(email.normalized);
         const userId = pendingUser?.id || "missing-user";
         const token = await verificationToken(userId, code, config.passwordPepper);
-        const user = await repository.consumeEmailVerification(await sha256(token), timestamp.toISOString());
-        if (!user) throw new HttpError(400, "invalid_or_expired_code", "验证码错误或已过期。");
+        const attempt = await consumeVerificationCodeAttempt(
+          repository,
+          userId,
+          await sha256(token),
+          timestamp.toISOString(),
+        );
+        if (!attempt.user) {
+          throw new HttpError(400, "invalid_or_expired_code", attempt.locked
+            ? "验证码错误次数过多，已失效。请重新发送验证码。"
+            : "验证码错误或已过期。");
+        }
         return json({ data: { status: "verified" } });
       }
 
       if (path === "/api/auth/email/resend-code") {
         const config = authConfiguration(env, { requireRegistration: true });
-        const body = await readJson(request, 2_048);
-        exactInput(body, ["email"]);
+        const body = await readJson(request, 4_096);
+        exactInput(body, ["email", "turnstile_token"]);
         const email = emailInput(body.email);
+        await verifyAuthChallenge(
+          request,
+          env,
+          config,
+          turnstileInput(body.turnstile_token),
+          "resend_verification",
+          fetchImpl,
+        );
         await enforceVerificationSendLimits(repository, request, email.normalized, timestamp);
         const user = await repository.getUserByEmail(email.normalized);
         if (user && !user.email_verified_at && ["pending", "active"].includes(user.status)) {
@@ -324,15 +437,14 @@ export function createEmailAuth(dependencies = {}) {
         await verifyAuthChallenge(request, env, config, turnstileInput(body.turnstile_token, {
           required: Boolean(config.turnstileSecret),
         }), "email_login", fetchImpl);
-        if (config.localMode) {
-          await enforceRateLimit(repository, request, "login_ip", "*", timestamp, 30, 900);
-        }
-        await enforceRateLimit(repository, request, "login", email.normalized, timestamp, 10, 900);
+        await enforceRateLimit(repository, request, "login_ip", "*", timestamp, 30, 900, { scope: "ip" });
         const user = await repository.getUserByEmail(email.normalized);
         const valid = user
           ? await verifyPassword(password, user, env)
           : (await hashPassword(password, env), false);
         if (!valid || user.status === "disabled") {
+          await enforceRateLimit(repository, request, "login_email", email.normalized, timestamp, 10, 900, { scope: "identity" });
+          await enforceRateLimit(repository, request, "login_pair", email.normalized, timestamp, 5, 900);
           throw new HttpError(401, "invalid_credentials", "邮箱或密码不正确。");
         }
         if (user.status !== "active" || (config.emailVerificationRequired && !user.email_verified_at)) {
@@ -366,7 +478,9 @@ export function createEmailAuth(dependencies = {}) {
           "forgot_password",
           fetchImpl,
         );
-        await enforceRateLimit(repository, request, "forgot_password", email.normalized, timestamp, 5, 3600);
+        await enforceRateLimit(repository, request, "forgot_password_ip", "*", timestamp, 20, 3600, { scope: "ip" });
+        await enforceRateLimit(repository, request, "forgot_password_email", email.normalized, timestamp, 5, 3600, { scope: "identity" });
+        await enforceRateLimit(repository, request, "forgot_password_pair", email.normalized, timestamp, 3, 3600);
         const user = await repository.getUserByEmail(email.normalized);
         if (user?.status === "active" && user.email_verified_at) {
           try {
@@ -408,7 +522,7 @@ export function createEmailAuth(dependencies = {}) {
           "reset_password",
           fetchImpl,
         );
-        await enforceRateLimit(repository, request, "reset_password", await sha256(token), timestamp, 10, 3600);
+        await enforceRateLimit(repository, request, "reset_password", await sha256(token), timestamp, 10, 3600, { scope: "identity" });
         const passwordRecord = await hashPassword(password, env);
         const user = await repository.consumePasswordReset(await sha256(token), passwordRecord, timestamp.toISOString());
         if (!user) throw new HttpError(400, "invalid_or_expired_token", "重置链接无效或已过期。");
@@ -421,9 +535,11 @@ export function createEmailAuth(dependencies = {}) {
 }
 
 export const __test = {
+  constantTimeTextEqual,
   normalizeEmail,
   randomVerificationCode,
   verificationToken,
+  VERIFICATION_CODE_MAX_ATTEMPTS,
   VERIFICATION_CODE_TTL_MS,
   VERIFICATION_RESEND_SECONDS,
 };
