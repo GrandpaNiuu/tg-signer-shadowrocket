@@ -153,6 +153,15 @@ function verificationRoute(email) {
   globalThis.location.hash = `/register?verification_email=${encodeURIComponent(email)}`;
 }
 
+function openAuthenticatedDashboard() {
+  // Hash-only navigation keeps the current document alive. The legacy hashchange
+  // listener then sees the hidden app shell and renders the login page again.
+  // Replace the route and reload so bootstrap reads the new session cookie and
+  // switches the shell into its authenticated state exactly once.
+  globalThis.history.replaceState(null, "", "/#/dashboard");
+  globalThis.location.reload();
+}
+
 async function handleLogin(form) {
   if (submissionInFlight) return;
   if (!form.checkValidity()) return form.reportValidity();
@@ -180,7 +189,8 @@ async function handleLogin(form) {
     }
     const passwordInput = form.querySelector('input[name="password"]');
     if (passwordInput) passwordInput.value = "";
-    location.replace("/#/dashboard");
+    setMessage("登录成功，正在打开后台…");
+    openAuthenticatedDashboard();
   } catch (error) {
     if (error?.code === "email_verification_required") {
       verificationRoute(email);
@@ -231,7 +241,8 @@ async function handleRegistration(form) {
         const input = form.querySelector(`input[name="${name}"]`);
         if (input) input.value = "";
       }
-      location.replace("/#/dashboard");
+      setMessage("账号创建成功，正在打开后台…");
+      openAuthenticatedDashboard();
       return;
     }
     throw new Error("账号已创建，但登录会话未建立。请使用 HTTPS 并允许本站 Cookie。");
@@ -260,4 +271,5 @@ documentRef?.addEventListener("submit", interceptAuthSubmit, true);
 export const __test = {
   authMode,
   installTurnstileActionWrapper,
+  openAuthenticatedDashboard,
 };
