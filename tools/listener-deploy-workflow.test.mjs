@@ -28,7 +28,7 @@ test("deployed Listener owns realtime-account scheduled execution", async () => 
   assert.match(source, /asyncio\.create_task\(self\.task_loop\(\)\)/);
 });
 
-test("Listener heartbeat exposes the coexistence-capable runtime version", async () => {
+test("Listener heartbeat exposes the readable-event runtime version", async () => {
   const source = await readFile(versionUrl, "utf8");
-  assert.match(source, /__version__\s*=\s*"0\.2\.0"/);
+  assert.match(source, /__version__\s*=\s*"0\.3\.0"/);
 });
