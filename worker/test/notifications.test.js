@@ -209,15 +209,35 @@ test("long task messages show both ends, length, and redacted sensitive values",
   assert.equal(preview.text.includes("private-value"), false);
 });
 
-test("disabled notifications do not read secrets or call Telegram", async () => {
+test("a legacy disabled flag cannot suppress required task receipts", async () => {
+  const secrets = new Map([
+    ["bot_token", await secret("bot_token", BOT_TOKEN)],
+    ["chat_id", await secret("chat_id", CHAT_ID)],
+  ]);
   const repository = {
-    async getSettings() { return { notifications_enabled: false }; },
-    async getSecretByOwnerPurpose() { assert.fail("secret must not be read"); },
+    async getSettings() { assert.fail("the retired notification toggle must not be read"); },
+    async getSecretByOwnerPurpose(_ownerType, _ownerId, purpose) { return secrets.get(purpose); },
+    async getRun() {
+      return {
+        task_name: "必达回执测试",
+        skill_key: "send_text",
+        bot: "@notice_target",
+        command: "测试消息",
+        status: "success",
+        trigger_type: "scheduled",
+        duration_ms: 12,
+        attempt_count: 1,
+        max_attempts: 1,
+      };
+    },
   };
-  const result = await sendRunNotification({}, repository, async () => {
-    assert.fail("Telegram must not be called");
+  let calls = 0;
+  const result = await sendRunNotification({ SECRET_ROOT_KEY: ROOT_KEY }, repository, async () => {
+    calls += 1;
+    return new Response(null, { status: 200 });
   }, "run-1");
-  assert.deepEqual(result, { sent: false, reason: "disabled" });
+  assert.deepEqual(result, { sent: true, reason: null });
+  assert.equal(calls, 1);
 });
 
 test("realtime rule notifications report what was heard and what was replied", async () => {

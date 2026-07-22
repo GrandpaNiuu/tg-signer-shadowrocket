@@ -166,8 +166,6 @@ function resultFeedback(run, secrets) {
 }
 
 export async function sendRunNotification(env, repository, fetchImpl, runId) {
-  const settings = await repository.getSettings();
-  if (settings.notifications_enabled !== true) return { sent: false, reason: "disabled" };
   const [token, chatId, run] = await Promise.all([
     notificationSecret(repository, env, "bot_token"),
     notificationSecret(repository, env, "chat_id"),
@@ -252,8 +250,6 @@ function realtimeKindLabel(kind) {
 }
 
 export async function sendRealtimeNotification(env, repository, fetchImpl, event) {
-  const settings = await repository.getSettings();
-  if (settings.notifications_enabled !== true) return { sent: false, reason: "disabled" };
   const { token, chatId } = await notificationCredentials(repository, env);
   if (!token || !chatId) return { sent: false, reason: "not_configured" };
 

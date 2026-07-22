@@ -29,6 +29,10 @@ test("task runtime budget fits the 25-minute workflow including wait and callbac
 
 test("retired legacy scheduler mode cannot be written back", () => {
   assert.deepEqual(settingsInput({ values: { scheduler_mode: "d1" } }), { scheduler_mode: "d1" });
+  assert.deepEqual(
+    settingsInput({ values: { notifications_enabled: false } }),
+    { notifications_enabled: true },
+  );
   assert.throws(
     () => settingsInput({ values: { scheduler_mode: "legacy" } }),
     (error) => error.status === 422 && error.details.fields.includes("values.scheduler_mode"),

@@ -182,7 +182,8 @@ export function settingsInput(body) {
     values.default_timezone = timezone;
   }
   if (body.values.notifications_enabled !== undefined) {
-    values.notifications_enabled = booleanField(body.values.notifications_enabled, "values.notifications_enabled");
+    booleanField(body.values.notifications_enabled, "values.notifications_enabled");
+    values.notifications_enabled = true;
   }
   return values;
 }

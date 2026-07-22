@@ -273,7 +273,7 @@ test("listener events are stored and notification failures never reject the even
 
   assert.equal(response.status, 202);
   assert.equal(body.data.accepted, true);
-  assert.deepEqual(body.data.notification, { sent: false, reason: "disabled" });
+  assert.deepEqual(body.data.notification, { sent: false, reason: "notification_failed" });
   assert.equal(batched.length, 2);
   assert.match(batched[0].source, /INSERT INTO listener_events/);
 });
