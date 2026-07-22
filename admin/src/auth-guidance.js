@@ -20,6 +20,10 @@ function authMode(hash = globalThis.location?.hash) {
   return String(hash || "#/login").replace(/^#\/?/, "").split("?", 1)[0] || "login";
 }
 
+function setText(node, value) {
+  if (node && node.textContent !== value) node.textContent = value;
+}
+
 function buildSection(key, title, description) {
   const section = documentRef.createElement("div");
   section.className = "auth-section-head";
@@ -73,13 +77,10 @@ function updateDefaultHeader(mode) {
     "登录或注册后管理自己的自动消息任务。",
     "登录或注册后管理 Telegram 账号、定时消息与机器人命令。",
   ].includes(value)) {
-    authMessage.textContent = "使用邮箱或 GitHub 登录，管理自己的 Telegram 自动消息。";
+    setText(authMessage, "使用邮箱或 GitHub 登录，管理自己的 Telegram 自动消息。");
   }
-  if (mode === "register" && [
-    "创建独立工作区，随后绑定自己的 Telegram 账号。",
-    "创建独立工作区，随后绑定自己的 Telegram 账号。",
-  ].includes(value)) {
-    authMessage.textContent = "创建账号后绑定自己的 Telegram 账号，并独立管理自动消息。";
+  if (mode === "register" && value === "创建独立工作区，随后绑定自己的 Telegram 账号。") {
+    setText(authMessage, "创建账号后绑定自己的 Telegram 账号，并独立管理自动消息。");
   }
 }
 
@@ -96,8 +97,7 @@ function applyRegistrationGuidance() {
   if (!form) return;
   prependSection(form, "register-intro", "创建邮箱账号", COPY.registerIntro);
   const passwordField = form.querySelector('input[name="password"]')?.closest(".field");
-  const passwordHelp = passwordField?.querySelector(".field-help");
-  if (passwordHelp) passwordHelp.textContent = COPY.passwordHelp;
+  setText(passwordField?.querySelector(".field-help"), COPY.passwordHelp);
   insertHelpBefore(form.querySelector("[data-turnstile]"), "turnstile-register", COPY.turnstileHelp);
   insertHelpAfter(form.querySelector('button[type="submit"]'), "registration-privacy", COPY.privacyHelp);
 }
@@ -105,16 +105,14 @@ function applyRegistrationGuidance() {
 function applyForgotPasswordGuidance() {
   const form = authContent?.querySelector("#forgot-password-form");
   if (!form) return;
-  const paragraph = form.querySelector(".auth-section-head p");
-  if (paragraph) paragraph.textContent = COPY.forgotHelp;
+  setText(form.querySelector(".auth-section-head p"), COPY.forgotHelp);
   insertHelpBefore(form.querySelector("[data-turnstile]"), "turnstile-forgot", COPY.turnstileHelp);
 }
 
 function applyResetPasswordGuidance() {
   const form = authContent?.querySelector("#reset-password-form");
   if (!form) return;
-  const paragraph = form.querySelector(".auth-section-head p");
-  if (paragraph) paragraph.textContent = COPY.resetHelp;
+  setText(form.querySelector(".auth-section-head p"), COPY.resetHelp);
   const passwordField = form.querySelector('input[name="password"]')?.closest(".field");
   insertHelpAfter(passwordField?.querySelector("input"), "reset-password-help", COPY.passwordHelp);
   insertHelpBefore(form.querySelector("[data-turnstile]"), "turnstile-reset", COPY.turnstileHelp);
@@ -123,19 +121,15 @@ function applyResetPasswordGuidance() {
 function applyVerificationGuidance() {
   const form = authContent?.querySelector("#email-verification-code-form");
   if (!form) return;
-  if (authMessage) authMessage.textContent = COPY.verificationMessage;
+  setText(authMessage, COPY.verificationMessage);
   const sections = form.querySelectorAll(".auth-section-head");
-  const firstHeading = sections[0]?.querySelector("h2");
-  const firstParagraph = sections[0]?.querySelector("p");
-  if (firstHeading) firstHeading.textContent = "第一步：输入验证码";
-  if (firstParagraph) firstParagraph.textContent = COPY.verificationHelp;
-  const secondHeading = sections[1]?.querySelector("h3, h2");
-  const secondParagraph = sections[1]?.querySelector("p");
-  if (secondHeading) secondHeading.textContent = "第三步：重新发送";
-  if (secondParagraph) secondParagraph.textContent = COPY.resendHelp;
+  setText(sections[0]?.querySelector("h2"), "第一步：输入验证码");
+  setText(sections[0]?.querySelector("p"), COPY.verificationHelp);
+  setText(sections[1]?.querySelector("h3, h2"), "第三步：重新发送");
+  setText(sections[1]?.querySelector("p"), COPY.resendHelp);
   const status = form.querySelector("[data-verification-status]");
   if (status && /注册请求已受理|账号已经创建|验证码已发送/.test(status.textContent)) {
-    status.textContent = COPY.verificationStatus;
+    setText(status, COPY.verificationStatus);
   }
 }
 
@@ -152,7 +146,7 @@ function applyGuidance() {
 
 if (authContent) {
   const observer = new MutationObserver(applyGuidance);
-  observer.observe(authContent, { childList: true, subtree: true, characterData: true });
+  observer.observe(authContent, { childList: true, subtree: true });
   window.addEventListener("hashchange", applyGuidance);
   applyGuidance();
 }
