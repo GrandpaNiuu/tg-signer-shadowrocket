@@ -13,6 +13,14 @@ on:
         required: true
         default: Telegram Listener VPS
         type: string
+  push:
+    branches:
+      - "main"
+    paths:
+      - ".github/workflows/deploy-listener.yml"
+      - "listener/**"
+      - "runner/**"
+      - "tools/listener-deploy-workflow.test.mjs"
 
 permissions:
   contents: read
@@ -58,8 +66,8 @@ jobs:
       VPS_KNOWN_HOSTS: ${{ secrets.LISTENER_VPS_KNOWN_HOSTS }}
       WORKER_URL: ${{ vars.WORKER_URL }}
       LISTENER_API_TOKEN: ${{ secrets.LISTENER_API_TOKEN }}
-      LISTENER_INSTANCE_ID: ${{ inputs.instance_id }}
-      LISTENER_LABEL: ${{ inputs.listener_label }}
+      LISTENER_INSTANCE_ID: ${{ inputs.instance_id || vars.LISTENER_INSTANCE_ID || 'listener-vps-1' }}
+      LISTENER_LABEL: ${{ inputs.listener_label || vars.LISTENER_LABEL || 'Telegram Listener VPS' }}
 
     steps:
       - name: Checkout
