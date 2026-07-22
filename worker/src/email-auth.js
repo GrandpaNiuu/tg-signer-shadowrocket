@@ -337,8 +337,16 @@ export function createEmailAuth(dependencies = {}) {
         }
         if (user.status !== "active" || (config.emailVerificationRequired && !user.email_verified_at)) {
           if (config.registrationEnabled && !user.email_verified_at && ["pending", "active"].includes(user.status)) {
-            await issueVerificationCode({ repository, request, email, user, timestamp, config, randomToken, fetchImpl, env });
-            throw new HttpError(403, "email_verification_required", "请先输入邮箱收到的 6 位验证码完成验证。新的验证码已经发送。");
+            let sent = false;
+            try {
+              await issueVerificationCode({ repository, request, email, user, timestamp, config, randomToken, fetchImpl, env });
+              sent = true;
+            } catch (error) {
+              if (!(error instanceof HttpError) || error.code !== "rate_limited") throw error;
+            }
+            throw new HttpError(403, "email_verification_required", sent
+              ? "请先输入邮箱收到的 6 位验证码完成验证。新的验证码已经发送。"
+              : "请先输入邮箱收到的 6 位验证码完成验证。");
           }
           throw new HttpError(403, "email_verification_required", "请先输入邮箱收到的 6 位验证码完成验证。");
         }
