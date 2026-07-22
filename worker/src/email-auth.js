@@ -7,6 +7,9 @@ import { verifyTurnstileToken } from "./turnstile.js";
 const encoder = new TextEncoder();
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{32,128}$/;
+const VERIFICATION_CODE_PATTERN = /^\d{6}$/;
+const VERIFICATION_CODE_TTL_MS = 10 * 60 * 1000;
+const VERIFICATION_RESEND_SECONDS = 60;
 
 function bytesToBase64Url(bytes) {
   let binary = "";
@@ -44,6 +47,14 @@ function passwordInput(value) {
   return password;
 }
 
+function verificationCodeInput(value) {
+  const code = String(value || "").trim();
+  if (!VERIFICATION_CODE_PATTERN.test(code)) {
+    throw new HttpError(422, "validation_failed", "请输入 6 位数字验证码。", { fields: ["code"] });
+  }
+  return code;
+}
+
 function turnstileInput(value, { required = true } = {}) {
   const token = String(value || "").trim();
   if ((required && !token) || token.length > 2048) {
@@ -75,6 +86,7 @@ function authConfiguration(env, { requireRegistration = false, emailDelivery = f
     apiKey: passwordAuth.resendApiKey,
     from: passwordAuth.emailFrom,
     origin: passwordAuth.origin,
+    passwordPepper: String(env.PASSWORD_PEPPER || ""),
   };
 }
 
@@ -108,25 +120,38 @@ function logPasswordRecoveryDeliveryFailure(error) {
   }));
 }
 
-async function createVerificationToken(repository, randomToken, userId, timestamp) {
-  const token = randomToken();
+function randomVerificationCode() {
+  const range = 1_000_000;
+  const maximum = 0x1_0000_0000 - (0x1_0000_0000 % range);
+  const values = new Uint32Array(1);
+  do crypto.getRandomValues(values); while (values[0] >= maximum);
+  return String(values[0] % range).padStart(6, "0");
+}
+
+async function verificationToken(userId, code, passwordPepper) {
+  return sha256(`email-verification-code-v1\u0000${userId}\u0000${code}\u0000${passwordPepper}`);
+}
+
+async function createVerificationCode(repository, randomToken, userId, timestamp, config) {
+  const code = randomVerificationCode();
+  const token = await verificationToken(userId, code, config.passwordPepper);
   await repository.createAuthToken({
     id: `auth-${randomToken(18)}`,
     token_hash: await sha256(token),
     user_id: userId,
     token_type: "verify_email",
-    expires_at: new Date(timestamp.getTime() + 24 * 60 * 60 * 1000).toISOString(),
+    expires_at: new Date(timestamp.getTime() + VERIFICATION_CODE_TTL_MS).toISOString(),
     created_at: timestamp.toISOString(),
   });
-  return token;
+  return { code, token };
 }
 
-async function sendVerificationEmail(fetchImpl, env, config, email, token) {
-  const verificationUrl = `${config.origin}/#/verify-email?token=${token}`;
+async function sendVerificationEmail(fetchImpl, env, config, email, verification) {
+  const verificationUrl = `${config.origin}/#/verify-email?token=${verification.token}`;
   await sendEmail(fetchImpl, env, config, {
     to: [email],
-    subject: "验证 Telegram 自动消息平台邮箱",
-    html: `<p>请点击下面的链接完成邮箱验证：</p><p><a href="${verificationUrl}">验证邮箱</a></p><p>链接将在 24 小时后失效。</p>`,
+    subject: "Telegram 自动消息邮箱验证码",
+    html: `<p>您的邮箱验证码是：</p><p style="font-size:32px;font-weight:700;letter-spacing:8px;margin:20px 0">${verification.code}</p><p>验证码将在 10 分钟后失效，请勿转发给他人。</p><p>也可以点击下面的备用链接完成验证：</p><p><a href="${verificationUrl}">验证邮箱</a></p><p>如果不是您本人操作，请忽略此邮件。</p>`,
   });
 }
 
@@ -147,6 +172,17 @@ async function enforceRateLimit(repository, request, action, identity, now, limi
     limit,
   });
   if (!allowed) throw new HttpError(429, "rate_limited", "尝试次数过多，请稍后再试。");
+}
+
+async function enforceVerificationSendLimits(repository, request, emailNormalized, timestamp) {
+  await enforceRateLimit(repository, request, "verification_code_send_minute", emailNormalized, timestamp, 1, VERIFICATION_RESEND_SECONDS);
+  await enforceRateLimit(repository, request, "verification_code_send_hour", emailNormalized, timestamp, 5, 3600);
+}
+
+async function issueVerificationCode({ repository, request, email, user, timestamp, config, randomToken, fetchImpl, env }) {
+  await enforceVerificationSendLimits(repository, request, email.normalized, timestamp);
+  const verification = await createVerificationCode(repository, randomToken, user.id, timestamp, config);
+  await sendVerificationEmail(fetchImpl, env, config, user.email || email.original, verification);
 }
 
 function sessionIdentity(user, provider = "email") {
@@ -236,9 +272,37 @@ export function createEmailAuth(dependencies = {}) {
         if (!result.verification_required) {
           throw new HttpError(409, "account_exists", "该邮箱已注册，请直接登录或找回密码。");
         }
-        const token = await createVerificationToken(repository, randomToken, result.user.id, timestamp);
-        await sendVerificationEmail(fetchImpl, env, config, email.original, token);
+        await issueVerificationCode({ repository, request, email, user: result.user, timestamp, config, randomToken, fetchImpl, env });
         return json({ data: { status: "verification_required" } }, 202);
+      }
+
+      if (path === "/api/auth/email/verify-code") {
+        const config = authConfiguration(env, { requireRegistration: true });
+        const body = await readJson(request, 2_048);
+        exactInput(body, ["email", "code"]);
+        const email = emailInput(body.email);
+        const code = verificationCodeInput(body.code);
+        await enforceRateLimit(repository, request, "verification_code_attempt", email.normalized, timestamp, 5, 600);
+        const pendingUser = await repository.getUserByEmail(email.normalized);
+        const userId = pendingUser?.id || "missing-user";
+        const token = await verificationToken(userId, code, config.passwordPepper);
+        const user = await repository.consumeEmailVerification(await sha256(token), timestamp.toISOString());
+        if (!user) throw new HttpError(400, "invalid_or_expired_code", "验证码错误或已过期。");
+        return json({ data: { status: "verified" } });
+      }
+
+      if (path === "/api/auth/email/resend-code") {
+        const config = authConfiguration(env, { requireRegistration: true });
+        const body = await readJson(request, 2_048);
+        exactInput(body, ["email"]);
+        const email = emailInput(body.email);
+        await enforceVerificationSendLimits(repository, request, email.normalized, timestamp);
+        const user = await repository.getUserByEmail(email.normalized);
+        if (user && !user.email_verified_at && ["pending", "active"].includes(user.status)) {
+          const verification = await createVerificationCode(repository, randomToken, user.id, timestamp, config);
+          await sendVerificationEmail(fetchImpl, env, config, user.email || email.original, verification);
+        }
+        return json({ data: { status: "accepted", resend_after_seconds: VERIFICATION_RESEND_SECONDS } }, 202);
       }
 
       if (path === "/api/auth/email/verify") {
@@ -273,12 +337,18 @@ export function createEmailAuth(dependencies = {}) {
         }
         if (user.status !== "active" || (config.emailVerificationRequired && !user.email_verified_at)) {
           if (config.registrationEnabled && !user.email_verified_at && ["pending", "active"].includes(user.status)) {
-            await enforceRateLimit(repository, request, "verification_resend", email.normalized, timestamp, 3, 3600);
-            const token = await createVerificationToken(repository, randomToken, user.id, timestamp);
-            await sendVerificationEmail(fetchImpl, env, config, user.email || email.original, token);
-            throw new HttpError(403, "email_verification_required", "请先完成邮箱验证。新的验证邮件已经发送。");
+            let sent = false;
+            try {
+              await issueVerificationCode({ repository, request, email, user, timestamp, config, randomToken, fetchImpl, env });
+              sent = true;
+            } catch (error) {
+              if (!(error instanceof HttpError) || error.code !== "rate_limited") throw error;
+            }
+            throw new HttpError(403, "email_verification_required", sent
+              ? "请先输入邮箱收到的 6 位验证码完成验证。新的验证码已经发送。"
+              : "请先输入邮箱收到的 6 位验证码完成验证。");
           }
-          throw new HttpError(403, "email_verification_required", "请先完成邮箱验证。");
+          throw new HttpError(403, "email_verification_required", "请先输入邮箱收到的 6 位验证码完成验证。");
         }
         return createSession(request, env, repository, user);
       }
@@ -350,4 +420,10 @@ export function createEmailAuth(dependencies = {}) {
   };
 }
 
-export const __test = { normalizeEmail };
+export const __test = {
+  normalizeEmail,
+  randomVerificationCode,
+  verificationToken,
+  VERIFICATION_CODE_TTL_MS,
+  VERIFICATION_RESEND_SECONDS,
+};
