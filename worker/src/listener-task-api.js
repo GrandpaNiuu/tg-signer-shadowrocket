@@ -62,9 +62,16 @@ async function nextListenerRunId(repository, timestamp) {
       AND r.scheduled_for <= ?
       AND t.enabled = 1 AND a.enabled = 1 AND a.status = 'connected' AND execution_skill.enabled = 1
       AND (r.next_dispatch_at IS NULL OR r.next_dispatch_at <= ?)
-      AND EXISTS (
-        SELECT 1 FROM realtime_rules rr
-        WHERE rr.account_id = a.id AND rr.user_id = a.user_id AND rr.enabled = 1
+      AND (
+        EXISTS (
+          SELECT 1 FROM realtime_rules rr
+          WHERE rr.account_id = a.id AND rr.user_id = a.user_id AND rr.enabled = 1
+        )
+        OR EXISTS (
+          SELECT 1 FROM realtime_task_handoffs handoff
+          WHERE handoff.account_id = a.id AND handoff.task_run_id = r.id
+            AND handoff.expires_at > ?
+        )
       )
       AND NOT EXISTS (
         SELECT 1 FROM bot_inspections i
@@ -87,7 +94,7 @@ async function nextListenerRunId(repository, timestamp) {
             OR (active.status = 'queued' AND active.dispatch_status IN ('dispatching', 'dispatched')))
       )
     ORDER BY r.scheduled_for, r.created_at, r.id
-    LIMIT 1`).bind(dueThrough, timestamp, timestamp, timestamp, timestamp).first();
+    LIMIT 1`).bind(dueThrough, timestamp, timestamp, timestamp, timestamp, timestamp).first();
   return row?.id || null;
 }
 
@@ -174,6 +181,7 @@ export async function handleListenerTaskApi(request, env, repository, context = 
 
 export const __test = {
   listenerOwner,
+  nextListenerRunId,
   normalizedInstanceId,
   secureEqual,
 };
