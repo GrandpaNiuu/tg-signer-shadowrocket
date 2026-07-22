@@ -297,9 +297,14 @@ async function hydrateForm(form) {
     if (form.isConnected && fieldValue(form, "#task-skill") === "send_media") renderBuilder(form, stored);
   } catch (error) { setStatus(ensureBuilder(form), error.message, "error"); }
 }
+function updateSkillOptionCopy(option) {
+  if (option?.value !== "send_media" || option.textContent === PRESENTATIONS.send_media.name) return false;
+  option.textContent = PRESENTATIONS.send_media.name;
+  return true;
+}
 function updateSkillCopy() {
   const select = document.querySelector("#task-skill");
-  if (select) for (const option of select.options) if (option.value === "send_media") option.textContent = PRESENTATIONS.send_media.name;
+  if (select) for (const option of select.options) updateSkillOptionCopy(option);
 }
 async function submitExpandedTask(event, form) {
   if (fieldValue(form, "#task-skill") !== "send_media") return;
@@ -336,7 +341,10 @@ async function applyExpansion() {
 function scheduleApply() {
   if (scheduled) return;
   scheduled = true;
-  queueMicrotask(async () => { scheduled = false; await applyExpansion(); });
+  queueMicrotask(async () => {
+    try { await applyExpansion(); }
+    finally { scheduled = false; }
+  });
 }
 if (typeof document !== "undefined") {
   observer = new MutationObserver(scheduleApply);
@@ -352,4 +360,11 @@ if (typeof document !== "undefined") {
   scheduleApply();
 }
 
-export const __test = { ASSET_ID_PATTERN, EXPANDED_SKILLS, PRESENTATIONS, TARGET_PATTERN, parseTelegramMessageLink };
+export const __test = {
+  ASSET_ID_PATTERN,
+  EXPANDED_SKILLS,
+  PRESENTATIONS,
+  TARGET_PATTERN,
+  parseTelegramMessageLink,
+  updateSkillOptionCopy,
+};

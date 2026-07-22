@@ -81,3 +81,21 @@ test("media builder is inserted before schedule fields and exposes save errors",
   assert.match(source, /请检查：/);
   assert.doesNotMatch(source, /register-media|media-assets\?/);
 });
+
+test("task type copy is idempotent so mutation observers cannot trigger each other forever", () => {
+  let writes = 0;
+  const option = {
+    value: "send_media",
+    _textContent: __test.PRESENTATIONS.send_media.name,
+    get textContent() { return this._textContent; },
+    set textContent(value) { writes += 1; this._textContent = value; },
+  };
+
+  assert.equal(__test.updateSkillOptionCopy(option), false);
+  assert.equal(writes, 0);
+
+  option._textContent = "旧名称";
+  assert.equal(__test.updateSkillOptionCopy(option), true);
+  assert.equal(option.textContent, __test.PRESENTATIONS.send_media.name);
+  assert.equal(writes, 1);
+});
