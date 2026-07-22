@@ -27,8 +27,8 @@ export function registrationPresentation(config = {}) {
     return {
       state: "open",
       showEmailDivider: githubEnabled,
-      title: "邮箱注册已开放",
-      message: "注册后可绑定自己的 Telegram 账号，并独立管理定时消息、机器人操作和执行记录。注册需要人机验证和 6 位邮件验证码。",
+      title: "注册验证",
+      message: "提交后需要输入邮件中的 6 位验证码；验证成功后才能登录，并可使用密码找回。",
     };
   }
 
@@ -59,7 +59,7 @@ export function loginSecurityMessage(config = {}) {
   if (config.registration_enabled === true
     && config.email_verification_required === true
     && config.password_reset_enabled === true) {
-    return "输入注册邮箱和密码，并完成人机验证。连续多次失败后，系统会暂时限制尝试。";
+    return "登录需要完成人机验证；连续多次失败后，系统会暂时限制尝试。";
   }
   return null;
 }
