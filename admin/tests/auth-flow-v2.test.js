@@ -44,3 +44,13 @@ test("v2 verification route does not activate the legacy verification renderer",
   assert.match(content, /email-verification-code-form-v2/);
   assert.match(content, /event\.stopImmediatePropagation\(\)/);
 });
+
+test("successful login and registration reload the authenticated dashboard shell", async () => {
+  const content = await source("src/auth-flow-v2.js");
+  assert.match(content, /function openAuthenticatedDashboard\(message\)/);
+  assert.match(content, /history\.replaceState\(null, \"\", \"\/#\/dashboard\"\)/);
+  assert.match(content, /globalThis\.location\.reload\(\)/);
+  assert.match(content, /登录成功，正在打开后台/);
+  assert.match(content, /账号创建成功，正在打开后台/);
+  assert.doesNotMatch(content, /globalThis\.location\.replace\(\"\/#\/dashboard\"\)/);
+});
