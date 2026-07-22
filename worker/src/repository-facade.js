@@ -22,7 +22,7 @@ export function adminWorkspaceRepository(repository, identity) {
 
 export function runnerRepository(repository, now = () => new Date()) {
   return withRunnerSessionState(
-    withDispatchErrorCodes(requiredRepository(repository)),
+    withInspectionDispatchGuard(withDispatchErrorCodes(requiredRepository(repository))),
     now,
   );
 }
