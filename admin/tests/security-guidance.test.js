@@ -12,21 +12,24 @@ test("admin shell loads versioned secure authentication and platform broadcast g
   const index = await source("index.html");
   assert.match(index, /src="\/src\/app\.js\?v=[0-9-]+"/);
   assert.match(index, /src="\/src\/auth-security\.js\?v=[0-9-]+"/);
+  assert.match(index, /src="\/src\/auth-guidance\.js\?v=[0-9-]+"/);
   assert.match(index, /src="\/src\/notification-guidance\.js\?v=[0-9-]+"/);
   assert.match(index, /href="\/assets\/styles\.css\?v=[0-9-]+"/);
 });
 
 test("registration guidance distinguishes available GitHub registration from closed email registration", async () => {
-  const [security, presentation] = await Promise.all([
+  const [security, presentation, guidance] = await Promise.all([
     source("src/auth-security.js"),
     source("src/auth-presentation.js"),
+    source("src/auth-guidance.js"),
   ]);
   assert.match(security, /registrationPresentation/);
   assert.match(security, /邮箱注册尚未开放/);
   assert.match(security, /已有邮箱账号？返回登录/);
   assert.match(presentation, /GitHub 注册已开放/);
   assert.match(presentation, /已有邮箱账号仍可返回登录/);
-  assert.match(presentation, /邮箱新注册和自助找回密码尚未完成安全配置/);
+  assert.match(presentation, /邮箱新注册和密码找回暂未开放/);
+  assert.match(guidance, /为保护账号隐私，页面不会显示邮箱是否已经注册/);
 });
 
 test("notification guidance explains the administrator-wide broadcast scope", async () => {
