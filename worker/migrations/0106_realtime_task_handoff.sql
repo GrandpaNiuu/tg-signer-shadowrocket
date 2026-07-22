@@ -37,6 +37,7 @@ BEGIN
     SELECT rule_id FROM realtime_task_handoff_rules
     WHERE task_run_id = OLD.task_run_id
   );
+  DELETE FROM realtime_task_handoff_rules WHERE task_run_id = OLD.task_run_id;
 END;
 
 CREATE TRIGGER IF NOT EXISTS cleanup_realtime_handoff_after_terminal_run
