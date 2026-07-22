@@ -5,7 +5,7 @@ function buildDeliveryNotice() {
   const notice = documentRef.createElement("div");
   notice.className = "notice warning";
   notice.dataset.emailDeliveryGuidance = "true";
-  notice.innerHTML = `<span aria-hidden="true">!</span><span><strong>没有收到验证码？</strong><br>请先检查“垃圾邮件 / Spam”和“推广邮件”，并搜索标题“Telegram 自动消息邮箱验证码”。找到后请点“不是垃圾邮件”，以后邮件更容易进入收件箱。只使用最新一封邮件中的验证码；重新发送后旧验证码立即失效。</span>`;
+  notice.innerHTML = `<span aria-hidden="true">!</span><span><strong>第二步：检查邮件分类</strong><br>没有收到时，请检查“垃圾邮件 / Spam”和“推广邮件”，并搜索“Telegram 自动消息邮箱验证码”。重新发送后只能使用最新验证码；找到邮件后可点击“不是垃圾邮件”。</span>`;
   return notice;
 }
 

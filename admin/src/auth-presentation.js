@@ -27,8 +27,8 @@ export function registrationPresentation(config = {}) {
     return {
       state: "open",
       showEmailDivider: githubEnabled,
-      title: "邮箱注册已开放",
-      message: "邮箱注册需要完成人机验证和邮件确认，并输入邮件中的 6 位验证码；验证后可以使用找回密码。",
+      title: "注册验证",
+      message: "提交后需要输入邮件中的 6 位验证码；验证成功后才能登录，并可使用密码找回。",
     };
   }
 
@@ -38,8 +38,8 @@ export function registrationPresentation(config = {}) {
       showEmailDivider: false,
       title: "GitHub 注册已开放",
       message: emailEnabled
-        ? "邮箱新注册尚未开放；已有邮箱账号仍可返回登录。"
-        : "当前使用 GitHub 创建账号；邮箱注册尚未启用。",
+        ? "邮箱新注册暂未开放；已有邮箱账号仍可返回登录，或使用 GitHub 创建账号。"
+        : "当前可使用 GitHub 创建账号；邮箱注册暂未启用。",
     };
   }
 
@@ -47,19 +47,19 @@ export function registrationPresentation(config = {}) {
     state: "closed",
     showEmailDivider: false,
     title: "当前无法创建账号",
-    message: "平台管理员尚未配置可用的公开注册方式。",
+    message: "当前暂时无法创建新账号，请稍后再试或联系平台管理员。",
   };
 }
 
 export function loginSecurityMessage(config = {}) {
   if (config.email_enabled !== true) return null;
   if (config.security_setup_required === true) {
-    return "已有邮箱账号可以继续登录；邮箱新注册和自助找回密码尚未完成安全配置。";
+    return "已有邮箱账号可以继续登录；邮箱新注册和密码找回暂未开放。";
   }
   if (config.registration_enabled === true
     && config.email_verification_required === true
     && config.password_reset_enabled === true) {
-    return "邮箱新注册需要人机验证和 6 位邮件验证码，并支持自助找回密码。";
+    return "登录需要完成人机验证；连续多次失败后，系统会暂时限制尝试。";
   }
   return null;
 }
