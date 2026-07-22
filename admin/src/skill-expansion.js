@@ -439,7 +439,7 @@ async function waitForStagedUpload(form, uploadId) {
         source_upload_id: upload.id,
       };
     }
-    if (["failed", "cancelled", "expired"].includes(upload?.status)) {
+    if (["failed", "ambiguous", "cancelled", "expired"].includes(upload?.status)) {
       throw new Error(upload.error_message || "内容没有成功保存到 Telegram，请重试。");
     }
     uploadProgress(form, 96, "正在保存到所选账号的 Telegram 收藏夹…");

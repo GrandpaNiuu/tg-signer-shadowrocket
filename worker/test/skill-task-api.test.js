@@ -40,3 +40,41 @@ test("new arbitrary-content tasks do not query the legacy media registry", async
   });
   assert.equal(result, null);
 });
+
+test("an uploaded Telegram source can only be used by the account that staged it", async () => {
+  const stored = {
+    id: "upload-12345678",
+    account_id: "account-a",
+    status: "ready",
+    source_chat_id: "me",
+    source_message_id: 321,
+    content_kind: "video",
+  };
+  const repository = {
+    userId: "user-a",
+    db: {
+      prepare() {
+        return {
+          bind(uploadId, accountId, userId) {
+            return { first: async () => (
+              uploadId === stored.id && accountId === stored.account_id && userId === "user-a"
+                ? stored
+                : null
+            ) };
+          },
+        };
+      },
+    },
+  };
+  const params = {
+    source_upload_id: stored.id,
+    source_chat_id: "me",
+    source_message_id: 321,
+    source_kind: "video",
+  };
+  assert.equal(await __test.validateMediaAsset(repository, params, "account-a"), stored);
+  await assert.rejects(
+    __test.validateMediaAsset(repository, params, "account-b"),
+    (error) => error?.status === 422 && error?.details?.fields?.includes("account_id"),
+  );
+});

@@ -5,6 +5,7 @@ import { listenerAccount, verifyListener } from "./realtime-automation.js";
 export const MEDIA_CHUNK_BYTES = 512 * 1024;
 export const MEDIA_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
 const UPLOAD_TTL_MS = 30 * 60 * 1000;
+const MEDIA_LEASE_MS = 15 * 60 * 1000;
 const MAX_ACTIVE_UPLOADS_PER_USER = 2;
 const MAX_ACTIVE_UPLOAD_BYTES_PER_USER = 32 * 1024 * 1024;
 const ACCOUNT_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,159}$/;
@@ -134,7 +135,7 @@ async function createUpload(request, repository, context) {
   const input = mediaUploadInput(await readJson(request, 8_192));
   const ownerId = userId(repository, context);
   const now = timestamp(context);
-  await expireUploads(repository, now);
+  await expireUploads(repository, now, ownerId);
   const active = await repository.db.prepare(`SELECT COUNT(*) AS uploads,
     COALESCE(SUM(size_bytes), 0) AS bytes FROM media_uploads
     WHERE user_id = ? AND status IN ('created', 'uploaded', 'queued', 'processing') AND expires_at > ?`)
@@ -280,26 +281,54 @@ export async function handleWorkspaceMediaUploadApi(request, env, repository, co
   throw new HttpError(404, "not_found", "Media upload route not found." );
 }
 
-async function expireUploads(repository, now) {
+async function expireUploads(repository, now, ownerId = null) {
   await repository.db.prepare(`DELETE FROM media_uploads
-    WHERE expires_at <= ? AND status != 'ready'`)
-    .bind(now).run();
+    WHERE expires_at <= ? AND status != 'ready' ${ownerId ? "AND user_id = ?" : ""}`)
+    .bind(now, ...(ownerId ? [ownerId] : [])).run();
 }
 
 async function claimUpload(request, env, repository, context) {
   const body = object(await readJson(request, 4_096));
   const instanceId = boundedText(body.instance_id, "instance_id", 160);
   const now = timestamp(context);
+  const leasedUntil = new Date(context.now().getTime() + MEDIA_LEASE_MS).toISOString();
   await expireUploads(repository, now);
-  const upload = await repository.db.prepare(`UPDATE media_uploads SET status = 'processing',
-    claimed_by = ?, attempt_count = attempt_count + 1, updated_at = ? WHERE id = (
-      SELECT m.id FROM media_uploads m JOIN accounts a ON a.id = m.account_id
+  await repository.db.batch([
+    repository.db.prepare("DELETE FROM media_upload_leases WHERE leased_until <= ?").bind(now),
+    repository.db.prepare(`INSERT OR IGNORE INTO media_upload_leases
+      (account_id, upload_id, holder, leased_until, created_at, updated_at)
+      SELECT m.account_id, m.id, ?, ?, ?, ?
+      FROM media_uploads m JOIN accounts a ON a.id = m.account_id
       JOIN users u ON u.id = m.user_id
       WHERE m.status = 'queued' AND m.expires_at > ?
         AND a.enabled = 1 AND a.status = 'connected' AND u.status = 'active'
-      ORDER BY m.created_at LIMIT 1
-    ) AND status = 'queued' RETURNING *`)
-    .bind(instanceId, now, now).first();
+        AND NOT EXISTS (
+          SELECT 1 FROM account_leases account_lease
+          WHERE account_lease.account_id = m.account_id AND account_lease.leased_until > ?
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM media_upload_leases media_lease
+          WHERE media_lease.account_id = m.account_id AND media_lease.leased_until > ?
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM task_runs active JOIN tasks active_task ON active_task.id = active.task_id
+          WHERE COALESCE(active.account_id_snapshot, active_task.account_id) = m.account_id
+            AND (active.status IN ('claimed', 'running')
+              OR (active.status = 'queued' AND active.dispatch_status IN ('dispatching', 'dispatched')))
+        )
+      ORDER BY m.created_at LIMIT 1`)
+      .bind(instanceId, leasedUntil, now, now, now, now, now),
+    repository.db.prepare(`UPDATE media_uploads SET status = 'processing', claimed_by = ?,
+      attempt_count = attempt_count + 1, updated_at = ?
+      WHERE status = 'queued' AND id IN (
+        SELECT upload_id FROM media_upload_leases WHERE holder = ? AND created_at = ?
+      )`).bind(instanceId, now, instanceId, now),
+  ]);
+  const upload = await repository.db.prepare(`SELECT m.* FROM media_uploads m
+    JOIN media_upload_leases lease ON lease.upload_id = m.id
+    WHERE m.status = 'processing' AND m.claimed_by = ? AND lease.holder = ?
+      AND lease.created_at = ? ORDER BY m.created_at LIMIT 1`)
+    .bind(instanceId, instanceId, now).first();
   if (!upload) return json({ data: null });
   try {
     const account = await listenerAccount(repository, env, upload.account_id);
@@ -310,6 +339,7 @@ async function claimUpload(request, env, repository, context) {
         error_message = 'Telegram 账号不可用，请重新连接后再试。', updated_at = ? WHERE id = ?`)
         .bind(now, upload.id),
       repository.db.prepare("DELETE FROM media_upload_chunks WHERE upload_id = ?").bind(upload.id),
+      repository.db.prepare("DELETE FROM media_upload_leases WHERE upload_id = ?").bind(upload.id),
     ]);
     return json({ data: null });
   }
@@ -369,12 +399,21 @@ async function completeUpload(request, repository, context, id) {
   const body = object(await readJson(request, 8_192));
   const instanceId = boundedText(body.instance_id, "instance_id", 160);
   const status = boundedText(body.status, "status", 20);
-  if (!new Set(["ready", "failed"]).has(status)) {
+  if (!new Set(["ready", "failed", "ambiguous"]).has(status)) {
     throw new HttpError(422, "validation_failed", "上传处理状态无效。", { fields: ["status"] });
   }
   const current = await repository.db.prepare(`SELECT * FROM media_uploads
-    WHERE id = ? AND status = 'processing' AND claimed_by = ?`).bind(id, instanceId).first();
-  if (!current) throw new HttpError(409, "media_upload_state_conflict", "上传状态已经改变。" );
+    WHERE id = ? AND claimed_by = ?`).bind(id, instanceId).first();
+  if (current?.status === status && status === "ready"
+    && Number(current.source_message_id) === Number(body.source_message_id)) {
+    return json({ data: { accepted: true, replayed: true } });
+  }
+  if (current?.status === status && ["failed", "ambiguous"].includes(status)) {
+    return json({ data: { accepted: true, replayed: true } });
+  }
+  if (!current || current.status !== "processing") {
+    throw new HttpError(409, "media_upload_state_conflict", "上传状态已经改变。" );
+  }
   const now = timestamp(context);
   if (status === "ready") {
     const messageId = Number(body.source_message_id);
@@ -386,14 +425,18 @@ async function completeUpload(request, repository, context, id) {
         source_message_id = ?, error_code = NULL, error_message = NULL, updated_at = ? WHERE id = ?`)
         .bind(messageId, now, id),
       repository.db.prepare("DELETE FROM media_upload_chunks WHERE upload_id = ?").bind(id),
+      repository.db.prepare("DELETE FROM media_upload_leases WHERE upload_id = ?").bind(id),
     ]);
   } else {
-    const errorCode = boundedText(body.error_code || "telegram_stage_failed", "error_code", 100);
-    const errorMessage = boundedText(body.error_message || "内容未能保存到 Telegram。", "error_message", 500);
+    const errorCode = boundedText(body.error_code || (status === "ambiguous" ? "telegram_stage_ambiguous" : "telegram_stage_failed"), "error_code", 100);
+    const errorMessage = boundedText(body.error_message || (status === "ambiguous"
+      ? "Telegram 返回结果不确定；为避免重复发送，请检查账号收藏夹后重试。"
+      : "内容未能保存到 Telegram。"), "error_message", 500);
     await repository.db.batch([
-      repository.db.prepare(`UPDATE media_uploads SET status = 'failed', error_code = ?, error_message = ?,
-        updated_at = ? WHERE id = ?`).bind(errorCode, errorMessage, now, id),
+      repository.db.prepare(`UPDATE media_uploads SET status = ?, error_code = ?, error_message = ?,
+        updated_at = ? WHERE id = ?`).bind(status, errorCode, errorMessage, now, id),
       repository.db.prepare("DELETE FROM media_upload_chunks WHERE upload_id = ?").bind(id),
+      repository.db.prepare("DELETE FROM media_upload_leases WHERE upload_id = ?").bind(id),
     ]);
   }
   return json({ data: { accepted: true } });
@@ -427,7 +470,9 @@ export const __test = {
   MEDIA_UPLOAD_MAX_BYTES,
   MAX_ACTIVE_UPLOADS_PER_USER,
   MAX_ACTIVE_UPLOAD_BYTES_PER_USER,
+  MEDIA_LEASE_MS,
   binaryResponse,
+  expireUploads,
   mediaUploadInput,
   resolveContentKind,
 };

@@ -966,6 +966,11 @@ export class D1Repository {
         AND t.enabled = 1 AND a.enabled = 1 AND a.status = 'connected' AND execution_skill.enabled = 1
         AND (r.next_dispatch_at IS NULL OR r.next_dispatch_at <= ?)
         AND NOT EXISTS (
+          SELECT 1 FROM media_upload_leases media_lease
+          WHERE media_lease.account_id = COALESCE(r.account_id_snapshot, t.account_id)
+            AND media_lease.leased_until > ?
+        )
+        AND NOT EXISTS (
           SELECT 1 FROM task_runs active JOIN tasks active_task ON active_task.id = active.task_id
           WHERE COALESCE(active.account_id_snapshot, active_task.account_id)
             = COALESCE(r.account_id_snapshot, t.account_id)
@@ -973,7 +978,7 @@ export class D1Repository {
               OR (active.status = 'queued' AND active.dispatch_status IN ('dispatching', 'dispatched')))
         )
       GROUP BY COALESCE(r.account_id_snapshot, t.account_id)
-      ORDER BY MIN(r.scheduled_for), account_id LIMIT ?`).bind(timestamp, limit).all();
+      ORDER BY MIN(r.scheduled_for), account_id LIMIT ?`).bind(timestamp, timestamp, limit).all();
     return rows(result).map((row) => row.account_id);
   }
 
@@ -992,6 +997,11 @@ export class D1Repository {
           AND candidate_account.status = 'connected' AND candidate_skill.enabled = 1
           AND (candidate.next_dispatch_at IS NULL OR candidate.next_dispatch_at <= ?)
           AND NOT EXISTS (
+            SELECT 1 FROM media_upload_leases media_lease
+            WHERE media_lease.account_id = COALESCE(candidate.account_id_snapshot, candidate_task.account_id)
+              AND media_lease.leased_until > ?
+          )
+          AND NOT EXISTS (
             SELECT 1 FROM task_runs active JOIN tasks active_task ON active_task.id = active.task_id
             WHERE COALESCE(active.account_id_snapshot, active_task.account_id) = ?
               AND (active.status IN ('claimed', 'running')
@@ -1000,7 +1010,7 @@ export class D1Repository {
         ORDER BY candidate.scheduled_for, candidate.created_at, candidate.id LIMIT 1
       ) AND status = 'queued' AND dispatch_status = 'pending'
       RETURNING id, task_id, scheduled_for, dispatch_attempt_count`).bind(
-      timestamp, timestamp, accountId, timestamp, accountId,
+      timestamp, timestamp, accountId, timestamp, timestamp, accountId,
     ).first();
   }
 
@@ -1102,15 +1112,22 @@ export class D1Repository {
     const result = await this.db.batch([
       this.db.prepare("DELETE FROM account_leases WHERE leased_until <= ?").bind(timestamp),
       this.db.prepare(`INSERT INTO account_leases
-        (account_id, task_run_id, github_run_id, leased_until, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)
+        (account_id, task_run_id, github_run_id, leased_until, created_at, updated_at)
+        SELECT ?, ?, ?, ?, ?, ? WHERE NOT EXISTS (
+          SELECT 1 FROM media_upload_leases media_lease
+          WHERE media_lease.account_id = ? AND media_lease.leased_until > ?
+        )
         ON CONFLICT(account_id) DO UPDATE SET task_run_id = excluded.task_run_id, github_run_id = excluded.github_run_id,
         leased_until = excluded.leased_until, updated_at = excluded.updated_at
         WHERE account_leases.leased_until <= ?`).bind(
-        execution.account_id, runId, githubRunId, leaseUntil, timestamp, timestamp, timestamp,
+        execution.account_id, runId, githubRunId, leaseUntil, timestamp, timestamp,
+        execution.account_id, timestamp, timestamp,
       ),
       this.db.prepare(`UPDATE task_runs SET status = 'claimed', dispatch_status = 'dispatched', github_run_id = ?, claimed_at = ?,
         claim_expires_at = ?, updated_at = ? WHERE id = ? AND status = 'queued'
         AND EXISTS (SELECT 1 FROM account_leases WHERE account_id = ? AND task_run_id = ? AND github_run_id = ?)
+        AND NOT EXISTS (SELECT 1 FROM media_upload_leases media_lease
+          WHERE media_lease.account_id = ? AND media_lease.leased_until > ?)
         AND EXISTS (SELECT 1 FROM tasks claim_task
           JOIN accounts claim_account ON claim_account.id = COALESCE(task_runs.account_id_snapshot, claim_task.account_id)
           JOIN skills claim_current_skill ON claim_current_skill.id = claim_task.skill_id
@@ -1118,7 +1135,8 @@ export class D1Repository {
           WHERE claim_task.id = task_runs.task_id
           AND claim_task.enabled = 1 AND claim_account.enabled = 1 AND claim_account.status = 'connected'
           AND claim_skill.enabled = 1)`)
-        .bind(githubRunId, timestamp, leaseUntil, timestamp, runId, execution.account_id, runId, githubRunId),
+        .bind(githubRunId, timestamp, leaseUntil, timestamp, runId, execution.account_id, runId, githubRunId,
+          execution.account_id, timestamp),
     ]);
     if (changes(result[2]) === 0) {
       await this.db.batch([

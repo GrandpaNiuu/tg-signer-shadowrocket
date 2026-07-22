@@ -6,7 +6,7 @@ import {
   handleListenerMediaUploadApi,
   handleWorkspaceMediaUploadApi,
 } from "../src/media-upload-api.js";
-import { createTestRepository, seedAccount } from "./d1-helper.js";
+import { createTestRepository, seedAccount, seedTask } from "./d1-helper.js";
 
 const ROOT_KEY = Buffer.alloc(32, 7).toString("base64");
 const LISTENER_TOKEN = "listener-test-token-that-is-at-least-32-bytes";
@@ -163,4 +163,117 @@ test("a workspace cannot fill D1 with unlimited concurrent file uploads", async 
     create(),
     (error) => error?.status === 429 && error?.code === "media_upload_capacity_reached",
   );
+});
+
+test("workspace expiry only removes uploads owned by the current user", async () => {
+  const { sqlite, repository } = createTestRepository();
+  await seedAccount(repository, { id: "account-legacy" });
+  sqlite.prepare(`INSERT INTO users (id, role, status, display_name, created_at, updated_at)
+    VALUES ('user-other', 'user', 'active', 'Other', ?, ?)`).run(
+    "2026-07-22T07:00:00.000Z", "2026-07-22T07:00:00.000Z",
+  );
+  sqlite.prepare(`INSERT INTO accounts
+    (id, name, phone_masked, status, enabled, created_at, updated_at, user_id)
+    VALUES ('account-other', 'Other', '+86*******0000', 'connected', 1, ?, ?, 'user-other')`).run(
+    "2026-07-22T07:00:00.000Z", "2026-07-22T07:00:00.000Z",
+  );
+  for (const [id, userId, accountId] of [
+    ["upload-expired-legacy", "legacy-admin", "account-legacy"],
+    ["upload-expired-other", "user-other", "account-other"],
+  ]) {
+    sqlite.prepare(`INSERT INTO media_uploads
+      (id, user_id, account_id, file_name, content_type, content_kind, size_bytes, total_chunks,
+       uploaded_chunks, status, attempt_count, expires_at, created_at, updated_at)
+      VALUES (?, ?, ?, 'old.bin', 'application/octet-stream', 'document', 1, 1, 0,
+       'created', 0, '2026-07-22T07:30:00.000Z', '2026-07-22T07:00:00.000Z', '2026-07-22T07:00:00.000Z')`)
+      .run(id, userId, accountId);
+  }
+
+  await __test.expireUploads(repository, "2026-07-22T08:00:00.000Z", "legacy-admin");
+  assert.equal(sqlite.prepare("SELECT COUNT(*) AS total FROM media_uploads WHERE id = ?")
+    .get("upload-expired-legacy").total, 0);
+  assert.equal(sqlite.prepare("SELECT COUNT(*) AS total FROM media_uploads WHERE id = ?")
+    .get("upload-expired-other").total, 1);
+});
+
+test("media staging and scheduled runs never share one Telegram account session", async () => {
+  const { sqlite, repository } = createTestRepository();
+  const now = "2026-07-22T08:00:00.000Z";
+  await seedAccount(repository, { id: "account-shared", timestamp: now });
+  await seedTask(repository, { id: "task-active", accountId: "account-shared", timestamp: now });
+  await repository.enqueueRun({
+    run: {
+      id: "run-active", task_id: "task-active", trigger_type: "manual", scheduled_for: now,
+      dedupe_key: "manual:run-active", max_attempts: 1,
+      claim_expires_at: "2026-07-22T09:00:00.000Z", created_at: now, updated_at: now,
+    },
+  });
+  assert.ok(await repository.claimRun(
+    "run-active", "github-1", now, "2026-07-22T08:15:00.000Z",
+  ));
+  sqlite.prepare(`INSERT INTO media_uploads
+    (id, user_id, account_id, file_name, content_type, content_kind, size_bytes, total_chunks,
+     uploaded_chunks, status, attempt_count, expires_at, created_at, updated_at)
+    VALUES ('upload-waiting', 'legacy-admin', 'account-shared', 'wait.bin',
+     'application/octet-stream', 'document', 1, 1, 1, 'queued', 0,
+     '2026-07-22T08:30:00.000Z', ?, ?)`).run(now, now);
+
+  const blockedUpload = await handleListenerMediaUploadApi(listenerRequest(
+    "/api/listener/v1/media-uploads/claim",
+    { method: "POST", body: { instance_id: "listener-vps-1" } },
+  ), { LISTENER_API_TOKEN: LISTENER_TOKEN }, repository, context());
+  assert.equal((await blockedUpload.json()).data, null);
+  assert.equal(sqlite.prepare("SELECT COUNT(*) AS total FROM media_upload_leases").get().total, 0);
+
+  sqlite.prepare("DELETE FROM account_leases WHERE account_id = 'account-shared'").run();
+  sqlite.prepare("UPDATE task_runs SET status = 'success' WHERE id = 'run-active'").run();
+  sqlite.prepare(`INSERT INTO media_upload_leases
+    (account_id, upload_id, holder, leased_until, created_at, updated_at)
+    VALUES ('account-shared', 'upload-waiting', 'listener-vps-1',
+      '2026-07-22T08:15:00.000Z', ?, ?)`).run(now, now);
+
+  await seedTask(repository, { id: "task-blocked", accountId: "account-shared", timestamp: now });
+  await repository.enqueueRun({
+    run: {
+      id: "run-blocked", task_id: "task-blocked", trigger_type: "manual", scheduled_for: now,
+      dedupe_key: "manual:run-blocked", max_attempts: 1,
+      claim_expires_at: "2026-07-22T09:00:00.000Z", created_at: now, updated_at: now,
+    },
+  });
+  assert.equal(await repository.claimRun(
+    "run-blocked", "github-2", now, "2026-07-22T08:15:00.000Z",
+  ), null);
+  assert.deepEqual(await repository.listDispatchableAccountIds(now, 10), []);
+});
+
+test("ambiguous Telegram staging is terminal, private and idempotent", async () => {
+  const { sqlite, repository } = createTestRepository();
+  await seedAccount(repository, { id: "account-ambiguous" });
+  const now = "2026-07-22T08:00:00.000Z";
+  sqlite.prepare(`INSERT INTO media_uploads
+    (id, user_id, account_id, file_name, content_type, content_kind, size_bytes, total_chunks,
+     uploaded_chunks, status, attempt_count, claimed_by, expires_at, created_at, updated_at)
+    VALUES ('upload-ambiguous', 'legacy-admin', 'account-ambiguous', 'clip.mp4', 'video/mp4',
+      'video', 1, 1, 1, 'processing', 1, 'listener-vps-1', '2026-07-22T08:30:00.000Z', ?, ?)`)
+    .run(now, now);
+  sqlite.prepare(`INSERT INTO media_upload_leases
+    (account_id, upload_id, holder, leased_until, created_at, updated_at)
+    VALUES ('account-ambiguous', 'upload-ambiguous', 'listener-vps-1',
+      '2026-07-22T08:15:00.000Z', ?, ?)`).run(now, now);
+  const request = () => listenerRequest(
+    "/api/listener/v1/media-uploads/upload-ambiguous/complete",
+    { method: "POST", body: {
+      instance_id: "listener-vps-1", status: "ambiguous", error_code: "telegram_transport",
+      error_message: "Telegram 返回结果不确定；请检查收藏夹。",
+    } },
+  );
+  assert.equal((await handleListenerMediaUploadApi(
+    request(), { LISTENER_API_TOKEN: LISTENER_TOKEN }, repository, context(),
+  )).status, 200);
+  assert.equal(sqlite.prepare("SELECT status FROM media_uploads WHERE id = 'upload-ambiguous'").get().status, "ambiguous");
+  assert.equal(sqlite.prepare("SELECT COUNT(*) AS total FROM media_upload_leases").get().total, 0);
+  const replay = await handleListenerMediaUploadApi(
+    request(), { LISTENER_API_TOKEN: LISTENER_TOKEN }, repository, context(),
+  );
+  assert.equal((await replay.json()).data.replayed, true);
 });

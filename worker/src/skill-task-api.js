@@ -111,7 +111,21 @@ function mergedLegacyParams(skillKey, current, input) {
   return params;
 }
 
-async function validateMediaAsset(repository, params) {
+async function validateMediaAsset(repository, params, accountId) {
+  if (params?.source_upload_id) {
+    const row = await repository.db.prepare(`SELECT id, account_id, status, source_chat_id,
+      source_message_id, content_kind FROM media_uploads
+      WHERE id = ? AND account_id = ? ${repository.userId ? "AND user_id = ?" : ""}`)
+      .bind(params.source_upload_id, accountId, ...(repository.userId ? [repository.userId] : [])).first();
+    if (!row || row.status !== "ready" || row.source_chat_id !== params.source_chat_id
+      || Number(row.source_message_id) !== Number(params.source_message_id)
+      || (params.source_kind && row.content_kind !== params.source_kind)) {
+      throw new HttpError(422, "validation_failed", "上传内容不属于当前 Telegram 账号，请重新选择文件。", {
+        fields: ["account_id", "params.source_upload_id"],
+      });
+    }
+    return row;
+  }
   if (!params?.file_id) return null;
   const row = await repository.db.prepare(`SELECT id, media_type, source_chat_id, source_message_id
     FROM media_assets WHERE id = ? ${repository.userId ? "AND user_id = ?" : ""}`)
@@ -150,7 +164,7 @@ async function taskCollection(request, env, repository, context, url) {
   const skill = await repository.getSkillByKey(input.skill_key);
   if (!skill) throw new HttpError(422, "validation_failed", "Request validation failed.", { fields: ["skill_key"] });
   const params = normalizeSkillParams(input.skill_key, input.params || {}, input);
-  if (input.skill_key === "send_media") await validateMediaAsset(repository, params);
+  if (input.skill_key === "send_media") await validateMediaAsset(repository, params, input.account_id);
   const presentation = {
     ...taskPresentation(input.skill_key, params),
     ...(input.skill_key === "tg_signer" ? { bot: input.bot, command: input.command } : {}),
@@ -218,7 +232,9 @@ async function taskItem(request, env, repository, context, id) {
     thread_id: input.thread_id ?? current.thread_id,
     delete_after_seconds: input.delete_after_seconds ?? current.delete_after_seconds,
   });
-  if (finalSkillKey === "send_media") await validateMediaAsset(repository, params);
+  if (finalSkillKey === "send_media") {
+    await validateMediaAsset(repository, params, input.account_id ?? current.account_id);
+  }
   const presentation = {
     ...taskPresentation(finalSkillKey, params),
     ...(finalSkillKey === "tg_signer" ? {

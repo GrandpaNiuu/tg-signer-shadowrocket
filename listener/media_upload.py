@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import tempfile
 from pathlib import Path
 from typing import Any
+
+from runner.skills.telegram_adapter import classify_telegram_exception
 
 _SEND_METHODS = {
     "photo": "send_photo",
@@ -26,11 +29,26 @@ async def send_uploaded_file(client, path: str, content_kind: str) -> int:
     return message_id
 
 
-def _safe_suffix(file_name: str) -> str:
-    suffix = Path(str(file_name)).suffix.lower()
-    if len(suffix) > 16 or any(not (character.isalnum() or character == ".") for character in suffix):
-        return ".bin"
-    return suffix or ".bin"
+def _safe_file_name(file_name: str) -> str:
+    leaf = str(file_name or "").replace("\\", "/").split("/")[-1]
+    clean = "".join(character for character in leaf if ord(character) >= 32 and ord(character) != 127).strip()
+    if clean in {"", ".", ".."}:
+        return "telegram-content.bin"
+    return clean[:160]
+
+
+async def _complete_with_retry(worker, upload_id: str, **payload: Any) -> None:
+    last_error: Exception | None = None
+    for delay in (0, 1, 2, 4, 8):
+        if delay:
+            await asyncio.sleep(delay)
+        try:
+            await worker.complete_media_upload(upload_id, **payload)
+            return
+        except Exception as exc:  # Worker acknowledgement is safe and idempotent to retry.
+            last_error = exc
+    if last_error is not None:
+        raise last_error
 
 
 async def stage_media_upload(
@@ -52,31 +70,41 @@ async def stage_media_upload(
     if temporary_client:
         await client.start()
     try:
-        with tempfile.TemporaryDirectory(prefix="telegram-media-stage-") as directory:
-            target = Path(directory) / f"content{_safe_suffix(str(upload.get('file_name') or ''))}"
-            await worker.download_media_upload(
+        try:
+            with tempfile.TemporaryDirectory(prefix="telegram-media-stage-") as directory:
+                target = Path(directory) / _safe_file_name(str(upload.get("file_name") or ""))
+                await worker.download_media_upload(
+                    upload_id,
+                    target,
+                    expected_size=int(upload.get("size_bytes") or 0),
+                )
+                message_id = await send_uploaded_file(
+                    client,
+                    str(target),
+                    str(upload.get("content_kind") or "document"),
+                )
+        except Exception as exc:
+            classified = classify_telegram_exception(exc)
+            status = "ambiguous" if classified.ambiguous else "failed"
+            await _complete_with_retry(
+                worker,
                 upload_id,
-                target,
-                expected_size=int(upload.get("size_bytes") or 0),
+                status=status,
+                error_code=classified.code,
+                error_message=(
+                    "Telegram 返回结果不确定；为避免重复发送，请检查账号收藏夹后重试。"
+                    if classified.ambiguous
+                    else f"内容未能保存到 Telegram：{type(exc).__name__}"
+                ),
             )
-            message_id = await send_uploaded_file(client, str(target), str(upload.get("content_kind") or "document"))
-        await worker.complete_media_upload(
+            raise
+        await _complete_with_retry(
+            worker,
             upload_id,
             status="ready",
             source_message_id=message_id,
         )
         return message_id
-    except Exception as exc:
-        try:
-            await worker.complete_media_upload(
-                upload_id,
-                status="failed",
-                error_code="telegram_stage_failed",
-                error_message=f"内容未能保存到 Telegram：{type(exc).__name__}",
-            )
-        except Exception:
-            pass
-        raise
     finally:
         if temporary_client:
             await stop_client(client)

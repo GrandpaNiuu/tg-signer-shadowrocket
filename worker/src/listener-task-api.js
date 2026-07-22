@@ -75,6 +75,10 @@ async function nextListenerRunId(repository, timestamp) {
         WHERE lease.account_id = a.id AND lease.leased_until > ?
       )
       AND NOT EXISTS (
+        SELECT 1 FROM media_upload_leases media_lease
+        WHERE media_lease.account_id = a.id AND media_lease.leased_until > ?
+      )
+      AND NOT EXISTS (
         SELECT 1 FROM task_runs active
         JOIN tasks active_task ON active_task.id = active.task_id
         WHERE COALESCE(active.account_id_snapshot, active_task.account_id) = a.id
@@ -83,7 +87,7 @@ async function nextListenerRunId(repository, timestamp) {
             OR (active.status = 'queued' AND active.dispatch_status IN ('dispatching', 'dispatched')))
       )
     ORDER BY r.scheduled_for, r.created_at, r.id
-    LIMIT 1`).bind(dueThrough, timestamp, timestamp, timestamp).first();
+    LIMIT 1`).bind(dueThrough, timestamp, timestamp, timestamp, timestamp).first();
   return row?.id || null;
 }
 

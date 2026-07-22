@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS media_uploads (
   total_chunks INTEGER NOT NULL CHECK (total_chunks > 0 AND total_chunks <= 40),
   uploaded_chunks INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'created' CHECK (status IN (
-    'created', 'uploaded', 'queued', 'processing', 'ready', 'failed', 'cancelled', 'expired'
+    'created', 'uploaded', 'queued', 'processing', 'ready', 'failed', 'ambiguous', 'cancelled', 'expired'
   )),
   attempt_count INTEGER NOT NULL DEFAULT 0,
   claimed_by TEXT,
@@ -42,3 +42,15 @@ CREATE TABLE IF NOT EXISTS media_upload_chunks (
   created_at TEXT NOT NULL,
   PRIMARY KEY (upload_id, chunk_index)
 );
+
+CREATE TABLE IF NOT EXISTS media_upload_leases (
+  account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+  upload_id TEXT NOT NULL UNIQUE REFERENCES media_uploads(id) ON DELETE CASCADE,
+  holder TEXT NOT NULL,
+  leased_until TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_media_upload_leases_expiry
+  ON media_upload_leases(leased_until);
