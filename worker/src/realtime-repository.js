@@ -56,6 +56,17 @@ async function pendingRealtimeRun(repository, accountId) {
     LIMIT 1`).bind(accountId).first();
 }
 
+async function clearStaleRealtimeHandoff(repository, accountId, timestamp) {
+  await repository.db.prepare(`DELETE FROM realtime_task_handoffs
+    WHERE account_id = ? AND (
+      expires_at <= ? OR NOT EXISTS (
+        SELECT 1 FROM task_runs r
+        WHERE r.id = realtime_task_handoffs.task_run_id
+          AND r.status IN ('queued', 'claimed', 'running')
+      )
+    )`).bind(accountId, timestamp).run();
+}
+
 async function pauseRealtimeRules(repository, accountId, runId, timestamp) {
   await repository.db.prepare(`INSERT OR IGNORE INTO realtime_task_handoff_rules
     (account_id, task_run_id, rule_id)
@@ -70,6 +81,10 @@ async function pauseRealtimeRules(repository, accountId, runId, timestamp) {
 
 export async function prepareRealtimeTaskHandoff(repository, accountId, timestamp) {
   const target = requiredRepository(repository);
+
+  // Expired or orphaned handoffs must be deleted first. The database trigger
+  // restores the exact realtime rules that were paused for that handoff.
+  await clearStaleRealtimeHandoff(target, accountId, timestamp);
 
   // Check a handoff before checking enabled rules. Handoff creation temporarily
   // disables those rules so an old Listener also drops the Telegram connection.
@@ -88,15 +103,6 @@ export async function prepareRealtimeTaskHandoff(repository, accountId, timestam
 
   const pending = await pendingRealtimeRun(target, accountId);
   if (!pending?.id) return { realtime: true, ready: false, handoff: null };
-
-  await target.db.prepare(`DELETE FROM realtime_task_handoffs
-    WHERE account_id = ? AND (
-      expires_at <= ? OR NOT EXISTS (
-        SELECT 1 FROM task_runs r
-        WHERE r.id = realtime_task_handoffs.task_run_id
-          AND r.status IN ('queued', 'claimed', 'running')
-      )
-    )`).bind(accountId, timestamp).run();
 
   const readyAt = isoOffset(timestamp, REALTIME_HANDOFF_DELAY_SECONDS);
   const expiresAt = isoOffset(timestamp, REALTIME_HANDOFF_TTL_SECONDS);
@@ -223,6 +229,7 @@ export function withRealtimeMaintenance(repository) {
 export const __test = {
   activeRealtimeHandoff,
   cleanupRealtimeHistory,
+  clearStaleRealtimeHandoff,
   cutoff,
   inspectionActive,
   isoOffset,
