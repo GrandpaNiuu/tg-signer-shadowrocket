@@ -14,16 +14,21 @@ test("verification route keeps only the pending email and never stores a code", 
   assert.equal(__test.CODE_PATTERN.test("12345a"), false);
 });
 
-test("registration and code verification are intercepted before the legacy submit handler", async () => {
+test("login, registration and code verification are intercepted before the legacy submit handler", async () => {
   const source = await readFile(sourceUrl, "utf8");
   assert.match(source, /addEventListener\("submit"[\s\S]*true\)/);
   assert.match(source, /stopImmediatePropagation\(\)/);
+  assert.match(source, /email-login-form/);
+  assert.match(source, /\/api\/auth\/email\/login/);
+  assert.match(source, /email_verification_required/);
+  assert.match(source, /account_exists/);
   assert.match(source, /\/api\/auth\/email\/verify-code/);
   assert.match(source, /\/api\/auth\/email\/resend-code/);
+  assert.match(source, /location\.reload\(\)/);
   assert.doesNotMatch(source, /localStorage|sessionStorage/);
 });
 
-test("production page loads the email verification code controller", async () => {
+test("production page loads the current email verification code controller", async () => {
   const index = await readFile(indexUrl, "utf8");
-  assert.match(index, /email-verification-code\.js\?v=20260722-1/);
+  assert.match(index, /email-verification-code\.js\?v=20260722-2/);
 });
