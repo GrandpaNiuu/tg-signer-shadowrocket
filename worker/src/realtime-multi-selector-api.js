@@ -4,9 +4,8 @@ import { assertRealtimeTransitionAllowed } from "./realtime-repository.js";
 const RULE_KINDS = new Set(["keyword_reply", "group_monitor"]);
 const REPLY_TRIGGER_MODES = new Set(["keyword", "reply_to_own", "keyword_or_reply_to_own"]);
 const TARGET_PATTERN = /^(?:\*|@[A-Za-z][A-Za-z0-9_]{3,31}|-?\d{1,20})$/;
-const MAX_SELECTORS = 50;
 const MAX_SELECTOR_LENGTH = 128;
-const MAX_SERIALIZED_LENGTH = 4_096;
+const MAX_SERIALIZED_LENGTH = 32_000;
 
 function objectBody(value) {
   if (!value || Array.isArray(value) || typeof value !== "object") {
@@ -70,16 +69,13 @@ export function normalizeRealtimeSelectors(value, field = "chat_selector") {
   if (!selectors.length) {
     throw new HttpError(422, "validation_failed", "请至少选择一个监听或自动回复会话。", { fields: [field] });
   }
-  if (selectors.length > MAX_SELECTORS) {
-    throw new HttpError(422, "validation_failed", `每条实时规则最多选择 ${MAX_SELECTORS} 个会话。`, { fields: [field] });
-  }
   if (selectors.includes("*") && selectors.length > 1) {
     throw new HttpError(422, "validation_failed", "“全部会话”不能与具体会话同时选择。", { fields: [field] });
   }
 
   const serialized = selectors.length === 1 ? selectors[0] : selectors.join(",");
   if (serialized.length > MAX_SERIALIZED_LENGTH) {
-    throw new HttpError(422, "validation_failed", "选择的会话数量或内容过长。", { fields: [field] });
+    throw new HttpError(422, "validation_failed", "选择的会话内容过长，请减少部分目标。", { fields: [field] });
   }
   return serialized;
 }
@@ -180,7 +176,7 @@ export async function handleRealtimeMultiSelectorWriteApi(request, repository, c
   if (!id && request.method !== "POST") return null;
   if (id && request.method !== "PATCH") return null;
 
-  const input = ruleInput(await readJson(request, 32_000), { patch: Boolean(id) });
+  const input = ruleInput(await readJson(request, 64_000), { patch: Boolean(id) });
   const timestamp = context.now().toISOString();
 
   if (!id) {
@@ -231,7 +227,6 @@ export async function handleRealtimeMultiSelectorWriteApi(request, repository, c
 }
 
 export const __test = {
-  MAX_SELECTORS,
   MAX_SELECTOR_LENGTH,
   MAX_SERIALIZED_LENGTH,
 };
