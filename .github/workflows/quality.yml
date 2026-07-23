@@ -25,7 +25,27 @@ jobs:
         with:
           python-version: "3.11"
       - run: python -m unittest discover -s runner/tests -p 'test_*.py' -v
-      - run: python -m unittest discover -s listener/tests -p 'test_*.py' -v
+      - name: Run Listener suite
+        id: listener_tests
+        shell: bash
+        run: |
+          set -o pipefail
+          log_file="${RUNNER_TEMP}/listener-tests.log"
+          if python -m unittest discover -s listener/tests -p 'test_*.py' -v >"$log_file" 2>&1; then
+            tail -n 30 "$log_file"
+          else
+            echo "Listener suite failed. Showing the final diagnostic lines:"
+            tail -n 220 "$log_file"
+            exit 1
+          fi
+      - name: Upload Listener failure diagnostics
+        if: ${{ failure() && steps.listener_tests.outcome == 'failure' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: listener-test-diagnostics-${{ github.run_id }}
+          path: ${{ runner.temp }}/listener-tests.log
+          if-no-files-found: error
+          retention-days: 3
       - run: python -m compileall -q listener
 
   worker:
