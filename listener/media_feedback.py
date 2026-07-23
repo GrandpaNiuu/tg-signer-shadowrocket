@@ -4,9 +4,10 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from listener.worker_client import ListenerWorkerClient, WorkerClientError
+if TYPE_CHECKING:
+    from listener.worker_client import ListenerWorkerClient
 
 LOGGER = logging.getLogger("telegram-listener.media-feedback")
 MAX_FEEDBACK_MEDIA_BYTES = 20 * 1024 * 1024
@@ -81,7 +82,7 @@ def media_preview(message: Any, descriptor: MediaDescriptor) -> str:
 async def forward_message_media(
     client: Any,
     message: Any,
-    worker: ListenerWorkerClient,
+    worker: "ListenerWorkerClient",
     *,
     descriptor: MediaDescriptor,
     event: dict[str, Any],
@@ -122,8 +123,8 @@ async def forward_message_media(
                 sender_label=str(event.get("sender_label") or "发送者身份未公开"),
                 caption=media_preview(message, descriptor),
             )
-        except WorkerClientError as exc:
-            LOGGER.warning("Listener media feedback upload failed: %s", exc)
+        except Exception as exc:
+            LOGGER.warning("Listener media feedback upload failed: %s", type(exc).__name__)
             return {"sent": False, "reason": "upload_failed"}
 
 
