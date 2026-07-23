@@ -76,9 +76,9 @@ async function registerAndVerify(context, email = "protected@example.com") {
   return await registration.json();
 }
 
-test("secure registration returns the same response for a new address and an existing account", async () => {
+test("secure registration explicitly rejects an existing account after Turnstile", async () => {
   const context = harness();
-  const firstPayload = await registerAndVerify(context);
+  await registerAndVerify(context);
   const emailCount = context.emails.length;
 
   const repeated = await context.worker.fetch(request("/api/auth/email/register", {
@@ -87,8 +87,10 @@ test("secure registration returns the same response for a new address and an exi
     password: "another strong password value",
     turnstile_token: "register-repeat",
   }, { ip: "203.0.113.11" }), context.env);
-  assert.equal(repeated.status, 202, JSON.stringify(await repeated.clone().json()));
-  assert.deepEqual(await repeated.json(), firstPayload);
+  assert.equal(repeated.status, 409, JSON.stringify(await repeated.clone().json()));
+  const payload = await repeated.json();
+  assert.equal(payload.error.code, "account_exists");
+  assert.match(payload.error.message, /直接登录/);
   assert.equal(context.emails.length, emailCount);
 });
 
