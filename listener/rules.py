@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 from urllib.parse import urlparse
 
@@ -66,7 +67,38 @@ def message_buttons(message: Any) -> list[str]:
     return output
 
 
-def selector_matches(selector: str, message: Any) -> bool:
+def parse_selectors(selector: str | list[str] | tuple[str, ...] | None) -> tuple[str, ...]:
+    if isinstance(selector, (list, tuple)):
+        raw_values = list(selector)
+    else:
+        source = str(selector or "").strip()
+        if not source:
+            return tuple()
+        raw_values: list[Any]
+        if source.startswith("["):
+            try:
+                parsed = json.loads(source)
+                raw_values = parsed if isinstance(parsed, list) else [source]
+            except (TypeError, ValueError, json.JSONDecodeError):
+                raw_values = source.replace("\n", ",").split(",")
+        else:
+            raw_values = source.replace("\n", ",").split(",")
+
+    values: list[str] = []
+    seen: set[str] = set()
+    for raw_value in raw_values:
+        value = str(raw_value or "").strip()
+        if not value:
+            continue
+        key = value.casefold() if value.startswith("@") else value
+        if key in seen:
+            continue
+        seen.add(key)
+        values.append(value)
+    return tuple(values)
+
+
+def _single_selector_matches(selector: str, message: Any) -> bool:
     if selector == "*":
         return True
     chat = getattr(message, "chat", None)
@@ -75,6 +107,11 @@ def selector_matches(selector: str, message: Any) -> bool:
     if selector.startswith("@"):
         return str(getattr(chat, "username", "") or "").casefold() == selector[1:].casefold()
     return str(getattr(chat, "id", "")) == selector
+
+
+def selector_matches(selector: str | list[str] | tuple[str, ...], message: Any) -> bool:
+    selectors = parse_selectors(selector)
+    return any(_single_selector_matches(value, message) for value in selectors)
 
 
 def keyword_matches(keyword: str, value: str, *, case_sensitive: bool) -> bool:

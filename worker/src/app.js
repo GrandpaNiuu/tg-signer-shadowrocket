@@ -19,6 +19,7 @@ import {
   schedulerRepository,
 } from "./repository-facade.js";
 import { handleListenerApi, handleWorkspaceRealtimeApi } from "./realtime-automation.js";
+import { handleRealtimeMultiSelectorWriteApi } from "./realtime-multi-selector-api.js";
 import { handleRunnerApi } from "./runner-api-v2.js";
 import { runScheduler } from "./scheduler.js";
 import { handleSkillTaskApi } from "./skill-task-api.js";
@@ -236,6 +237,8 @@ export function createWorker(dependencies = {}) {
           if (dialogDirectoryResponse) return await withRequestId(dialogDirectoryResponse, requestId);
           const mediaUploadResponse = await handleWorkspaceMediaUploadApi(request, env, userRepository, context);
           if (mediaUploadResponse) return await withRequestId(mediaUploadResponse, requestId);
+          const realtimeWriteResponse = await handleRealtimeMultiSelectorWriteApi(request, userRepository, context);
+          if (realtimeWriteResponse) return await withRequestId(realtimeWriteResponse, requestId);
           const realtimeResponse = await handleWorkspaceRealtimeApi(request, env, userRepository, context);
           if (realtimeResponse) return await withRequestId(realtimeResponse, requestId);
           const skillTaskResponse = await handleSkillTaskApi(request, env, userRepository, context);
