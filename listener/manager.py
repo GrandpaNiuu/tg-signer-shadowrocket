@@ -13,6 +13,12 @@ from pyrogram import Client
 from pyrogram.handlers import MessageHandler
 
 from listener.event_identity import message_source
+from listener.media_feedback import (
+    MediaDescriptor,
+    forward_message_media,
+    media_preview,
+    message_media_descriptor,
+)
 from listener.reply_limits import ReplyLimiter, is_human_sender
 from listener.rules import (
     GROUP_TYPES,
@@ -68,11 +74,42 @@ class RealtimeManager:
     def _allow_reply(self, rule_id: str, chat_id: str, sender_id: str) -> bool:
         return self._reply_limiter.allow(rule_id, chat_id, sender_id)
 
-    async def _report_event(self, payload: dict[str, Any]) -> None:
+    async def _report_event(self, payload: dict[str, Any]) -> dict[str, Any]:
         try:
-            await self.worker.record_event(payload)
+            return await self.worker.record_event(payload)
         except WorkerClientError as exc:
             LOGGER.warning("Event report failed: %s", exc)
+            return {}
+
+    async def _report_event_with_media(
+        self,
+        payload: dict[str, Any],
+        client: Client,
+        message: Any,
+        descriptor: MediaDescriptor | None,
+        account_name: str,
+    ) -> None:
+        receipt = await self._report_event(payload)
+        if descriptor is None:
+            return
+        notification = receipt.get("notification") if isinstance(receipt, dict) else None
+        if not isinstance(notification, dict) or notification.get("sent") is not True:
+            return
+        result = await forward_message_media(
+            client,
+            message,
+            self.worker,
+            descriptor=descriptor,
+            event=payload,
+            receipt_message_id=notification.get("message_id"),
+            account_name=account_name,
+        )
+        if result.get("sent") is not True:
+            LOGGER.info(
+                "Listener media feedback was not sent for %s: %s",
+                payload.get("message_id"),
+                result.get("reason", "unknown"),
+            )
 
     async def _reply_target_sent_by_account(self, client: Client, message: Any) -> Any | None:
         replied = getattr(message, "reply_to_message", None)
@@ -99,10 +136,14 @@ class RealtimeManager:
         chat_id = source["chat_id"]
         message_id = str(getattr(message, "id", ""))
         sender = getattr(message, "from_user", None)
-        if not is_human_sender(sender):
+        # Human users, anonymous administrators and channel identities are readable.
+        # Bots remain excluded from automatic replies to prevent feedback loops.
+        if sender is not None and not is_human_sender(sender):
             return
-        sender_id = source["sender_id"]
+        sender_id = source["sender_id"] or source["sender_label"]
         content = message_text(message)
+        descriptor = message_media_descriptor(message)
+        preview = content[:600] if content else (media_preview(message, descriptor) if descriptor else "")
         reply_checked = False
         reply_target = None
         for rule in self.rules_by_account.get(account_id, []):
@@ -139,7 +180,8 @@ class RealtimeManager:
                 "account_id": account_id,
                 **source,
                 "message_id": message_id,
-                "message_preview": content[:600],
+                "message_preview": preview,
+                **(descriptor.event_fields() if descriptor else {}),
             }
             if rule.get("kind") == "keyword_reply":
                 response = str(rule.get("response_text") or "")
@@ -168,7 +210,11 @@ class RealtimeManager:
                     "event_kind": "message_observed",
                     "action_summary": f"命中监控规则「{rule.get('name', '')}」",
                 })
-            asyncio.create_task(self._report_event(event))
+            managed = self.accounts.get(account_id)
+            account_name = managed.name if managed else account_id
+            asyncio.create_task(
+                self._report_event_with_media(event, _client, message, descriptor, account_name)
+            )
 
     def _callback_for(self, account_id: str):
         async def callback(client_value: Client, message: Any) -> None:
