@@ -1,113 +1,281 @@
+.modal:has(.realtime-multi-picker) {
+  width: min(46rem, calc(100vw - 1rem)) !important;
+  max-width: calc(100vw - 1rem) !important;
+  overflow: hidden !important;
+}
+
+.modal:has(.realtime-multi-picker) .modal-body,
+.modal:has(.realtime-multi-picker) .form-grid,
+.modal:has(.realtime-multi-picker) .field,
+.field:has(> .realtime-multi-picker) {
+  min-width: 0 !important;
+  max-width: 100% !important;
+  overflow-x: hidden !important;
+}
+
+.realtime-multi-picker,
+.realtime-multi-picker * {
+  box-sizing: border-box;
+}
+
 .realtime-multi-picker {
   display: grid;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
   gap: 0.7rem;
-  margin-top: 0.4rem;
+  margin-top: 0.35rem;
+  overflow: hidden;
 }
 
 .realtime-multi-head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 0.75rem;
-  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .realtime-multi-head > div {
   display: grid;
-  gap: 0.15rem;
+  min-width: 0;
+  gap: 0.18rem;
 }
 
 .realtime-multi-head strong {
+  color: var(--text, #182230);
   font-size: 0.95rem;
+  line-height: 1.35;
 }
 
 .realtime-multi-head small,
 .realtime-multi-status,
 .realtime-multi-actions span,
 .realtime-multi-manual p,
-.realtime-multi-choice small {
+.realtime-multi-choice small,
+.realtime-multi-wildcard small {
   color: var(--muted, #667085);
-  font-size: 0.82rem;
-  line-height: 1.45;
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.realtime-multi-head button {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .realtime-multi-search {
-  min-height: 2.65rem;
+  display: block;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  min-height: 2.75rem;
+  margin: 0;
 }
 
 .realtime-multi-actions {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
   align-items: center;
-  gap: 0.55rem;
-  flex-wrap: wrap;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.realtime-multi-actions button {
+  min-height: 2.2rem;
+  padding: 0.4rem 0.65rem;
+  white-space: nowrap;
 }
 
 .realtime-multi-actions span {
-  margin-left: auto;
+  justify-self: end;
+  min-width: 0;
+  padding: 0.3rem 0.6rem;
+  border-radius: 999px;
+  background: #eef6ff;
+  color: #175cd3;
   font-variant-numeric: tabular-nums;
+  font-weight: 650;
+  text-align: right;
 }
 
 .realtime-multi-wildcard,
 .realtime-multi-choice {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.65rem;
-  padding: 0.7rem 0.8rem;
-  border: 1px solid rgba(152, 162, 179, 0.3);
+  display: grid !important;
+  grid-template-columns: 1.35rem minmax(0, 1fr) !important;
+  align-items: center !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  min-height: 3.5rem;
+  gap: 0.7rem;
+  margin: 0 !important;
+  padding: 0.65rem 0.75rem !important;
+  border: 1px solid #dfe5ec;
   border-radius: 0.75rem;
-  background: rgba(248, 250, 252, 0.72);
+  background: #fff;
   cursor: pointer;
+  overflow: hidden;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
 }
 
-.realtime-multi-wildcard input,
-.realtime-multi-choice input {
-  flex: 0 0 auto;
-  margin-top: 0.18rem;
+.realtime-multi-wildcard {
+  border-color: #b9d8fb;
+  background: #f5faff;
 }
 
-.realtime-multi-wildcard span,
-.realtime-multi-choice span {
-  display: grid;
-  min-width: 0;
-  gap: 0.1rem;
+.realtime-multi-wildcard:hover,
+.realtime-multi-choice:hover {
+  border-color: #84bdf5;
+  background: #f7fbff;
 }
 
+.realtime-multi-wildcard:has(input:checked),
+.realtime-multi-choice:has(input:checked) {
+  border-color: #2e90fa;
+  background: #eff8ff;
+  box-shadow: inset 0 0 0 1px rgba(46, 144, 250, 0.14);
+}
+
+.realtime-multi-wildcard input[type="checkbox"],
+.realtime-multi-choice input[type="checkbox"] {
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  display: grid !important;
+  place-content: center;
+  width: 1.25rem !important;
+  min-width: 1.25rem !important;
+  max-width: 1.25rem !important;
+  height: 1.25rem !important;
+  min-height: 1.25rem !important;
+  max-height: 1.25rem !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 1.5px solid #98a2b3 !important;
+  border-radius: 0.38rem !important;
+  background: #fff !important;
+  box-shadow: none !important;
+  flex: none !important;
+}
+
+.realtime-multi-wildcard input[type="checkbox"]::before,
+.realtime-multi-choice input[type="checkbox"]::before {
+  width: 0.55rem;
+  height: 0.3rem;
+  border-bottom: 2px solid #fff;
+  border-left: 2px solid #fff;
+  content: "";
+  opacity: 0;
+  transform: translateY(-0.05rem) rotate(-45deg) scale(0.7);
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.realtime-multi-wildcard input[type="checkbox"]:checked,
+.realtime-multi-choice input[type="checkbox"]:checked {
+  border-color: #1570ef !important;
+  background: #1570ef !important;
+}
+
+.realtime-multi-wildcard input[type="checkbox"]:checked::before,
+.realtime-multi-choice input[type="checkbox"]:checked::before {
+  opacity: 1;
+  transform: translateY(-0.05rem) rotate(-45deg) scale(1);
+}
+
+.realtime-multi-wildcard input[type="checkbox"]:focus-visible,
+.realtime-multi-choice input[type="checkbox"]:focus-visible {
+  outline: 3px solid rgba(46, 144, 250, 0.24) !important;
+  outline-offset: 2px;
+}
+
+.realtime-multi-wildcard > span,
+.realtime-multi-choice > span {
+  display: grid !important;
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  gap: 0.08rem;
+  overflow: hidden;
+}
+
+.realtime-multi-wildcard strong,
 .realtime-multi-choice strong {
-  overflow-wrap: anywhere;
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--text, #182230);
   font-size: 0.9rem;
+  font-weight: 700;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.realtime-multi-wildcard small,
+.realtime-multi-choice small {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .realtime-multi-list {
   display: grid;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  max-height: min(45vh, 25rem);
   gap: 0.7rem;
-  max-height: 23rem;
-  overflow: auto;
-  padding-right: 0.15rem;
+  padding: 0 0.15rem 0 0;
+  overflow-x: hidden !important;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .realtime-multi-list fieldset {
   display: grid;
-  gap: 0.45rem;
+  width: 100%;
+  min-width: 0 !important;
+  max-width: 100%;
+  min-inline-size: 0 !important;
+  gap: 0.4rem;
   margin: 0;
-  padding: 0.7rem;
-  border: 1px solid rgba(152, 162, 179, 0.28);
-  border-radius: 0.8rem;
+  padding: 0.55rem;
+  border: 1px solid #e4e9ef;
+  border-radius: 0.85rem;
+  background: #f8fafc;
+  overflow: hidden;
 }
 
 .realtime-multi-list legend {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  margin: 0 0 0.05rem 0.1rem;
   padding: 0 0.35rem;
   color: var(--muted, #667085);
-  font-size: 0.82rem;
-  font-weight: 700;
+  font-size: 0.8rem;
+  font-weight: 750;
+  line-height: 1.3;
 }
 
 .realtime-multi-empty {
   margin: 0;
   padding: 1rem;
-  border: 1px dashed rgba(152, 162, 179, 0.4);
+  border: 1px dashed #cfd7e3;
   border-radius: 0.75rem;
   color: var(--muted, #667085);
   text-align: center;
+}
+
+.realtime-multi-status {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .realtime-multi-status[data-state="running"],
@@ -124,10 +292,14 @@
 }
 
 .realtime-multi-manual {
-  border: 1px solid rgba(152, 162, 179, 0.32);
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  border: 1px solid #dfe5ec;
   border-radius: 0.75rem;
   padding: 0.65rem 0.8rem;
-  background: rgba(248, 250, 252, 0.75);
+  background: #f8fafc;
+  overflow: hidden;
 }
 
 .realtime-multi-manual summary {
@@ -142,30 +314,74 @@
 }
 
 .realtime-multi-manual textarea {
-  width: 100%;
+  display: block;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
   resize: vertical;
 }
 
 @media (max-width: 640px) {
+  .modal:has(.realtime-multi-picker) {
+    width: 100vw !important;
+    max-width: 100vw !important;
+    margin: 0 !important;
+    border-radius: 1.25rem 1.25rem 0 0 !important;
+  }
+
+  .modal:has(.realtime-multi-picker) .modal-body {
+    padding-right: 0.9rem !important;
+    padding-left: 0.9rem !important;
+  }
+
+  .realtime-multi-picker {
+    gap: 0.6rem;
+  }
+
   .realtime-multi-head {
-    align-items: stretch;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+  }
+
+  .realtime-multi-head small {
+    display: none;
   }
 
   .realtime-multi-head button {
-    width: 100%;
+    width: auto !important;
+    min-height: 2.25rem;
+    padding: 0.4rem 0.65rem;
   }
 
   .realtime-multi-actions {
-    display: grid;
     grid-template-columns: 1fr 1fr;
+  }
+
+  .realtime-multi-actions button {
+    width: 100%;
   }
 
   .realtime-multi-actions span {
     grid-column: 1 / -1;
-    margin-left: 0;
+    justify-self: stretch;
+    text-align: center;
+  }
+
+  .realtime-multi-wildcard,
+  .realtime-multi-choice {
+    min-height: 3.35rem;
+    padding: 0.58rem 0.65rem !important;
+    border-radius: 0.7rem;
   }
 
   .realtime-multi-list {
-    max-height: 20rem;
+    max-height: min(43vh, 22rem);
+    padding-right: 0;
+  }
+
+  .realtime-multi-list fieldset {
+    gap: 0.35rem;
+    padding: 0.45rem;
   }
 }
