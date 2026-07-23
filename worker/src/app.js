@@ -1,6 +1,10 @@
 import { handleAdminApi } from "./admin-api.js";
 import { createAdminAuth } from "./admin-auth.js";
 import { verifyRunnerRequest } from "./auth.js";
+import {
+  handleListenerDialogDirectoryApi,
+  handleWorkspaceDialogDirectoryApi,
+} from "./dialog-directory-api.js";
 import { errorResponse, json } from "./http.js";
 import { handleListenerEventApi } from "./listener-event-api.js";
 import { handleListenerTaskApi } from "./listener-task-api.js";
@@ -180,6 +184,10 @@ export function createWorker(dependencies = {}) {
             fetch: fetchImpl,
           }), requestId);
         }
+        if (url.pathname.startsWith("/api/listener/v1/dialog-syncs")) {
+          const repository = repositoryFactory(env);
+          return await withRequestId(await handleListenerDialogDirectoryApi(request, env, repository), requestId);
+        }
         if (url.pathname === "/api/listener/v1/events") {
           const repository = repositoryFactory(env);
           return await withRequestId(await handleListenerEventApi(request, env, repository, {
@@ -219,6 +227,13 @@ export function createWorker(dependencies = {}) {
           const platformHealthResponse = await handlePlatformAccountHealthApi(request, env, repository, context);
           if (platformHealthResponse) return await withRequestId(platformHealthResponse, requestId);
           const userRepository = adminWorkspaceRepository(repository, identity);
+          const dialogDirectoryResponse = await handleWorkspaceDialogDirectoryApi(
+            request,
+            env,
+            userRepository,
+            context,
+          );
+          if (dialogDirectoryResponse) return await withRequestId(dialogDirectoryResponse, requestId);
           const mediaUploadResponse = await handleWorkspaceMediaUploadApi(request, env, userRepository, context);
           if (mediaUploadResponse) return await withRequestId(mediaUploadResponse, requestId);
           const realtimeResponse = await handleWorkspaceRealtimeApi(request, env, userRepository, context);

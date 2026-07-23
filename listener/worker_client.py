@@ -27,7 +27,7 @@ class ListenerWorkerClient:
         headers = {
             "authorization": f"Bearer {api_token}",
             "accept": "application/json",
-            "user-agent": "telegram-realtime-listener/0.4",
+            "user-agent": "telegram-realtime-listener/0.5",
         }
         if self.instance_id:
             headers["x-listener-instance-id"] = self.instance_id
@@ -125,6 +125,41 @@ class ListenerWorkerClient:
             f"/api/listener/v1/inspections/{inspection_id}/complete",
             json=payload,
         )
+
+    async def claim_dialog_sync(self, instance_id: str) -> dict[str, Any] | None:
+        value = await self._request(
+            "POST",
+            "/api/listener/v1/dialog-syncs/claim",
+            json={"instance_id": instance_id},
+        )
+        return value if isinstance(value, dict) else None
+
+    async def complete_dialog_sync(
+        self,
+        sync_id: str,
+        *,
+        instance_id: str,
+        status: str,
+        dialogs: list[dict[str, Any]] | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "instance_id": instance_id,
+            "status": status,
+        }
+        if dialogs is not None:
+            payload["dialogs"] = dialogs
+        if error_code:
+            payload["error_code"] = error_code
+        if error_message:
+            payload["error_message"] = error_message
+        value = await self._request(
+            "POST",
+            f"/api/listener/v1/dialog-syncs/{sync_id}/complete",
+            json=payload,
+        )
+        return value if isinstance(value, dict) else {}
 
     async def record_event(self, payload: dict[str, Any]) -> dict[str, Any]:
         value = await self._request("POST", "/api/listener/v1/events", json=payload)

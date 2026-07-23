@@ -8,6 +8,7 @@ from typing import Any
 from pyrogram.handlers import MessageHandler
 
 from listener import __version__
+from listener.dialog_directory import process_dialog_sync
 from listener.inspection import inspect_bot_operation
 from listener.manager import ManagedAccount, RealtimeManager
 from listener.media_upload import stage_media_upload
@@ -34,6 +35,7 @@ class ListenerService:
         inspection_interval: int = 4,
         task_interval: int = 2,
         media_upload_interval: int = 2,
+        dialog_sync_interval: int = 3,
     ) -> None:
         self.worker = worker
         self.instance_id = instance_id
@@ -43,6 +45,7 @@ class ListenerService:
         self.inspection_interval = inspection_interval
         self.task_interval = task_interval
         self.media_upload_interval = media_upload_interval
+        self.dialog_sync_interval = dialog_sync_interval
         self.started_at = utc_now()
         self.stop_event = asyncio.Event()
         self.manager = RealtimeManager(worker)
@@ -130,6 +133,25 @@ class ListenerService:
                 LOGGER.warning("Inspection polling failed: %s", exc)
             try:
                 await asyncio.wait_for(self.stop_event.wait(), timeout=self.inspection_interval)
+            except asyncio.TimeoutError:
+                pass
+
+    async def dialog_sync_loop(self) -> None:
+        while not self.stop_event.is_set():
+            try:
+                if not self.is_leader:
+                    await asyncio.wait_for(self.stop_event.wait(), timeout=self.dialog_sync_interval)
+                    continue
+                async with self.manager_lock:
+                    processed = await process_dialog_sync(self.worker, self.instance_id, self.manager)
+                if processed:
+                    continue
+            except asyncio.TimeoutError:
+                pass
+            except Exception as exc:
+                LOGGER.warning("Dialog directory polling failed: %s", exc)
+            try:
+                await asyncio.wait_for(self.stop_event.wait(), timeout=self.dialog_sync_interval)
             except asyncio.TimeoutError:
                 pass
 
@@ -250,6 +272,7 @@ class ListenerService:
             asyncio.create_task(self.sync_loop()),
             asyncio.create_task(self.heartbeat_loop()),
             asyncio.create_task(self.inspection_loop()),
+            asyncio.create_task(self.dialog_sync_loop()),
             asyncio.create_task(self.task_loop()),
             asyncio.create_task(self.media_upload_loop()),
         ]
