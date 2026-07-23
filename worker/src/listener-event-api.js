@@ -5,6 +5,8 @@ import { verifyListener } from "./realtime-automation.js";
 
 const EVENT_KINDS = new Set(["message_observed", "keyword_replied", "listener_error"]);
 const MEDIA_KINDS = new Set(["photo", "video", "document", "audio", "voice", "animation", "sticker", "video_note"]);
+const AUTO_REPLY_STATUSES = new Set(["sent", "failed", "skipped", "not_configured", "not_triggered"]);
+const MEDIA_FEEDBACK_STATUSES = new Set(["pending", "sent", "failed", "skipped", "not_applicable"]);
 const MAX_MEDIA_BYTES = 20 * 1024 * 1024;
 const CHAT_TYPE_LABELS = Object.freeze({
   private: "私聊",
@@ -44,6 +46,24 @@ function optionalText(value, maximum, { lines = 1 } = {}) {
   return sanitizeLogText(output, { maxLines: lines, maxLength: maximum }) || null;
 }
 
+function cleanObservedText(value, maximum = 600) {
+  let output = String(value ?? "").trim();
+  if (!output) return null;
+  output = sanitizeLogText(output, { maxLines: 30, maxLength: 8_000 })
+    .replace(/\[\[\d+\]\]\(https?:\/\/[^)\s]+\)/gi, "")
+    .replace(/\[\d+\]\(https?:\/\/[^)\s]+\)/gi, "")
+    .replace(/\[TRUNCATED\]/gi, "")
+    .replace(/\s*↩\s*/g, "\n")
+    .replace(/[\t ]+\n/g, "\n")
+    .replace(/\n[\t ]+/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  if (!output) return null;
+  return output.length > maximum
+    ? `${output.slice(0, Math.max(0, maximum - 1)).trimEnd()}…`
+    : output;
+}
+
 function optionalIdentifier(value) {
   const output = String(value ?? "").trim();
   return output ? output.slice(0, 40) : null;
@@ -52,6 +72,18 @@ function optionalIdentifier(value) {
 function safeMessageLink(value) {
   const output = String(value ?? "").trim();
   return /^https?:\/\/t\.me\//i.test(output) ? output.slice(0, 500) : null;
+}
+
+function safeEventTime(value) {
+  const output = String(value ?? "").trim();
+  if (!output) return null;
+  const date = new Date(output);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function enumValue(value, allowed, fallback) {
+  const output = String(value ?? "").trim().toLowerCase();
+  return allowed.has(output) ? output : fallback;
 }
 
 function readableChat(body) {
@@ -133,9 +165,13 @@ async function recordListenerEvent(request, repository, env, context) {
 
   const timestamp = new Date().toISOString();
   const media = mediaMetadata(body);
-  const preview = optionalText(body.message_preview, 600, { lines: 3 })
+  const originalText = cleanObservedText(body.original_text ?? body.message_preview, 900);
+  const preview = originalText
     || (media ? `[${media.media_label}]${media.media_file_name ? ` ${media.media_file_name}` : ""}` : null);
-  const action = optionalText(body.action_summary, 300, { lines: 2 });
+  const analysisText = cleanObservedText(body.analysis_text, 900);
+  const action = cleanObservedText(body.action_summary, 400);
+  const matchedKeyword = cleanObservedText(body.matched_keyword, 160);
+  const matchSource = cleanObservedText(body.match_source, 120);
   const chatTitle = optionalText(body.chat_title, 160);
   const chatUsername = optionalText(String(body.chat_username ?? "").replace(/^@/, ""), 64);
   const chatType = optionalText(body.chat_type, 32);
@@ -145,6 +181,18 @@ async function recordListenerEvent(request, repository, env, context) {
   const senderType = optionalText(body.sender_type, 32);
   const senderLabel = optionalText(body.sender_label, 220);
   const messageLink = safeMessageLink(body.message_link);
+  const messageTime = safeEventTime(body.message_time);
+  const messageType = optionalText(body.message_type, 80) || (media ? media.media_label : "文字");
+  const autoReplyStatus = enumValue(
+    body.auto_reply_status,
+    AUTO_REPLY_STATUSES,
+    eventKind === "keyword_replied" ? "sent" : "not_configured",
+  );
+  const mediaFeedbackStatus = enumValue(
+    body.media_feedback_status,
+    MEDIA_FEEDBACK_STATUSES,
+    media ? "pending" : "not_applicable",
+  );
   const notificationContext = await notificationContextForEvent(repository, body);
 
   await repository.db.batch([
@@ -175,7 +223,15 @@ async function recordListenerEvent(request, repository, env, context) {
       account_name: notificationContext?.account_name,
       chat_label: readableChat(body),
       sender_label: readableSender(body),
+      original_text: originalText,
       message_preview: preview,
+      analysis_text: analysisText,
+      matched_keyword: matchedKeyword,
+      match_source: matchSource,
+      message_time: messageTime,
+      message_type: messageType,
+      auto_reply_status: autoReplyStatus,
+      media_feedback_status: mediaFeedbackStatus,
       action_summary: action,
       message_link: messageLink,
       ...media,
@@ -216,7 +272,7 @@ async function recordListenerMedia(request, repository, env, context) {
     account_name: multipartText(form, "account_name", 180, "未记录账号"),
     chat_label: multipartText(form, "chat_label", 220, "会话名称未公开"),
     sender_label: multipartText(form, "sender_label", 220, "发送者身份未公开"),
-    caption: multipartText(form, "caption", 600, `[${MEDIA_LABELS[mediaKind]}]`),
+    original_text: multipartText(form, "caption", 900, "无文字说明"),
   }, file);
   return json({ data: { accepted: true, notification: result } }, result.sent ? 202 : 502);
 }
@@ -237,8 +293,10 @@ export async function handleListenerEventApi(request, env, repository, context =
 
 export const __test = {
   MAX_MEDIA_BYTES,
+  cleanObservedText,
   mediaMetadata,
   readableChat,
   readableSender,
+  safeEventTime,
   safeMessageLink,
 };
