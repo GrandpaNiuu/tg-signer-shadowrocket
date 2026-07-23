@@ -9,6 +9,7 @@ from listener.media_feedback import (
     forward_message_media,
     media_preview,
     message_media_descriptor,
+    original_message_text,
 )
 
 
@@ -48,6 +49,7 @@ class MediaFeedbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(descriptor.file_name, "telegram-photo.jpg")
         self.assertEqual(descriptor.mime_type, "image/jpeg")
         self.assertEqual(media_preview(message, descriptor), "产品实拍图")
+        self.assertEqual(original_message_text(message), "产品实拍图")
         self.assertEqual(descriptor.event_fields()["media_label"], "图片")
 
     def test_document_descriptor_preserves_safe_file_name(self):
@@ -71,6 +73,7 @@ class MediaFeedbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(descriptor.kind, "document")
         self.assertEqual(descriptor.file_name, "采购清单.pdf")
         self.assertEqual(media_preview(message, descriptor), "[文件] 采购清单.pdf")
+        self.assertEqual(original_message_text(message), "")
 
     async def test_media_is_downloaded_temporarily_and_uploaded_with_context(self):
         message = SimpleNamespace(caption="现场视频", text=None)
@@ -97,6 +100,28 @@ class MediaFeedbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(worker.call["chat_label"], "客户群")
         self.assertEqual(worker.call["sender_label"], "采购经理（@buyer）")
         self.assertEqual(worker.call["caption"], "现场视频")
+
+    async def test_media_without_caption_uploads_an_empty_original_text(self):
+        message = SimpleNamespace(caption=None, text=None)
+        descriptor = SimpleNamespace(
+            kind="photo",
+            label="图片",
+            file_name="scene.jpg",
+            mime_type="image/jpeg",
+            size_bytes=100,
+        )
+        worker = FakeWorker()
+        result = await forward_message_media(
+            FakeClient(),
+            message,
+            worker,
+            descriptor=descriptor,
+            event={"chat_label": "客户群", "sender_label": "采购经理"},
+            receipt_message_id=88,
+            account_name="客服账号",
+        )
+        self.assertTrue(result["sent"])
+        self.assertEqual(worker.call["caption"], "")
 
     async def test_declared_oversized_media_is_not_downloaded(self):
         descriptor = SimpleNamespace(
