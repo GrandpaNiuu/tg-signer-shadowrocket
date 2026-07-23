@@ -4,7 +4,14 @@ import test from "node:test";
 
 import { __test } from "./src/listener-event-api.js";
 
-const { mediaMetadata, readableChat, readableSender, safeMessageLink } = __test;
+const {
+  cleanObservedText,
+  mediaMetadata,
+  readableChat,
+  readableSender,
+  safeEventTime,
+  safeMessageLink,
+} = __test;
 
 test("realtime notifications prefer readable conversation labels over numeric ids", () => {
   assert.equal(readableChat({
@@ -60,6 +67,17 @@ test("listener media metadata has human-readable labels", () => {
     media_size_bytes: 4096,
   });
   assert.equal(mediaMetadata({}), null);
+});
+
+test("listener content removes generated references and uses an ellipsis instead of internal markers", () => {
+  const source = "战绩截图说明。[[1]](https://example.com/source) ↩ 第二行 [TRUNCATED]";
+  assert.equal(cleanObservedText(source, 100), "战绩截图说明。\n第二行");
+  assert.equal(cleanObservedText("123456789", 6), "12345…");
+});
+
+test("Telegram message time is normalized to ISO and invalid values are ignored", () => {
+  assert.equal(safeEventTime("2026-07-23T09:31:26+08:00"), "2026-07-23T01:31:26.000Z");
+  assert.equal(safeEventTime("not-a-time"), null);
 });
 
 test("only Telegram message links are accepted", () => {
