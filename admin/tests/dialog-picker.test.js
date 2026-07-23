@@ -10,12 +10,37 @@ async function source(path) {
   return readFile(new URL(path, root), "utf8");
 }
 
-test("dialog picker enhances both ordinary tasks and realtime rules", () => {
+test("dialog picker enhances ordinary tasks and the current realtime rule form", () => {
   assert.equal(__test.PICKERS.length, 2);
   assert.deepEqual(__test.PICKERS.map((picker) => picker.account), ["#task-account", "#hub-rule-account"]);
   assert.deepEqual(__test.PICKERS.map((picker) => picker.target), ["#task-bot", "#hub-rule-chat"]);
   assert.equal(__test.PICKERS[0].writableOnly, true);
+  assert.equal(__test.PICKERS[1].form, "#skill-hub-realtime-form");
   assert.equal(__test.PICKERS[1].wildcard, true);
+});
+
+test("automatic reply picker supports one eligible conversation or all eligible conversations", () => {
+  const presentation = __test.realtimePickerPresentation("keyword_reply");
+  assert.equal(presentation.title, "选择自动回复对象");
+  assert.equal(presentation.fieldLabel, "自动回复对象");
+  assert.equal(presentation.writableOnly, true);
+  assert.deepEqual(presentation.allowedTypes, ["private", "group", "supergroup"]);
+  assert.match(presentation.wildcardLabel, /全部可回复会话/);
+  assert.match(presentation.fieldHelp, /真人消息/);
+
+  assert.equal(__test.dialogAllowed({ peer_type: "private", is_writable: true }, presentation), true);
+  assert.equal(__test.dialogAllowed({ peer_type: "supergroup", is_writable: true }, presentation), true);
+  assert.equal(__test.dialogAllowed({ peer_type: "bot", is_writable: true }, presentation), false);
+  assert.equal(__test.dialogAllowed({ peer_type: "channel", is_writable: true }, presentation), false);
+  assert.equal(__test.dialogAllowed({ peer_type: "group", is_writable: false }, presentation), false);
+});
+
+test("message monitoring picker keeps readable and read-only conversations available", () => {
+  const presentation = __test.realtimePickerPresentation("group_monitor");
+  assert.equal(presentation.title, "选择监听会话");
+  assert.equal(presentation.writableOnly, false);
+  assert.match(presentation.wildcardLabel, /全部会话/);
+  assert.equal(__test.dialogAllowed({ peer_type: "channel", is_writable: false }, presentation), true);
 });
 
 test("picker uses account-scoped directory APIs and keeps manual entry as an advanced fallback", async () => {
@@ -55,10 +80,10 @@ test("picker displays deterministic synchronization states", () => {
   assert.match(__test.syncLabel({ status: "failed", error_message: "网络异常" }), /网络异常/);
 });
 
-test("admin shell loads the picker stylesheet and cache-busted module", async () => {
+test("admin shell loads the picker stylesheet and refreshed module", async () => {
   const index = await source("index.html");
   assert.match(index, /assets\/dialog-picker\.css\?v=20260723-1/);
-  assert.match(index, /src\/dialog-picker\.js\?v=20260723-1/);
+  assert.match(index, /src\/dialog-picker\.js\?v=20260723-2/);
   const app = index.indexOf('/src/app.js');
   const picker = index.indexOf('/src/dialog-picker.js');
   assert.ok(app >= 0 && picker > app);
