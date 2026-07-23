@@ -7,7 +7,6 @@ import logging
 import time
 from collections import deque
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import Any, Callable
 
 from pyrogram import Client
@@ -20,6 +19,7 @@ from listener.media_feedback import (
     media_preview,
     message_media_descriptor,
 )
+from listener.receipt_context import match_source, message_time
 from listener.reply_limits import ReplyLimiter, is_human_sender
 from listener.rules import (
     GROUP_TYPES,
@@ -34,26 +34,6 @@ from listener.telegram_runtime import build_client, stop_client
 from listener.worker_client import ListenerWorkerClient, WorkerClientError
 
 LOGGER = logging.getLogger("telegram-listener.manager")
-
-
-def _message_time(message: Any) -> str:
-    value = getattr(message, "date", None)
-    if not isinstance(value, datetime):
-        return ""
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-def _match_source(*, keyword_hit: bool, reply_hit: bool, keyword: str) -> str:
-    sources: list[str] = []
-    if keyword_hit and keyword:
-        sources.append("消息文字")
-    if reply_hit:
-        sources.append("回复关系")
-    if sources:
-        return "、".join(sources)
-    return "全部消息"
 
 
 @dataclass
@@ -214,12 +194,12 @@ class RealtimeManager:
                 "account_id": account_id,
                 **source,
                 "message_id": message_id,
-                "message_time": _message_time(message),
+                "message_time": message_time(message),
                 "message_type": descriptor.label if descriptor else "文字",
                 "original_text": content[:1200],
                 "message_preview": preview,
                 "matched_keyword": keyword[:160] if keyword_hit else "",
-                "match_source": _match_source(keyword_hit=keyword_hit, reply_hit=reply_hit, keyword=keyword),
+                "match_source": match_source(keyword_hit=keyword_hit, reply_hit=reply_hit, keyword=keyword),
                 "media_feedback_status": "pending" if descriptor else "not_applicable",
                 **(descriptor.event_fields() if descriptor else {}),
             }
@@ -317,4 +297,4 @@ class RealtimeManager:
         LOGGER.info("Configuration applied: %d accounts, %d rules", len(self.accounts), len(rules))
 
 
-__all__ = ["ManagedAccount", "RealtimeManager", "_match_source", "_message_time"]
+__all__ = ["ManagedAccount", "RealtimeManager"]
