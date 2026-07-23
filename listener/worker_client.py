@@ -27,7 +27,7 @@ class ListenerWorkerClient:
         headers = {
             "authorization": f"Bearer {api_token}",
             "accept": "application/json",
-            "user-agent": "telegram-realtime-listener/0.3",
+            "user-agent": "telegram-realtime-listener/0.4",
         }
         if self.instance_id:
             headers["x-listener-instance-id"] = self.instance_id
@@ -41,6 +41,14 @@ class ListenerWorkerClient:
     async def close(self) -> None:
         await self._client.aclose()
 
+    @staticmethod
+    async def _response_payload(response: httpx.Response) -> Any:
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise WorkerClientError("Worker returned invalid JSON") from exc
+        return payload.get("data") if isinstance(payload, dict) and "data" in payload else payload
+
     async def _request(self, method: str, path: str, *, json: dict[str, Any] | None = None) -> Any:
         try:
             response = await self._client.request(method, path, json=json)
@@ -50,11 +58,7 @@ class ListenerWorkerClient:
             request_id = response.headers.get("x-request-id")
             suffix = f" (request {request_id})" if request_id else ""
             raise WorkerClientError(f"Worker returned HTTP {response.status_code}{suffix}")
-        try:
-            payload = response.json()
-        except ValueError as exc:
-            raise WorkerClientError("Worker returned invalid JSON") from exc
-        return payload.get("data") if isinstance(payload, dict) and "data" in payload else payload
+        return await self._response_payload(response)
 
     async def fetch_config(self) -> dict[str, Any]:
         value = await self._request("GET", "/api/listener/v1/config")
@@ -122,8 +126,54 @@ class ListenerWorkerClient:
             json=payload,
         )
 
-    async def record_event(self, payload: dict[str, Any]) -> None:
-        await self._request("POST", "/api/listener/v1/events", json=payload)
+    async def record_event(self, payload: dict[str, Any]) -> dict[str, Any]:
+        value = await self._request("POST", "/api/listener/v1/events", json=payload)
+        return value if isinstance(value, dict) else {}
+
+    async def upload_event_media(
+        self,
+        path: Path,
+        *,
+        media_kind: str,
+        media_file_name: str,
+        media_mime_type: str,
+        receipt_message_id: int | None,
+        account_name: str,
+        chat_label: str,
+        sender_label: str,
+        caption: str,
+    ) -> dict[str, Any]:
+        data = {
+            "media_kind": media_kind,
+            "media_file_name": media_file_name,
+            "account_name": account_name,
+            "chat_label": chat_label,
+            "sender_label": sender_label,
+            "caption": caption,
+            "receipt_message_id": str(receipt_message_id or ""),
+        }
+        try:
+            with path.open("rb") as handle:
+                response = await self._client.post(
+                    "/api/listener/v1/events",
+                    data=data,
+                    files={
+                        "file": (
+                            media_file_name or path.name,
+                            handle,
+                            media_mime_type or "application/octet-stream",
+                        ),
+                    },
+                    timeout=httpx.Timeout(max(self.timeout_seconds, 60.0)),
+                )
+        except (httpx.HTTPError, asyncio.TimeoutError, OSError) as exc:
+            raise WorkerClientError(f"Listener media upload failed: {type(exc).__name__}") from exc
+        if response.status_code < 200 or response.status_code >= 300:
+            request_id = response.headers.get("x-request-id")
+            suffix = f" (request {request_id})" if request_id else ""
+            raise WorkerClientError(f"Worker returned HTTP {response.status_code}{suffix}")
+        value = await self._response_payload(response)
+        return value if isinstance(value, dict) else {}
 
     async def claim_media_upload(self, instance_id: str) -> dict[str, Any] | None:
         value = await self._request(
