@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from listener.telegram_runtime import build_client, stop_client
-from listener.worker_client import ListenerWorkerClient, WorkerClientError
+
+if TYPE_CHECKING:
+    from listener.worker_client import ListenerWorkerClient
 
 LOGGER = logging.getLogger("telegram-listener.dialog-directory")
 MAX_DIALOGS = 500
@@ -101,14 +103,14 @@ async def collect_dialogs(client: Any, limit: int = MAX_DIALOGS) -> list[dict[st
 
 
 async def process_dialog_sync(
-    worker: ListenerWorkerClient,
+    worker: "ListenerWorkerClient",
     instance_id: str,
     manager: Any,
 ) -> bool:
     try:
         job = await worker.claim_dialog_sync(instance_id)
-    except WorkerClientError as exc:
-        LOGGER.warning("Dialog sync claim failed: %s", exc)
+    except Exception as exc:
+        LOGGER.warning("Dialog sync claim failed: %s", type(exc).__name__)
         return False
     if not job:
         return False
@@ -146,7 +148,7 @@ async def process_dialog_sync(
                 error_code="telegram_dialog_sync_failed",
                 error_message=f"Telegram 会话同步失败：{type(exc).__name__}",
             )
-        except WorkerClientError:
+        except Exception:
             pass
         return False
     finally:
