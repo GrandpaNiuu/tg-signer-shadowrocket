@@ -33,11 +33,20 @@
 
 ## Resend 邮件
 
-1. 在 Resend 验证发件域名或发件地址。
+1. 在 Resend 添加并验证自己可控制 DNS 的发件域名。
 2. 创建只用于本项目的 API Key。
 3. 将 API Key 保存为 GitHub Repository Secret `RESEND_API_KEY`。
 4. 将完整发件人保存为 GitHub Repository Variable `AUTH_EMAIL_FROM`。
-5. 发件人必须属于 Resend 已验证的域名，否则验证码邮件和重置邮件会发送失败。
+5. 发件人域名必须与 Resend 中显示为已验证的域名完全一致，包括子域名。
+6. `onboarding@resend.dev` 和其他 `resend.dev` 地址仅用于测试，不能用于公开注册；程序会主动关闭该配置下的新注册和密码找回。
+
+示例：如果 Resend 验证的是 `send.example.com`，应设置：
+
+```text
+AUTH_EMAIL_FROM=Telegram 自动消息 <login@send.example.com>
+```
+
+不能设置成 `login@example.com`，因为根域名和已验证子域名并不是同一个发件域名。
 
 ## 邮箱注册验证码流程
 
@@ -48,8 +57,23 @@
 5. 重新发送至少间隔 60 秒；同一邮箱每小时最多发送 5 次。
 6. 重新发送后旧验证码和旧备用验证链接立即失效。
 7. 验证成功后账号变为 `active` 并写入 `email_verified_at`。
+8. 同一邮箱不能重复注册；未验证账号应返回登录，使用首次设置的密码继续验证。
 
-验证码邮件同时保留一次性备用验证链接，用于兼容已部署的旧页面和无障碍场景；主注册界面默认要求输入 6 位验证码。
+验证码邮件同时发送 HTML 和纯文本内容，并保留一次性备用验证链接。主注册界面默认要求输入 6 位验证码。
+
+## 收不到验证码时排查
+
+按以下顺序检查：
+
+1. 在 Resend → Emails 中搜索收件邮箱，查看状态是 `sent`、`delivered`、`bounced`、`failed`、`suppressed` 还是 `delivery_delayed`。
+2. 如果根本没有邮件记录，检查 Worker 日志中的 `transactional_email_delivery_failed`；错误会区分 API Key、发件域名、限流、网络或服务异常。
+3. 如果日志出现 `transactional_email_accepted`，可用其中的 `provider_id` 在 Resend 中定位具体邮件。
+4. 检查 `AUTH_EMAIL_FROM` 的域名是否与 Resend 已验证域名完全一致。
+5. 检查发件域名的 SPF、DKIM，建议同时配置 DMARC。
+6. 检查 Gmail 的垃圾邮件、推广、所有邮件、过滤器和已删除邮件。
+7. 被 Resend suppression list 抑制的地址需要先从 suppression list 中移除，再重新发送。
+
+页面只有在 Resend 接口明确接受发送请求后才会显示验证码已发送；若提供商拒绝，页面会显示可操作的配置错误，不再统一显示模糊的“发送失败”。
 
 ## 部署与验证
 
@@ -77,10 +101,12 @@
 
 1. 用户输入原邮箱和正确密码；
 2. 系统拒绝直接登录并提示完成邮箱验证码验证；
-3. 用户可回到注册页输入邮箱并请求新的 6 位验证码；
+3. 系统向原邮箱重新发送 6 位验证码；
 4. 验证成功后系统写入 `email_verified_at` 并清理其余验证凭据；
 5. 用户重新登录；
 6. 此后可以使用“忘记密码”。
+
+不要再次提交注册表单。重复注册会返回“账号已经存在”，并且不会覆盖首次设置的密码。
 
 ## 找回密码流程
 
