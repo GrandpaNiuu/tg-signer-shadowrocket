@@ -4,6 +4,7 @@ import test from "node:test";
 
 import {
   authenticationRepository,
+  withEmailRegistrationUniqueness,
   withEmailVerificationLifecycle,
   withGithubProfilePersistence,
   __test,
@@ -35,8 +36,72 @@ test("authentication boundary preserves repository method binding", async () => 
 test("authentication boundary remains optional for unrelated repositories", () => {
   const repository = { value: 1 };
   assert.equal(withEmailVerificationLifecycle(repository), repository);
+  assert.equal(withEmailRegistrationUniqueness(repository), repository);
   assert.equal(withGithubProfilePersistence(repository), repository);
   assert.throws(() => authenticationRepository(null), /Repository is unavailable/);
+});
+
+test("secure registration rejects an existing unverified account without replacing its password", async () => {
+  let registrationCalls = 0;
+  const repository = {
+    async getUserByEmail() {
+      return {
+        id: "user-pending",
+        status: "pending",
+        email_verified_at: null,
+      };
+    },
+    async createOrUpdatePendingEmailUser() {
+      registrationCalls += 1;
+      return null;
+    },
+  };
+  const wrapped = withEmailRegistrationUniqueness(repository);
+  await assert.rejects(() => wrapped.createOrUpdatePendingEmailUser({
+    email_normalized: "user@example.com",
+  }, { password_hash: "replacement" }), (error) => error?.status === 409
+    && error?.code === "account_pending_verification"
+    && /不能重复注册/.test(error?.message));
+  assert.equal(registrationCalls, 0);
+});
+
+test("secure registration reports an already verified account as existing", async () => {
+  const repository = {
+    async getUserByEmail() {
+      return {
+        id: "user-active",
+        status: "active",
+        email_verified_at: "2026-07-23T00:00:00.000Z",
+      };
+    },
+    async createOrUpdatePendingEmailUser() {
+      throw new Error("must not be called");
+    },
+  };
+  const wrapped = withEmailRegistrationUniqueness(repository);
+  await assert.rejects(() => wrapped.createOrUpdatePendingEmailUser({
+    email_normalized: "user@example.com",
+  }, {}), (error) => error?.status === 409
+    && error?.code === "account_exists"
+    && /直接登录/.test(error?.message));
+});
+
+test("secure registration delegates exactly once for a new email", async () => {
+  let registrationCalls = 0;
+  const expected = { user: { id: "user-new" }, verification_required: true };
+  const repository = {
+    async getUserByEmail() { return null; },
+    async createOrUpdatePendingEmailUser(user) {
+      registrationCalls += 1;
+      assert.equal(user.email_normalized, "new@example.com");
+      return expected;
+    },
+  };
+  const wrapped = withEmailRegistrationUniqueness(repository);
+  assert.equal(await wrapped.createOrUpdatePendingEmailUser({
+    email_normalized: "new@example.com",
+  }, {}), expected);
+  assert.equal(registrationCalls, 1);
 });
 
 test("GitHub login preserves an existing custom display name", async () => {
