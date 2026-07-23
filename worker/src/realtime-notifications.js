@@ -141,6 +141,11 @@ function mediaFeedbackLabel(event, mediaLabel) {
   return "处理中，原文件将回复在本回执下方";
 }
 
+function explicitOriginalText(event, fallbackKey = "message_preview") {
+  if (event && Object.prototype.hasOwnProperty.call(event, "original_text")) return event.original_text;
+  return event?.[fallbackKey];
+}
+
 function notificationLines(event, secrets) {
   const presentation = realtimePresentation(event?.event_kind);
   const ruleName = compact(event?.rule_name, secrets, 160, "实时自动化规则");
@@ -150,7 +155,7 @@ function notificationLines(event, secrets) {
   const sender = compact(event?.sender_label || event?.sender_id, secrets, 220, "发送者身份未公开");
   const mediaLabel = event?.media_label ? compact(event.media_label, secrets, 100) : null;
   const originalText = cleanDisplayText(
-    event?.original_text ?? event?.message_preview,
+    explicitOriginalText(event),
     secrets,
     700,
     mediaLabel ? "无文字说明" : "未记录",
@@ -242,7 +247,7 @@ export async function sendRealtimeMediaNotification(env, repository, fetchImpl, 
   const chat = compact(event?.chat_label, secrets, 120, "会话名称未公开");
   const sender = compact(event?.sender_label, secrets, 120, "发送者身份未公开");
   const originalText = cleanDisplayText(
-    event?.original_text ?? event?.caption ?? event?.message_preview,
+    explicitOriginalText(event, "caption") ?? event?.message_preview,
     secrets,
     380,
     "无文字说明",
@@ -276,6 +281,7 @@ export const __test = {
   autoReplyLabel,
   cleanDisplayText,
   compact,
+  explicitOriginalText,
   formattedTime,
   mediaFeedbackLabel,
   notificationLines,
