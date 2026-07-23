@@ -4,6 +4,8 @@ const REFRESH_PATH = "/api/v1/account-dialogs/refresh";
 const MANUAL_VALUE = "__manual_target__";
 const POLL_DELAY_MS = 1_500;
 const POLL_ATTEMPTS = 24;
+const REALTIME_FORM = "#skill-hub-realtime-form";
+const AUTO_REPLY_TYPES = Object.freeze(["private", "group", "supergroup"]);
 
 const TYPE_LABELS = Object.freeze({
   private: "好友",
@@ -25,16 +27,53 @@ const PICKERS = Object.freeze([
     wildcard: false,
   },
   {
-    form: "#hub-rule-form",
+    form: REALTIME_FORM,
     account: "#hub-rule-account",
     target: "#hub-rule-chat",
-    title: "选择监听会话",
-    help: "选择 Telegram 账号后，可直接从该账号的会话目录中选择监听范围。",
-    placeholder: "选择要监听的好友、群组或频道",
-    writableOnly: false,
+    realtime: true,
     wildcard: true,
   },
 ]);
+
+function realtimePickerPresentation(kind) {
+  if (kind === "keyword_reply") {
+    return {
+      title: "选择自动回复对象",
+      fieldLabel: "自动回复对象",
+      fieldHelp: "可选择一个好友、群组或超级群组；选择“全部可回复会话”后，所有符合触发条件的真人消息都会自动回复。机器人、频道身份和账号自身消息仍会被安全过滤。",
+      help: "选择 Telegram 账号后，可从会话目录中指定自动回复对象，也可以选择全部可回复会话。",
+      placeholder: "选择要自动回复的好友或群组",
+      wildcardLabel: "全部可回复会话 · 对符合触发条件的真人消息自动回复",
+      writableOnly: true,
+      allowedTypes: AUTO_REPLY_TYPES,
+      emptyMessage: "同步完成，但没有找到可自动回复的好友或群组。请确认该 Telegram 账号已有可发送消息的会话。",
+    };
+  }
+  return {
+    title: "选择监听会话",
+    fieldLabel: "监听范围",
+    fieldHelp: "可选择具体好友、群组、超级群组或频道；选择“全部会话”表示监听该账号收到的所有适用消息。",
+    help: "选择 Telegram 账号后，可直接从该账号的会话目录中选择监听范围。",
+    placeholder: "选择要监听的好友、群组或频道",
+    wildcardLabel: "全部会话 · 监听该账号收到的所有消息",
+    writableOnly: false,
+    allowedTypes: Object.freeze(["private", "bot", "group", "supergroup", "channel"]),
+    emptyMessage: "同步完成，但没有找到可监听的会话。请确认该 Telegram 账号已有好友、群组、机器人或频道对话。",
+  };
+}
+
+function resolvePickerConfig(config, form) {
+  return config.realtime
+    ? { ...config, ...realtimePickerPresentation(String(form?.dataset?.kind || "")) }
+    : config;
+}
+
+function dialogAllowed(dialog, config) {
+  const peerType = String(dialog?.peer_type || "");
+  if (Array.isArray(config.allowedTypes) && !config.allowedTypes.includes(peerType)) return false;
+  if (config.writableOnly && dialog?.is_writable === false) return false;
+  return true;
+}
 
 function sleep(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -89,6 +128,17 @@ function safeDialogLabel(dialog) {
   return `${label}${writable ? "" : "（只读）"}`;
 }
 
+function updateFieldCopy(config, targetInput, field) {
+  if (!field) return;
+  const label = targetInput.id ? field.querySelector(`label[for="${targetInput.id}"]`) : null;
+  if (label && config.fieldLabel) {
+    label.textContent = config.fieldLabel;
+    if (targetInput.required) label.classList.add("required");
+  }
+  const help = field.querySelector(".field-help");
+  if (help && config.fieldHelp) help.textContent = config.fieldHelp;
+}
+
 function createPicker(config, form, accountInput, targetInput) {
   if (targetInput.dataset.dialogPickerEnhanced === "true") return;
   targetInput.dataset.dialogPickerEnhanced = "true";
@@ -96,6 +146,8 @@ function createPicker(config, form, accountInput, targetInput) {
   const originalType = targetInput.type;
   const originalPlaceholder = targetInput.placeholder;
   const initialValue = String(targetInput.value || "").trim();
+  const field = targetInput.closest(".field") || targetInput.parentElement;
+  updateFieldCopy(config, targetInput, field);
   targetInput.type = "hidden";
   targetInput.removeAttribute("placeholder");
   targetInput.dataset.dialogPickerOriginalType = originalType;
@@ -103,6 +155,7 @@ function createPicker(config, form, accountInput, targetInput) {
   const root = documentRef.createElement("div");
   root.className = "dialog-picker";
   root.dataset.dialogPicker = config.target;
+  root.dataset.dialogPickerKind = String(form?.dataset?.kind || "");
   root.innerHTML = `
     <div class="dialog-picker-head">
       <div class="dialog-picker-title">
@@ -120,7 +173,6 @@ function createPicker(config, form, accountInput, targetInput) {
       <p class="dialog-picker-help">仅在目标没有出现在自动目录时使用。一般用户无需查找或填写数字 ID。</p>
     </details>`;
 
-  const field = targetInput.closest(".field") || targetInput.parentElement;
   if (field) field.append(root);
   else targetInput.insertAdjacentElement("afterend", root);
 
@@ -146,7 +198,7 @@ function createPicker(config, form, accountInput, targetInput) {
   function optionsForQuery() {
     const query = String(search.value || "").trim().toLocaleLowerCase();
     return state.dialogs.filter((dialog) => {
-      if (config.writableOnly && dialog.is_writable === false) return false;
+      if (!dialogAllowed(dialog, config)) return false;
       if (!query) return true;
       return [dialog.label, dialog.title, dialog.username, TYPE_LABELS[dialog.peer_type], dialog.target]
         .filter(Boolean)
@@ -167,7 +219,7 @@ function createPicker(config, form, accountInput, targetInput) {
     const selected = String(targetInput.value || state.currentValue || "");
     select.replaceChildren();
     addOption(select, "", config.placeholder, { disabled: true });
-    if (config.wildcard) addOption(select, "*", "全部会话 · 监听该账号收到的所有消息");
+    if (config.wildcard) addOption(select, "*", config.wildcardLabel || "全部会话");
 
     const dialogs = optionsForQuery();
     for (const [type, typeLabel] of Object.entries(TYPE_LABELS)) {
@@ -205,9 +257,9 @@ function createPicker(config, form, accountInput, targetInput) {
     const sync = data?.sync || null;
     const syncState = String(sync?.status || "idle");
     setStatus(syncLabel(sync), syncState);
-    const usable = state.dialogs.filter((dialog) => !config.writableOnly || dialog.is_writable !== false).length;
+    const usable = state.dialogs.filter((dialog) => dialogAllowed(dialog, config)).length;
     if (syncState === "success" && usable === 0) {
-      setStatus("同步完成，但没有找到可选择的会话。请确认该 Telegram 账号已有好友、群组或机器人对话。", "success");
+      setStatus(config.emptyMessage || "同步完成，但没有找到可选择的会话。", "success");
     }
     return { sync, usable };
   }
@@ -339,7 +391,7 @@ function enhance() {
     const form = documentRef?.querySelector(config.form);
     const account = form?.querySelector(config.account) || documentRef?.querySelector(config.account);
     const target = form?.querySelector(config.target) || documentRef?.querySelector(config.target);
-    if (form && account && target) createPicker(config, form, account, target);
+    if (form && account && target) createPicker(resolvePickerConfig(config, form), form, account, target);
   }
 }
 
@@ -351,10 +403,15 @@ if (documentRef) {
 
 export const __test = {
   API_PATH,
+  AUTO_REPLY_TYPES,
   MANUAL_VALUE,
   PICKERS,
+  REALTIME_FORM,
   REFRESH_PATH,
   TYPE_LABELS,
+  dialogAllowed,
+  realtimePickerPresentation,
+  resolvePickerConfig,
   safeDialogLabel,
   syncLabel,
 };
