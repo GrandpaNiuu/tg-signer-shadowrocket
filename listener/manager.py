@@ -19,6 +19,7 @@ from listener.media_feedback import (
     media_preview,
     message_media_descriptor,
 )
+from listener.receipt_context import match_source, message_time
 from listener.reply_limits import ReplyLimiter, is_human_sender
 from listener.rules import (
     GROUP_TYPES,
@@ -104,12 +105,21 @@ class RealtimeManager:
             receipt_message_id=notification.get("message_id"),
             account_name=account_name,
         )
-        if result.get("sent") is not True:
-            LOGGER.info(
-                "Listener media feedback was not sent for %s: %s",
-                payload.get("message_id"),
-                result.get("reason", "unknown"),
-            )
+        if result.get("sent") is True:
+            return
+        reason = str(result.get("reason") or "unknown")[:120]
+        LOGGER.info(
+            "Listener media feedback was not sent for %s: %s",
+            payload.get("message_id"),
+            reason,
+        )
+        await self._report_event({
+            **payload,
+            "event_kind": "listener_error",
+            "media_feedback_status": "failed",
+            "auto_reply_status": payload.get("auto_reply_status") or "not_configured",
+            "action_summary": f"{descriptor.label}回传失败：{reason}",
+        })
 
     async def _reply_target_sent_by_account(self, client: Client, message: Any) -> Any | None:
         replied = getattr(message, "reply_to_message", None)
@@ -141,7 +151,7 @@ class RealtimeManager:
         sender_id = source["sender_id"] or source["sender_label"]
         content = message_text(message)
         descriptor = message_media_descriptor(message)
-        preview = content[:600] if content else (media_preview(message, descriptor) if descriptor else "")
+        preview = content[:900] if content else (media_preview(message, descriptor) if descriptor else "")
         reply_checked = False
         reply_target = None
         for rule in self.rules_by_account.get(account_id, []):
@@ -152,6 +162,8 @@ class RealtimeManager:
             if rule.get("kind") == "group_monitor" and chat_type_name(chat) not in GROUP_TYPES:
                 continue
             keyword = str(rule.get("keyword") or "")
+            keyword_hit = False
+            reply_hit = False
             if rule.get("kind") == "keyword_reply":
                 mode = str(rule.get("trigger_mode") or "keyword")
                 keyword_hit = bool(keyword) and keyword_matches(
@@ -159,7 +171,6 @@ class RealtimeManager:
                     content,
                     case_sensitive=bool(rule.get("case_sensitive")),
                 )
-                reply_hit = False
                 if mode in {"reply_to_own", "keyword_or_reply_to_own"}:
                     if not reply_checked:
                         reply_target = await self._reply_target_sent_by_account(_client, message)
@@ -168,7 +179,12 @@ class RealtimeManager:
                 if not trigger_matches(mode, keyword_match=keyword_hit, reply_to_own=reply_hit):
                     continue
             else:
-                if not keyword_matches(keyword, content, case_sensitive=bool(rule.get("case_sensitive"))):
+                keyword_hit = bool(keyword) and keyword_matches(
+                    keyword,
+                    content,
+                    case_sensitive=bool(rule.get("case_sensitive")),
+                )
+                if keyword and not keyword_hit:
                     continue
             dedupe = (str(rule["id"]), chat_id, message_id)
             if not self._remember(dedupe):
@@ -178,7 +194,13 @@ class RealtimeManager:
                 "account_id": account_id,
                 **source,
                 "message_id": message_id,
+                "message_time": message_time(message),
+                "message_type": descriptor.label if descriptor else "文字",
+                "original_text": content[:1200],
                 "message_preview": preview,
+                "matched_keyword": keyword[:160] if keyword_hit else "",
+                "match_source": match_source(keyword_hit=keyword_hit, reply_hit=reply_hit, keyword=keyword),
+                "media_feedback_status": "pending" if descriptor else "not_applicable",
                 **(descriptor.event_fields() if descriptor else {}),
             }
             if rule.get("kind") == "keyword_reply":
@@ -196,16 +218,19 @@ class RealtimeManager:
                     reason = "，且".join(reasons) or "命中自动回复规则"
                     event.update({
                         "event_kind": "keyword_replied",
+                        "auto_reply_status": "sent",
                         "action_summary": f"{reason}；已按规则「{rule.get('name', '')}」回复：{response[:140]}",
                     })
                 except Exception as exc:
                     event.update({
                         "event_kind": "listener_error",
+                        "auto_reply_status": "failed",
                         "action_summary": f"回复失败：{type(exc).__name__}",
                     })
             else:
                 event.update({
                     "event_kind": "message_observed",
+                    "auto_reply_status": "not_configured",
                     "action_summary": f"命中监控规则「{rule.get('name', '')}」",
                 })
             managed = self.accounts.get(account_id)
@@ -262,9 +287,14 @@ class RealtimeManager:
                 await self._report_event({
                     "account_id": account_id,
                     "event_kind": "listener_error",
+                    "auto_reply_status": "not_configured",
+                    "media_feedback_status": "not_applicable",
                     "action_summary": f"监听账号启动失败：{type(exc).__name__}",
                 })
 
         self.config_signature = signature
         self.last_error = ", ".join(failures)[:500] if failures else None
         LOGGER.info("Configuration applied: %d accounts, %d rules", len(self.accounts), len(rules))
+
+
+__all__ = ["ManagedAccount", "RealtimeManager"]

@@ -72,8 +72,12 @@ def message_media_descriptor(message: Any) -> MediaDescriptor | None:
     return None
 
 
+def original_message_text(message: Any) -> str:
+    return str(getattr(message, "caption", None) or getattr(message, "text", None) or "").strip()[:900]
+
+
 def media_preview(message: Any, descriptor: MediaDescriptor) -> str:
-    caption = str(getattr(message, "caption", None) or getattr(message, "text", None) or "").strip()
+    caption = original_message_text(message)
     if caption:
         return caption[:600]
     return f"[{descriptor.label}] {descriptor.file_name}"[:600]
@@ -121,7 +125,7 @@ async def forward_message_media(
                 account_name=account_name,
                 chat_label=str(event.get("chat_label") or "会话名称未公开"),
                 sender_label=str(event.get("sender_label") or "发送者身份未公开"),
-                caption=media_preview(message, descriptor),
+                caption=original_message_text(message),
             )
         except Exception as exc:
             LOGGER.warning("Listener media feedback upload failed: %s", type(exc).__name__)
@@ -134,4 +138,5 @@ __all__ = [
     "forward_message_media",
     "media_preview",
     "message_media_descriptor",
+    "original_message_text",
 ]
