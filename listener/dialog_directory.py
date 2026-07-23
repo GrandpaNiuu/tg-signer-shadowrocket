@@ -4,8 +4,6 @@ import logging
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from listener.telegram_runtime import build_client, stop_client
-
 if TYPE_CHECKING:
     from listener.worker_client import ListenerWorkerClient
 
@@ -121,6 +119,8 @@ async def process_dialog_sync(
     account_id = str((sync or {}).get("account_id") or (account or {}).get("id") or "")
     if not sync_id or not account_id or not isinstance(account, dict):
         return False
+
+    from listener.telegram_runtime import build_client, stop_client
 
     client = manager.client_for(account_id) if manager is not None else None
     temporary = client is None
