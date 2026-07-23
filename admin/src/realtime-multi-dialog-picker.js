@@ -6,7 +6,8 @@ const ACCOUNT_SELECTOR = "#hub-rule-account";
 const TARGET_SELECTOR = "#hub-rule-chat";
 const POLL_DELAY_MS = 1_500;
 const POLL_ATTEMPTS = 24;
-const MAX_SELECTED = 50;
+const FILTER_ALL = "all";
+const FILTER_SELECTED = "selected";
 const TARGET_PATTERN = /^(?:\*|@[A-Za-z][A-Za-z0-9_]{3,31}|-?\d{1,20})$/;
 
 const TYPE_LABELS = Object.freeze({
@@ -72,7 +73,7 @@ export function normalizeSelectedTargets(values) {
     output.push(value);
   }
   if (output.includes("*")) return ["*"];
-  return output.slice(0, MAX_SELECTED);
+  return output;
 }
 
 export function serializeSelectedTargets(values) {
@@ -92,7 +93,7 @@ function presentation(kind) {
     return {
       title: "选择自动回复对象",
       label: "自动回复对象",
-      help: "可以同时选择多个好友、群组或超级群组；只会在已选择会话中自动回复。选择“全部可回复会话”时不能再选择具体会话。",
+      help: "点击任意好友或群组即可自由组合多选。类型按钮只用于筛选，不会限制已选对象。",
       wildcard: "全部可回复会话",
       allowedTypes: new Set(["private", "group", "supergroup"]),
       writableOnly: true,
@@ -102,7 +103,7 @@ function presentation(kind) {
   return {
     title: "选择监听会话",
     label: "监听范围",
-    help: "可以同时选择多个好友、机器人、群组、超级群组或频道；只监听已选择的会话。选择“全部会话”时不能再选择具体会话。",
+    help: "好友、机器人、群组、超级群组和频道可以任意混合多选。类型按钮只用于筛选。",
     wildcard: "全部会话",
     allowedTypes: new Set(["private", "bot", "group", "supergroup", "channel"]),
     writableOnly: false,
@@ -117,19 +118,45 @@ function dialogAllowed(dialog, config) {
   return true;
 }
 
+function cleanDialogTitle(value) {
+  return String(value || "")
+    .replace(/\s*·\s*(?:好友|机器人|群组|超级群组|频道)(?:（只读）)?\s*$/u, "")
+    .trim();
+}
+
 function safeLabel(dialog) {
-  const label = String(dialog?.label || dialog?.title || "会话名称未公开").trim();
-  return `${label}${dialog?.is_writable === false ? "（只读）" : ""}`;
+  const title = cleanDialogTitle(dialog?.title || dialog?.label || "会话名称未公开");
+  const username = String(dialog?.username || "").replace(/^@/, "").trim();
+  if (!username || title.toLocaleLowerCase().includes(`@${username.toLocaleLowerCase()}`)) return title;
+  return `${title}（@${username}）`;
 }
 
 function syncLabel(sync) {
   const state = String(sync?.status || "");
   if (state === "queued") return "正在等待 Listener 同步…";
-  if (state === "running") return "正在读取该账号的好友和群组…";
+  if (state === "running") return "正在读取该账号的会话目录…";
   if (state === "success") return `已同步 ${Math.max(0, Number(sync?.dialog_count || 0))} 个会话`;
   if (state === "failed") return String(sync?.error_message || "同步失败，请重新刷新。");
   if (state === "expired") return "上次同步超时，请重新刷新。";
   return "尚未同步该账号的会话目录。";
+}
+
+export function dialogMatchesFilter(dialog, {
+  config,
+  query = "",
+  typeFilter = FILTER_ALL,
+  selected = new Set(),
+} = {}) {
+  if (!dialogAllowed(dialog, config)) return false;
+  const target = String(dialog?.target || "");
+  if (typeFilter === FILTER_SELECTED && !selected.has(target)) return false;
+  if (![FILTER_ALL, FILTER_SELECTED].includes(typeFilter)
+    && String(dialog?.peer_type || "") !== typeFilter) return false;
+  const normalizedQuery = String(query || "").trim().toLocaleLowerCase();
+  if (!normalizedQuery) return true;
+  return [dialog.label, dialog.title, dialog.username, TYPE_LABELS[dialog.peer_type], target]
+    .filter(Boolean)
+    .some((value) => String(value).toLocaleLowerCase().includes(normalizedQuery));
 }
 
 function enhance(form, accountInput, targetInput) {
@@ -155,27 +182,27 @@ function enhance(form, accountInput, targetInput) {
   root.innerHTML = `
     <div class="realtime-multi-head">
       <div><strong>${config.title}</strong><small>${config.help}</small></div>
-      <button class="button small ghost" type="button" data-multi-refresh>刷新好友与群组</button>
+      <button class="button small ghost" type="button" data-multi-refresh>刷新会话</button>
     </div>
-    <input class="realtime-multi-search" type="search" inputmode="search" autocomplete="off" placeholder="搜索名称、@用户名或会话类型" aria-label="搜索 Telegram 会话">
-    <div class="realtime-multi-actions">
-      <button class="button small ghost" type="button" data-multi-select-visible>选择当前结果</button>
-      <button class="button small ghost" type="button" data-multi-clear>清空选择</button>
+    <input class="realtime-multi-search" type="search" inputmode="search" autocomplete="off" placeholder="搜索名称或 @用户名" aria-label="搜索 Telegram 会话">
+    <div class="realtime-multi-filters" data-multi-filters aria-label="筛选会话类型"></div>
+    <div class="realtime-multi-summary">
       <span data-multi-count>尚未选择会话</span>
+      <button class="button small ghost" type="button" data-multi-clear>清空已选</button>
     </div>
-    <label class="realtime-multi-wildcard"><input type="checkbox" value="*" data-multi-wildcard> <span><strong>${config.wildcard}</strong><small>该选项与具体会话互斥</small></span></label>
-    <div class="realtime-multi-list" data-multi-list aria-label="可选择的 Telegram 会话"></div>
+    <label class="realtime-multi-wildcard"><input type="checkbox" value="*" data-multi-wildcard> <span><strong>${config.wildcard}</strong><small>选中后覆盖所有具体会话</small></span></label>
+    <div class="realtime-multi-list" data-multi-list aria-label="可自由多选的 Telegram 会话"></div>
     <p class="realtime-multi-status" data-state="idle" aria-live="polite">请先选择 Telegram 账号。</p>
     <details class="realtime-multi-manual">
       <summary>高级：手动补充用户名或 Chat ID</summary>
-      <textarea rows="4" maxlength="4096" placeholder="每行填写一个 @用户名或数字 Chat ID"></textarea>
-      <p>每行一个目标，也可以使用英文逗号分隔。最多选择 ${MAX_SELECTED} 个会话。</p>
+      <textarea rows="4" maxlength="32000" placeholder="每行填写一个 @用户名或数字 Chat ID"></textarea>
+      <p>每行一个目标，也可以使用英文逗号分隔；可与列表中的任意会话混合保存。</p>
     </details>`;
   field?.append(root);
 
   const refreshButton = root.querySelector("[data-multi-refresh]");
   const searchInput = root.querySelector(".realtime-multi-search");
-  const selectVisibleButton = root.querySelector("[data-multi-select-visible]");
+  const filters = root.querySelector("[data-multi-filters]");
   const clearButton = root.querySelector("[data-multi-clear]");
   const count = root.querySelector("[data-multi-count]");
   const wildcardInput = root.querySelector("[data-multi-wildcard]");
@@ -190,6 +217,7 @@ function enhance(form, accountInput, targetInput) {
     accountId: "",
     requestVersion: 0,
     autoRequested: new Set(),
+    typeFilter: FILTER_ALL,
   };
 
   function setStatus(message, statusState = "idle") {
@@ -197,91 +225,133 @@ function enhance(form, accountInput, targetInput) {
     status.dataset.state = statusState;
   }
 
-  function commitSelected({ render = true } = {}) {
+  function allowedDialogs() {
+    return state.dialogs.filter((dialog) => dialogAllowed(dialog, config));
+  }
+
+  function updateSummary() {
+    wildcardInput.checked = state.selected.has("*");
+    const concreteCount = [...state.selected].filter((target) => target !== "*").length;
+    count.textContent = state.selected.has("*")
+      ? `已选择：${config.wildcard}`
+      : concreteCount
+        ? `已选 ${concreteCount} 个会话`
+        : "尚未选择会话";
+    clearButton.disabled = state.selected.size === 0;
+    targetInput.setCustomValidity(state.selected.size ? "" : "请至少选择一个会话");
+  }
+
+  function renderFilters() {
+    const dialogs = allowedDialogs();
+    const filterEntries = [
+      [FILTER_ALL, "全部", dialogs.length],
+      [FILTER_SELECTED, "已选", [...state.selected].filter((target) => target !== "*").length],
+      ...Object.entries(TYPE_LABELS)
+        .filter(([type]) => config.allowedTypes.has(type))
+        .map(([type, typeLabel]) => [
+          type,
+          typeLabel,
+          dialogs.filter((dialog) => String(dialog.peer_type || "") === type).length,
+        ]),
+    ];
+    filters.replaceChildren();
+    for (const [value, text, total] of filterEntries) {
+      const button = documentRef.createElement("button");
+      button.type = "button";
+      button.className = "realtime-multi-filter";
+      button.dataset.multiFilter = value;
+      button.dataset.active = state.typeFilter === value ? "true" : "false";
+      button.setAttribute("aria-pressed", state.typeFilter === value ? "true" : "false");
+      button.textContent = `${text} ${total}`;
+      filters.append(button);
+    }
+  }
+
+  function commitSelected({ renderList = false } = {}) {
     const normalized = normalizeSelectedTargets([...state.selected]);
     state.selected = new Set(normalized);
     dispatchValue(targetInput, serializeSelectedTargets(normalized));
-    if (render) renderDialogs();
+    updateSummary();
+    renderFilters();
+    if (renderList) renderDialogs({ preserveScroll: true });
   }
 
   function matchingDialogs() {
-    const query = String(searchInput.value || "").trim().toLocaleLowerCase();
-    return state.dialogs.filter((dialog) => {
-      if (!dialogAllowed(dialog, config)) return false;
-      if (!query) return true;
-      return [dialog.label, dialog.title, dialog.username, TYPE_LABELS[dialog.peer_type], dialog.target]
-        .filter(Boolean)
-        .some((value) => String(value).toLocaleLowerCase().includes(query));
-    });
+    return state.dialogs.filter((dialog) => dialogMatchesFilter(dialog, {
+      config,
+      query: searchInput.value,
+      typeFilter: state.typeFilter,
+      selected: state.selected,
+    }));
   }
 
   function makeChoice(dialog, unknown = false) {
     const target = String(dialog.target || "");
     const labelElement = documentRef.createElement("label");
     labelElement.className = "realtime-multi-choice";
+    labelElement.dataset.selected = state.selected.has(target) ? "true" : "false";
+
     const checkbox = documentRef.createElement("input");
     checkbox.type = "checkbox";
     checkbox.value = target;
     checkbox.checked = state.selected.has(target);
     checkbox.dataset.multiTarget = target;
+
     const text = documentRef.createElement("span");
     const strong = documentRef.createElement("strong");
     strong.textContent = unknown ? `${target}（目录中暂未找到）` : safeLabel(dialog);
     const small = documentRef.createElement("small");
-    small.textContent = unknown ? "保留已保存目标" : `${TYPE_LABELS[dialog.peer_type] || "会话"}${dialog.username ? ` · @${dialog.username}` : ""}`;
+    small.textContent = unknown
+      ? "已保存的手动目标"
+      : `${TYPE_LABELS[dialog.peer_type] || "会话"}${dialog.username ? ` · @${String(dialog.username).replace(/^@/, "")}` : ""}${dialog.is_writable === false ? " · 只读" : ""}`;
     text.append(strong, small);
     labelElement.append(checkbox, text);
     return labelElement;
   }
 
-  function renderDialogs() {
-    wildcardInput.checked = state.selected.has("*");
-    list.replaceChildren();
-    const dialogs = matchingDialogs();
-
-    for (const [type, typeLabel] of Object.entries(TYPE_LABELS)) {
-      const matches = dialogs.filter((dialog) => String(dialog.peer_type) === type);
-      if (!matches.length) continue;
-      const group = documentRef.createElement("fieldset");
-      const legend = documentRef.createElement("legend");
-      legend.textContent = `${typeLabel}（${matches.length}）`;
-      group.append(legend);
-      for (const dialog of matches) group.append(makeChoice(dialog));
-      list.append(group);
-    }
-
+  function unknownTargets() {
     const knownTargets = new Set(state.dialogs.map((dialog) => String(dialog.target || "")));
-    const unknownTargets = [...state.selected].filter((target) => target !== "*" && !knownTargets.has(target));
-    if (unknownTargets.length) {
-      const group = documentRef.createElement("fieldset");
-      const legend = documentRef.createElement("legend");
-      legend.textContent = `已保存目标（${unknownTargets.length}）`;
-      group.append(legend);
-      for (const target of unknownTargets) group.append(makeChoice({ target }, true));
-      list.append(group);
-    }
+    return [...state.selected].filter((target) => target !== "*" && !knownTargets.has(target));
+  }
+
+  function unknownMatches(target) {
+    if (![FILTER_ALL, FILTER_SELECTED].includes(state.typeFilter)) return false;
+    const query = String(searchInput.value || "").trim().toLocaleLowerCase();
+    return !query || target.toLocaleLowerCase().includes(query);
+  }
+
+  function renderDialogs({ preserveScroll = false } = {}) {
+    const scrollTop = preserveScroll ? list.scrollTop : 0;
+    list.replaceChildren();
+
+    const dialogs = matchingDialogs();
+    const manualTargets = unknownTargets().filter(unknownMatches);
+    for (const target of manualTargets) list.append(makeChoice({ target }, true));
+    for (const dialog of dialogs) list.append(makeChoice(dialog));
 
     if (!list.children.length) {
       const empty = documentRef.createElement("p");
       empty.className = "realtime-multi-empty";
-      empty.textContent = searchInput.value ? "没有符合搜索条件的会话。" : "当前没有可选择的会话。";
+      empty.textContent = state.typeFilter === FILTER_SELECTED
+        ? "还没有选择任何具体会话。"
+        : searchInput.value
+          ? "没有符合搜索条件的会话。"
+          : "当前筛选条件下没有可选择的会话。";
       list.append(empty);
     }
 
-    const selectedCount = state.selected.has("*") ? "全部" : state.selected.size;
-    count.textContent = state.selected.has("*")
-      ? `已选择${config.wildcard}`
-      : `已选择 ${selectedCount} 个会话（最多 ${MAX_SELECTED} 个）`;
-    targetInput.setCustomValidity(state.selected.size ? "" : "请至少选择一个会话");
+    if (preserveScroll) queueMicrotask(() => { list.scrollTop = scrollTop; });
+    updateSummary();
   }
 
   function applyDirectory(data) {
     state.dialogs = Array.isArray(data?.dialogs) ? data.dialogs : [];
+    renderFilters();
     renderDialogs();
     const sync = data?.sync || null;
     const syncState = String(sync?.status || "idle");
     setStatus(syncLabel(sync), syncState);
-    const usable = state.dialogs.filter((dialog) => dialogAllowed(dialog, config)).length;
+    const usable = allowedDialogs().length;
     if (syncState === "success" && usable === 0) setStatus(config.empty, "success");
     return { sync, usable };
   }
@@ -338,14 +408,13 @@ function enhance(form, accountInput, targetInput) {
       state.dialogs = [];
       refreshButton.disabled = true;
       searchInput.disabled = true;
-      selectVisibleButton.disabled = true;
+      renderFilters();
       renderDialogs();
       setStatus("请先选择 Telegram 账号。", "idle");
       return;
     }
     refreshButton.disabled = false;
     searchInput.disabled = false;
-    selectVisibleButton.disabled = false;
     setStatus("正在读取会话目录…", "running");
     try {
       const data = await api(`${API_PATH}?account_id=${encodeURIComponent(accountId)}`);
@@ -361,15 +430,15 @@ function enhance(form, accountInput, targetInput) {
     } catch (error) {
       if (requestVersion !== state.requestVersion) return;
       state.dialogs = [];
+      renderFilters();
       renderDialogs();
       setStatus(error instanceof Error ? error.message : "会话目录读取失败。", "failed");
     }
   }
 
   wildcardInput.addEventListener("change", () => {
-    if (wildcardInput.checked) state.selected = new Set(["*"]);
-    else state.selected.delete("*");
-    commitSelected();
+    state.selected = wildcardInput.checked ? new Set(["*"]) : new Set();
+    commitSelected({ renderList: true });
   });
 
   list.addEventListener("change", (event) => {
@@ -377,29 +446,26 @@ function enhance(form, accountInput, targetInput) {
     if (!checkbox) return;
     const target = String(checkbox.dataset.multiTarget || "");
     state.selected.delete("*");
-    if (checkbox.checked) {
-      if (state.selected.size >= MAX_SELECTED) {
-        checkbox.checked = false;
-        setStatus(`每条规则最多选择 ${MAX_SELECTED} 个会话。`, "failed");
-        return;
-      }
-      state.selected.add(target);
-    } else {
-      state.selected.delete(target);
-    }
-    commitSelected();
+    wildcardInput.checked = false;
+    if (checkbox.checked) state.selected.add(target);
+    else state.selected.delete(target);
+
+    const row = checkbox.closest(".realtime-multi-choice");
+    if (row) row.dataset.selected = checkbox.checked ? "true" : "false";
+    commitSelected({ renderList: state.typeFilter === FILTER_SELECTED });
   });
 
-  selectVisibleButton.addEventListener("click", () => {
-    const targets = matchingDialogs().map((dialog) => String(dialog.target || "")).filter(Boolean);
-    state.selected = new Set(normalizeSelectedTargets(targets));
-    commitSelected();
-    if (targets.length > MAX_SELECTED) setStatus(`当前结果超过 ${MAX_SELECTED} 个，仅选择前 ${MAX_SELECTED} 个。`, "failed");
+  filters.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-multi-filter]");
+    if (!button) return;
+    state.typeFilter = String(button.dataset.multiFilter || FILTER_ALL);
+    renderFilters();
+    renderDialogs();
   });
 
   clearButton.addEventListener("click", () => {
     state.selected.clear();
-    commitSelected();
+    commitSelected({ renderList: true });
   });
 
   manualInput.addEventListener("input", () => {
@@ -410,29 +476,31 @@ function enhance(form, accountInput, targetInput) {
       return;
     }
     state.selected = new Set(normalizeSelectedTargets(parsed));
-    commitSelected();
+    commitSelected({ renderList: true });
   });
 
   manual.addEventListener("toggle", () => {
     if (manual.open) manualInput.value = [...state.selected].filter((value) => value !== "*").join("\n");
   });
 
-  searchInput.addEventListener("input", renderDialogs);
+  searchInput.addEventListener("input", () => renderDialogs());
   refreshButton.addEventListener("click", refreshDirectory);
   accountInput.addEventListener("change", () => {
     searchInput.value = "";
+    state.typeFilter = FILTER_ALL;
     state.selected = new Set(["*"]);
-    commitSelected();
+    commitSelected({ renderList: true });
     loadDirectory({ autoRefresh: true });
   });
   form.addEventListener("reset", () => queueMicrotask(() => {
     state.selected = new Set(normalizeSelectedTargets(parseSelectedTargets(targetInput.value || "*")));
+    state.typeFilter = FILTER_ALL;
     searchInput.value = "";
     manualInput.value = "";
     loadDirectory({ autoRefresh: false });
   }));
 
-  commitSelected();
+  commitSelected({ renderList: true });
   loadDirectory({ autoRefresh: true });
 }
 
@@ -451,8 +519,9 @@ if (documentRef) {
 
 export const __test = {
   API_PATH,
+  FILTER_ALL,
+  FILTER_SELECTED,
   FORM_SELECTOR,
-  MAX_SELECTED,
   REFRESH_PATH,
   TARGET_PATTERN,
   TYPE_LABELS,
