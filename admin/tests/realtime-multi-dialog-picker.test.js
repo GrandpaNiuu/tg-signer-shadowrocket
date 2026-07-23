@@ -40,9 +40,19 @@ test("automatic reply and monitoring presentations both explain multi-selection"
   assert.equal(__test.dialogAllowed({ peer_type: "channel", is_writable: false }, monitor), true);
 });
 
-test("admin shell loads multi-picker before the legacy single picker", async () => {
+test("mobile picker constrains checkboxes, labels and horizontal overflow", async () => {
+  const css = await source("assets/realtime-multi-dialog-picker.css");
+  assert.match(css, /grid-template-columns:\s*1\.35rem minmax\(0, 1fr\)/);
+  assert.match(css, /width:\s*1\.25rem !important/);
+  assert.match(css, /overflow-x:\s*hidden !important/);
+  assert.match(css, /min-inline-size:\s*0 !important/);
+  assert.match(css, /max-height:\s*min\(43vh, 22rem\)/);
+  assert.match(css, /\.modal:has\(\.realtime-multi-picker\)/);
+});
+
+test("admin shell loads refreshed multi-picker styles before the legacy single picker", async () => {
   const index = await source("index.html");
-  assert.match(index, /assets\/realtime-multi-dialog-picker\.css\?v=20260723-1/);
+  assert.match(index, /assets\/realtime-multi-dialog-picker\.css\?v=20260723-2/);
   assert.match(index, /src\/realtime-multi-dialog-picker\.js\?v=20260723-1/);
   const multi = index.indexOf("/src/realtime-multi-dialog-picker.js");
   const legacy = index.indexOf("/src/dialog-picker.js");
