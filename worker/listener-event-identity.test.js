@@ -4,7 +4,7 @@ import test from "node:test";
 
 import { __test } from "./src/listener-event-api.js";
 
-const { readableChat, readableSender, safeMessageLink } = __test;
+const { mediaMetadata, readableChat, readableSender, safeMessageLink } = __test;
 
 test("realtime notifications prefer readable conversation labels over numeric ids", () => {
   assert.equal(readableChat({
@@ -40,6 +40,26 @@ test("anonymous and unavailable identities remain explanatory instead of bare id
   }), "匿名管理员：运营群");
 
   assert.equal(readableChat({ chat_label: "频道（名称未公开）", chat_type: "channel" }), "频道（名称未公开）");
+  assert.equal(readableChat({ chat_id: "-100123", chat_type: "supergroup" }), "超级群组（名称未公开）");
+  assert.equal(readableSender({ sender_id: "9988", sender_type: "user" }), "Telegram 用户（名称未公开）");
+  assert.doesNotMatch(readableChat({ chat_id: "-100123", chat_type: "supergroup" }), /100123/);
+  assert.doesNotMatch(readableSender({ sender_id: "9988", sender_type: "user" }), /9988/);
+});
+
+test("listener media metadata has human-readable labels", () => {
+  assert.deepEqual(mediaMetadata({
+    media_kind: "video",
+    media_file_name: "现场.mp4",
+    media_mime_type: "video/mp4",
+    media_size_bytes: 4096,
+  }), {
+    media_kind: "video",
+    media_label: "视频",
+    media_file_name: "现场.mp4",
+    media_mime_type: "video/mp4",
+    media_size_bytes: 4096,
+  });
+  assert.equal(mediaMetadata({}), null);
 });
 
 test("only Telegram message links are accepted", () => {
