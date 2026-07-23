@@ -136,9 +136,7 @@ class RealtimeManager:
         chat_id = source["chat_id"]
         message_id = str(getattr(message, "id", ""))
         sender = getattr(message, "from_user", None)
-        # Human users, anonymous administrators and channel identities are readable.
-        # Bots remain excluded from automatic replies to prevent feedback loops.
-        if sender is not None and not is_human_sender(sender):
+        if not is_human_sender(sender):
             return
         sender_id = source["sender_id"] or source["sender_label"]
         content = message_text(message)
